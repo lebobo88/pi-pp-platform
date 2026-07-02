@@ -1,7 +1,8 @@
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, statSync, existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { trackedExeca } from "../mcp/cli-runner.js";
 import YAML from "yaml";
 import { db, txImmediate } from "../db/database.js";
@@ -154,7 +155,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunOutput> {
     ? createHash("sha256").update(dirty).digest("hex").slice(0, 16)
     : null;
 
-  const cliVersions = await captureCliVersions();
+  const cliVersions = captureCliVersions();
 
   // v7: lift Hydra context fields off the input. parseHydraContext returns
   // null when no workflow_id is set (standalone runs), in which case all
@@ -2867,34 +2868,52 @@ async function tryGitCommand(cwd: string, args: string[]): Promise<string | null
   }
 }
 
-// CLI version probes are stable for the lifetime of a process, but each
-// `<cli> --version` spawn can be very slow (codex/gemini can take 15-30s on
-// some hosts). Memoize so start_run / doctor pay the probe cost at most once,
-// and let tests / headless runs skip it entirely via PP_SKIP_CLI_VERSIONS=1.
-let _cliVersionsCache: Record<string, string | null> | null = null;
-async function captureCliVersions(): Promise<Record<string, string | null>> {
-  if (_cliVersionsCache) return _cliVersionsCache;
-  if (process.env.PP_SKIP_CLI_VERSIONS === "1") {
-    _cliVersionsCache = { codex: null, gemini: null, claude: null, git: null, node: null };
-    return _cliVersionsCache;
+// Version capture for the replay/audit record (`runs.cli_versions_json`).
+//
+// The platform's prime directive is ZERO dependence on the codex/gemini/claude
+// CLIs, so we do NOT spawn `<vendor> --version` (those probes were 15-30s each
+// and were the sole cause of the "start_run hangs" flakiness). Instead we
+// record the pinned pi-runtime package versions + platform/node — all read
+// synchronously from disk / process, no subprocess spawns.
+let _piRepoRoot: string | null | undefined;
+function repoRootForVersions(): string | null {
+  if (_piRepoRoot !== undefined) return _piRepoRoot;
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return (_piRepoRoot = dir);
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
-  const out: Record<string, string | null> = {};
-  for (const cli of ["codex", "gemini", "claude", "git", "node"]) {
-    out[cli] = (await tryCmd(cli, ["--version"])) ?? null;
-  }
-  _cliVersionsCache = out;
-  return out;
+  return (_piRepoRoot = null);
 }
-
-async function tryCmd(cmd: string, args: string[]): Promise<string | null> {
-  try {
-    // trackedExeca so doctor's CLI-version probes are registered in
-    // ACTIVE_CHILDREN and aborted on shutdown (PP-RS-3 issue 1).
-    const { stdout } = await trackedExeca(cmd, args, { windowsHide: true });
-    return (stdout ?? "").toString().trim();
-  } catch {
-    return null;
+function readPiPackageVersion(pkg: string): string | null {
+  const root = repoRootForVersions();
+  const candidates: string[] = [];
+  if (root) {
+    // @earendil-works/* are installed under the engine package (the only
+    // package that depends on the pi runtime), with a root fallback.
+    candidates.push(join(root, "packages", "engine", "node_modules", pkg, "package.json"));
+    candidates.push(join(root, "node_modules", pkg, "package.json"));
   }
+  for (const c of candidates) {
+    try {
+      if (existsSync(c)) {
+        const v = (JSON.parse(readFileSync(c, "utf8")) as { version?: string }).version;
+        if (v) return v;
+      }
+    } catch { /* fall through to null */ }
+  }
+  return null;
+}
+function captureCliVersions(): Record<string, string | null> {
+  return {
+    node: process.version,
+    platform: `${process.platform}-${process.arch}`,
+    pi_ai: readPiPackageVersion("@earendil-works/pi-ai"),
+    pi_coding_agent: readPiPackageVersion("@earendil-works/pi-coding-agent"),
+    pi_agent_core: readPiPackageVersion("@earendil-works/pi-agent-core"),
+  };
 }
 
 export type DoctorOptions = {
@@ -2911,39 +2930,38 @@ export type DoctorOptions = {
 };
 
 export async function doctor(opts: DoctorOptions = {}): Promise<unknown> {
-  const cliVersions = await captureCliVersions();
+  const cliVersions = captureCliVersions();
   const dbReachable = (() => {
     try { db().prepare("SELECT 1").get(); return true; } catch { return false; }
   })();
 
-  // Vendor configured = CLI installed AND a credential present (env var or
-  // logged-in session detectable on disk). Pure binary presence is too
-  // permissive — a freshly-installed CLI without an API key cannot serve
-  // requests, so reporting "configured" would mislead /pp:doctor consumers
-  // and hide cross-vendor outages until the first runtime call.
+  // Vendor configured = a credential is present (env var or logged-in session
+  // detectable on disk). The pi platform has NO vendor CLIs, so availability is
+  // credential-driven only — the legacy "CLI binary installed" gate is gone.
   // geminiEnabled() is the global Gemini kill-switch (PP_DISABLE_GEMINI=1).
   // Gating `google` here is the single master chokepoint: a false value
   // cascades to the enforce-vendor-matrix hook, best-of-N preconditions, the
   // cross_vendor_ready count, and the critique smoke test — making the harness
   // behave as if Google were simply not a configured vendor.
   const vendors: Record<string, boolean> = {
-    openai:    cliVersions.codex  !== null && hasOpenAiCreds(),
-    google:    geminiEnabled() && cliVersions.gemini !== null && hasGoogleCreds(),
-    anthropic: cliVersions.claude !== null && hasAnthropicCreds(),
+    openai:    hasOpenAiCreds(),
+    google:    geminiEnabled() && hasGoogleCreds(),
+    anthropic: hasAnthropicCreds(),
   };
   const vendor_credentials: Record<string, { cli: boolean; api_key: boolean; logged_in: boolean }> = {
+    // cli:false — the pi runtime replaces the vendor CLIs; presence is never probed.
     openai: {
-      cli: cliVersions.codex !== null,
+      cli: false,
       api_key: !!process.env.OPENAI_API_KEY,
       logged_in: codexLoggedIn(),
     },
     google: {
-      cli: cliVersions.gemini !== null,
+      cli: false,
       api_key: !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_API_KEY,
       logged_in: geminiLoggedIn(),
     },
     anthropic: {
-      cli: cliVersions.claude !== null,
+      cli: false,
       api_key: !!process.env.ANTHROPIC_API_KEY,
       logged_in: claudeLoggedIn(),
     },

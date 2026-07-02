@@ -590,8 +590,8 @@ rows:
     subsystem: hooks
     capability: "SessionStart/cli-version-pin — pin sub-CLI versions"
     disposition: DROP_REPLACED
-    replacement_note: "no sub-CLIs; pi runtime replaces codex/gemini/copilot"
-    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H3"'}]
+    replacement_note: "vendor-CLI --version probes EXCISED from core (prime directive); start_run records pinned pi package versions {pi_ai,pi_coding_agent,pi_agent_core,node,platform} in cli_versions_json — no subprocess spawns"
+    verify: [{type: test, file: packages/pilot/test/version-capture.test.ts, contains: pi package versions}]
     status: done
   - id: H4
     subsystem: hooks
