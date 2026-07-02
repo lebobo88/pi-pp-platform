@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -268,4 +268,33 @@ CREATE TABLE IF NOT EXISTS evolution_proposals (
 );
 CREATE INDEX IF NOT EXISTS idx_evolution_proposals_run    ON evolution_proposals(run_id);
 CREATE INDEX IF NOT EXISTS idx_evolution_proposals_status ON evolution_proposals(status);
+
+-- v8: platform-server tables (M5c). The @pp/server control plane needs an
+-- explicit project registry (the harness otherwise keys everything off
+-- project_path), a record of pi agent-session files per attempt, and a small
+-- key/value store for operator settings (budget caps, etc.).
+CREATE TABLE IF NOT EXISTS projects (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  path         TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL,
+  last_run_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL,
+  attempt_id   TEXT,
+  role         TEXT NOT NULL,
+  provider     TEXT NOT NULL,
+  model_id     TEXT NOT NULL,
+  session_file TEXT NOT NULL,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_run ON agent_sessions(run_id);
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+  key         TEXT PRIMARY KEY,
+  value_json  TEXT NOT NULL
+);
 `;

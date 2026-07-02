@@ -451,10 +451,34 @@ rows:
   # ── HTTP control plane ──
   - id: HTTP1
     subsystem: http-plane
-    capability: REST + SSE server (@pp/server)
+    capability: REST + SSE server (@pp/server) — read/library/keys/SSE foundation
     disposition: REBUILD
+    replacement_note: "@pp/server (M5c). Run-control routes 501 until pilot wiring (M5d)."
     verify:
-      - {type: endpoint, path: /api/runs, note: "M5 in progress"}
+      - {type: export, module: packages/server/dist/index.js, symbol: buildApp, op: defined}
+      - {type: export, module: packages/server/dist/index.js, symbol: createInMemoryBus, op: defined}
+      - {type: test, file: packages/server/test/rest.test.ts, contains: run_control_pending}
+      - {type: test, file: packages/server/test/sse.test.ts, contains: text/event-stream}
+    status: done
+  - id: HTTP2
+    subsystem: http-plane
+    capability: schema v8 (projects / agent_sessions / platform_settings) + migration
+    disposition: PORT
+    replacement_note: "@pp/core db schema v8 (M5c)"
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listProjects, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: registerProject, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: getBudgetCaps, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: setDbPath, op: defined}
+      - {type: test, file: packages/core/test/projects-migration.unit.mjs, contains: session_file}
+    status: done
+  - id: HTTP3
+    subsystem: http-plane
+    capability: run-control mutations (start/abort/retry/gate) — pilot-wired
+    disposition: REBUILD
+    replacement_note: "registered but 501 in M5c; pilot wiring in M5d"
+    verify:
+      - {type: todo, note: "M5d pilot↔server wiring"}
     status: pending
 
   # ── MCP compat ──

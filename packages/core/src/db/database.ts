@@ -3,11 +3,31 @@ import { DB_PATH, ensureDirs } from "../util/paths.js";
 import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
 
 let _db: Database.Database | null = null;
+let _dbPathOverride: string | null = null;
+
+/**
+ * Override the DB path at runtime and drop any open connection. Used by
+ * @pp/server's buildApp({ dbPath }) and by tests that need an isolated DB
+ * after the module has already been imported (DB_PATH is otherwise resolved
+ * once from PP_DB_PATH/PP_HOME at import time).
+ */
+export function setDbPath(path: string): void {
+  if (_db) {
+    try { _db.close(); } catch { /* ignore */ }
+    _db = null;
+  }
+  _dbPathOverride = path;
+}
+
+/** Absolute path the next db() call will open. */
+export function currentDbPath(): string {
+  return _dbPathOverride ?? DB_PATH;
+}
 
 export function db(): Database.Database {
   if (_db) return _db;
   ensureDirs();
-  const conn = new Database(DB_PATH);
+  const conn = new Database(currentDbPath());
   conn.pragma("journal_mode = WAL");
   conn.pragma("foreign_keys = ON");
   conn.pragma("busy_timeout = 5000");
@@ -61,6 +81,14 @@ function applyMigrations(conn: Database.Database): void {
   const runCols = conn.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
   if (!runCols.some(c => c.name === "cli_flags_json")) {
     conn.exec("ALTER TABLE runs ADD COLUMN cli_flags_json TEXT");
+  }
+
+  // v8 (M5c): platform-server support. The projects / agent_sessions /
+  // platform_settings tables are created by SCHEMA_SQL's CREATE TABLE IF NOT
+  // EXISTS on every boot; the only in-place column add is attempts.session_file
+  // (path to the pi agent-session .jsonl the attempt ran in).
+  if (!attemptCols.some(c => c.name === "session_file")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN session_file TEXT");
   }
 
   // v7: ecosystem integration columns (Hydra context + Constitution +

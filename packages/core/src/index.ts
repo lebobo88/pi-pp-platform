@@ -37,6 +37,9 @@ export { forceUnlock, type ForceUnlockResult } from "./util/lock.js";
 // Pilot seam (M3): autogenesis analyzer consumed by @pp/pilot's finalize phase.
 export { analyzeAndPropose, listProposals, setProposalStatus } from "./orchestrator/autogenesis-analyzer.js";
 export type { DetectedProposal } from "./orchestrator/autogenesis-analyzer.js";
+// Server seam (M5c / v8): project registry + platform settings kv.
+export * from "./orchestrator/projects.js";
+export * from "./orchestrator/settings.js";
 
 // Rubrics
 export * from "./rubrics/registry.js";
