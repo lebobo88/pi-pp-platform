@@ -3,40 +3,29 @@ import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
 import {
   apiPaths,
-  type EvolutionProposal,
   type EvolutionReviewRequest,
-  type ProfileBootstrapRequest,
+  type EvolutionReviewResponse,
   type BudgetCap,
   type SetBudgetCapsRequest,
   type DetectProfileResult,
   type WriteProfileRequest,
-  type DoctorReport,
+  type DoctorRunAck,
   type JanitorReport,
   type JanitorRunRequest,
   type HarnessSettings,
+  type ProjectDetail,
+  type RegisterProjectRequest,
 } from "@shared/api-types";
 
 export function useReviewProposal() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { id: string } & EvolutionReviewRequest) =>
-      api.post<EvolutionProposal>(apiPaths.evolutionReview(args.id), {
+      api.post<EvolutionReviewResponse>(apiPaths.evolutionReview(args.id), {
         decision: args.decision,
         note: args.note,
       } satisfies EvolutionReviewRequest),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.evolution }),
-  });
-}
-
-export function useBootstrapProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (req: ProfileBootstrapRequest) =>
-      api.post<{ ok: boolean }>(apiPaths.profileBootstrap, req),
-    onSuccess: (_data, req) => {
-      qc.invalidateQueries({ queryKey: qk.project(req.project_path) });
-      qc.invalidateQueries({ queryKey: qk.projects });
-    },
   });
 }
 
@@ -49,32 +38,37 @@ export function useSetCaps() {
   });
 }
 
+/** POST /profiles/detect — body {project_path}; returns a ProfileDetection. */
 export function useDetectProfile(path: string) {
   return useMutation({
-    mutationFn: () => api.post<DetectProfileResult>(apiPaths.projectProfileDetect(path)),
+    mutationFn: () => api.post<DetectProfileResult>(apiPaths.profilesDetect, { project_path: path }),
   });
 }
 
+/** PUT /projects/:path/profile — apply a built-in by {name} or write {yaml}. */
 export function useWriteProfile(path: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: WriteProfileRequest) => api.put<{ ok: boolean }>(apiPaths.projectProfile(path), req),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.project(path) }),
+    mutationFn: (req: WriteProfileRequest) => api.put<unknown>(apiPaths.projectProfile(path), req),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.project(path) });
+      qc.invalidateQueries({ queryKey: qk.projects });
+    },
   });
 }
 
+/** POST /doctor — async: acks immediately, result arrives via SSE doctor.result. */
 export function useRunDoctor() {
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<DoctorReport>(apiPaths.doctor),
-    onSuccess: (data) => qc.setQueryData(qk.doctor, data),
+    mutationFn: () => api.post<DoctorRunAck>(apiPaths.doctor),
   });
 }
 
+/** POST /system/janitor — {dry_run: true} previews, otherwise executes. */
 export function useRunJanitor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (execute: boolean) => api.post<JanitorReport>(apiPaths.janitor, { execute } satisfies JanitorRunRequest),
+    mutationFn: (dry_run: boolean) => api.post<JanitorReport>(apiPaths.janitor, { dry_run } satisfies JanitorRunRequest),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.janitor }),
   });
 }
@@ -84,5 +78,21 @@ export function useSaveSettings() {
   return useMutation({
     mutationFn: (settings: HarnessSettings) => api.put<HarnessSettings>(apiPaths.settings, settings),
     onSuccess: (data) => qc.setQueryData(["settings"], data),
+  });
+}
+
+export function useRegisterProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: RegisterProjectRequest) => api.post<ProjectDetail>(apiPaths.projects, req),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
+  });
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.del<{ removed: boolean; path: string }>(apiPaths.project(path)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
   });
 }

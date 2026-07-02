@@ -67,12 +67,12 @@ function DoctorPanel() {
           disabled={rerun.isPending}
           onClick={() =>
             rerun.mutate(undefined, {
-              onSuccess: () => toast({ tone: "success", title: "Doctor re-run complete" }),
+              onSuccess: () => toast({ tone: "info", title: "Doctor started", message: "result refreshes via the live stream" }),
               onError: (e) => toast({ tone: "error", title: "Doctor failed", message: e instanceof Error ? e.message : "" }),
             })
           }
         >
-          {rerun.isPending ? "Running…" : "Re-run doctor"}
+          {rerun.isPending ? "Starting…" : "Re-run doctor"}
         </Button>
       </div>
 
@@ -164,7 +164,7 @@ function JanitorPanel() {
   if (!data) return <EmptyState title="No janitor report" compact />;
 
   const dryRun = () =>
-    run.mutate(false, {
+    run.mutate(true, {
       onSuccess: (r) => toast({ tone: "info", title: "Janitor dry-run", message: `${r.entries.length} candidates found` }),
       onError: (e) => toast({ tone: "error", title: "Dry-run failed", message: e instanceof Error ? e.message : "" }),
     });
@@ -203,8 +203,8 @@ function JanitorPanel() {
               variant="danger"
               disabled={run.isPending}
               onClick={() =>
-                run.mutate(true, {
-                  onSuccess: (r) => { toast({ tone: "warn", title: "Janitor executed", message: `reclaimed ${formatBytes(r.reclaimed_bytes)}` }); setConfirmExec(false); },
+                run.mutate(false, {
+                  onSuccess: (r) => { toast({ tone: "warn", title: "Janitor executed", message: `swept ${r.swept} items` }); setConfirmExec(false); },
                   onError: (e) => toast({ tone: "error", title: "Execute failed", message: e instanceof Error ? e.message : "" }),
                 })
               }

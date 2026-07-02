@@ -430,24 +430,58 @@ export const mockMissabilityChecks: MissabilityCheckRow[] = [
   { id: "mc_2", run_id: MOCK_RUN_ID, check_id: "tests-cover-new-behavior", status: "pass", evidence_path: ".harness/runs/run_9fK2aLpQ7vX3/missability/tests.json", created_at: "2026-07-01T14:13:57.000Z" },
   { id: "mc_3", run_id: MOCK_RUN_ID, check_id: "no-secrets-in-diff", status: "pass", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
   { id: "mc_4", run_id: MOCK_RUN_ID, check_id: "acceptance-criteria-traced", status: "pass", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
-  { id: "mc_5", run_id: MOCK_RUN_ID, check_id: "rollback-documented", status: "skipped", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
+  { id: "mc_5", run_id: MOCK_RUN_ID, check_id: "rollback-documented", status: "n/a", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
 ];
 
-/** Reproducible-replay bundle for the run. */
+/** Reproducible-replay bundle — nested shape, mirrors core buildReplayBundle. */
 export const mockReplayBundle: ReplayBundle = {
   run_id: MOCK_RUN_ID,
+  request_text: run.request_text,
+  project_path: run.project_path,
+  team: run.team,
+  mode: run.mode,
+  forum: run.forum,
+  n: run.n,
+  status: run.status,
   head_sha: run.head_sha,
   tree_dirty_hash: run.tree_dirty_hash,
-  cli_versions: { node: "v22.20.0", git: "2.45.1", claude: "claude 2.1.4", codex: "codex 0.34.0", gemini: "gemini 0.9.2" },
-  cli_flags: null,
+  profile_snapshot: run.profile_snapshot_json ? JSON.parse(run.profile_snapshot_json) : null,
+  taxonomy_mapping: run.taxonomy_mapping_json ? JSON.parse(run.taxonomy_mapping_json) : null,
+  cli_versions: { node: "v22.20.0", git: "2.45.1" },
+  started_at: run.started_at,
+  finished_at: run.finished_at,
   stages: stages.map((s) => ({
-    stage_id: s.id,
+    id: s.id,
     kind: s.kind,
     gate_type: s.gate_type,
-    prompt_hashes: attempts.filter((a) => a.stage_id === s.id).map((a) => a.prompt_hash ?? "").filter(Boolean),
+    status: s.status,
+    attempts: attempts
+      .filter((a) => a.stage_id === s.id)
+      .map((a) => ({
+        id: a.id,
+        producer: a.producer,
+        model_id: a.model_id,
+        attempted_tier: a.attempted_tier,
+        retry_index: a.retry_index,
+        parent_attempt_id: a.parent_attempt_id,
+        tokens_in: a.tokens_in,
+        tokens_out: a.tokens_out,
+        cost_usd: a.cost_usd,
+        verdicts: verdicts
+          .filter((v) => v.attempt_id === a.id)
+          .map((v) => ({
+            judge_producer: v.judge_producer,
+            judge_model_id: v.judge_model_id,
+            rubric_id: v.rubric_id,
+            outcome: v.outcome,
+            cross_vendor: v.cross_vendor === 1,
+          })),
+      })),
   })),
-  artifacts: artifacts.map((a) => ({ path: a.path, sha256: a.sha256, bytes: a.bytes })),
-  generated_at: "2026-07-01T14:14:10.000Z",
+  artifacts: artifacts.map((a) => ({ kind: a.kind, path: a.path, sha256: a.sha256 })),
+  tier_resolution: null,
+  cli_flags: null,
+  reproduction_notes: "Re-issue with `ppp replay run_9fK2aLpQ7vX3`. Head SHA and dirty-tree hash captured at start.",
 };
 
 /** Unified diff shown on the implementation stage's winning attempt. */

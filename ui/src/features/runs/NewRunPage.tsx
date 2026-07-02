@@ -1,6 +1,6 @@
-import { useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { useNavigate } from "react-router";
-import type { RunMode, ClaudeTier, ModelInfo, TeamSpec } from "@shared/api-types";
+import type { RunMode, ClaudeTier, ModelInfo, TeamSpec, Forum } from "@shared/api-types";
 import { RUN_MODE, CLAUDE_TIERS } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Pill } from "@/features/common/chips";
 import { cn } from "@/lib/cn";
 import { useProjects } from "@/api/queries/projects";
-import { useProfiles, useTeams } from "@/api/queries/library";
+import { useProfiles, useTeams, useForums } from "@/api/queries/library";
 import { useModels } from "@/api/queries/providers";
 import { useBudgets, useCaps } from "@/api/queries/budgets";
 import { useStartRun } from "@/api/mutations/runs";
@@ -32,19 +32,6 @@ import {
 } from "./wizard/wizardReducer";
 import { estimateRunCost, defaultStageCount, type TierPrice } from "./wizard/costEstimator";
 
-const FORUMS = [
-  "architecture-review",
-  "security-review",
-  "data-governance",
-  "api-design-review",
-  "release-readiness",
-  "cost-review",
-  "privacy-review",
-  "accessibility-review",
-  "dependency-review",
-  "incident-postmortem",
-];
-
 const STEP_TITLES: Record<WizardStep, string> = {
   1: "Request",
   2: "Mode & team",
@@ -66,10 +53,19 @@ export function NewRunPage() {
   const { data: projects } = useProjects();
   const { data: profiles } = useProfiles();
   const { data: teams } = useTeams();
+  const { data: forums } = useForums();
   const { data: models } = useModels();
   const { data: caps } = useCaps();
   const { data: budgets } = useBudgets();
   const startRun = useStartRun();
+
+  // Default the forum to a real one once /forums loads.
+  useEffect(() => {
+    if (forums && forums.length > 0 && !forums.some((f) => f.id === state.forum)) {
+      dispatch({ type: "set", patch: { forum: forums[0]!.id } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forums]);
 
   const project = projects?.find((p) => p.path === state.projectPath) ?? null;
   const projectProfile = project?.profile ?? null;
@@ -141,6 +137,7 @@ export function NewRunPage() {
             <StepMode
               state={state}
               teams={teams ?? []}
+              forums={forums ?? []}
               projectProfile={projectProfile}
               models={models ?? []}
               onMode={(m) => dispatch({ type: "mode", mode: m })}
@@ -294,6 +291,7 @@ function StepRequest({
 function StepMode({
   state,
   teams,
+  forums,
   projectProfile,
   models,
   onMode,
@@ -303,6 +301,7 @@ function StepMode({
 }: {
   state: WizardState;
   teams: TeamSpec[];
+  forums: Forum[];
   projectProfile: string | null;
   models: ModelInfo[];
   onMode: (m: RunMode) => void;
@@ -359,8 +358,9 @@ function StepMode({
             onChange={(e) => onForum(e.target.value)}
             className="w-full rounded-sm border border-line-2 bg-bg-2 px-2 py-1.5 text-[12px] text-ink-1 outline-none focus:border-accent"
           >
-            {FORUMS.map((f) => (
-              <option key={f} value={f}>{f}</option>
+            {forums.length === 0 && <option value={state.forum}>{state.forum}</option>}
+            {forums.map((f) => (
+              <option key={f.id} value={f.id}>{f.title}</option>
             ))}
           </select>
         </Card>

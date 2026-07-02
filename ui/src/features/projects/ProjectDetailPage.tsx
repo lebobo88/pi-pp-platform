@@ -18,9 +18,8 @@ import {
   useConstitution,
 } from "@/api/queries/projects";
 import { useProfile, useProfiles } from "@/api/queries/library";
-import { useBootstrapProfile, useDetectProfile, useWriteProfile } from "@/api/mutations/misc";
+import { useDetectProfile, useWriteProfile } from "@/api/mutations/misc";
 import { ApiClientError } from "@/api/client";
-import { DiffView } from "@/components/DiffView";
 import { Button } from "@/components/Button";
 import { toast } from "@/stores/uiStore";
 import { formatRelative, shortId } from "@/lib/format";
@@ -102,27 +101,36 @@ function DetectPreview({
   onDone: () => void;
 }) {
   const write = useWriteProfile(path);
+  const rec = result.recommendation;
   return (
     <div className="mt-3 rounded-md border border-line-1 bg-bg-1 p-3">
       <div className="flex items-center gap-2">
-        <span className="text-[12px] text-ink-2">detected</span>
-        <Pill tone="accent">{result.detected}</Pill>
-        {result.current && <span className="text-[11px] text-ink-3">(was {result.current})</span>}
+        <span className="text-[12px] text-ink-2">recommended</span>
+        {rec ? <Pill tone="accent">{rec}</Pill> : <span className="text-[11px] text-ink-3">no confident match</span>}
+        <span className="text-[11px] text-ink-3">confidence: {result.confidence}</span>
       </div>
-      <ul className="mt-2 list-disc pl-5 text-[11px] text-ink-3">
-        {result.reasons.map((r, i) => (<li key={i}>{r}</li>))}
-      </ul>
-      {result.diff && <div className="mt-2"><DiffView patch={result.diff} /></div>}
+      {result.signals.length > 0 && (
+        <ul className="mt-2 list-disc pl-5 text-[11px] text-ink-3">
+          {result.signals.map((r, i) => (<li key={i}>{r}</li>))}
+        </ul>
+      )}
+      {result.alternatives.length > 0 && (
+        <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+          <span className="text-ink-3">alternatives:</span>
+          {result.alternatives.map((a) => (<Pill key={a}>{a}</Pill>))}
+        </div>
+      )}
       <div className="mt-3 flex items-center gap-2">
         <Button
           size="sm"
           variant="primary"
-          disabled={write.isPending}
+          disabled={write.isPending || !rec}
           onClick={() =>
+            rec &&
             write.mutate(
-              { profile: result.detected },
+              { name: rec },
               {
-                onSuccess: () => { toast({ tone: "success", title: "Profile written", message: result.detected }); onDone(); },
+                onSuccess: () => { toast({ tone: "success", title: "Profile written", message: rec }); onDone(); },
                 onError: (e) => toast({ tone: "error", title: "Write failed", message: e instanceof Error ? e.message : "" }),
               },
             )
@@ -136,10 +144,10 @@ function DetectPreview({
   );
 }
 
-/** Apply a built-in profile to the project (bootstrap). */
+/** Apply a built-in profile to the project (writes .harness/profile.yaml). */
 function ProfileBootstrap({ projectPath, current }: { projectPath: string; current: string | null }) {
   const { data: profiles } = useProfiles();
-  const bootstrap = useBootstrapProfile();
+  const write = useWriteProfile(projectPath);
   const [choice, setChoice] = useState(current ?? "");
 
   return (
@@ -161,10 +169,10 @@ function ProfileBootstrap({ projectPath, current }: { projectPath: string; curre
         <Button
           size="sm"
           variant="primary"
-          disabled={!choice || bootstrap.isPending}
+          disabled={!choice || write.isPending}
           onClick={() =>
-            bootstrap.mutate(
-              { project_path: projectPath, profile: choice },
+            write.mutate(
+              { name: choice },
               {
                 onSuccess: () => toast({ tone: "success", title: "Profile applied", message: choice }),
                 onError: (e) => toast({ tone: "error", title: "Bootstrap failed", message: e instanceof Error ? e.message : "" }),
@@ -172,7 +180,7 @@ function ProfileBootstrap({ projectPath, current }: { projectPath: string; curre
             )
           }
         >
-          {bootstrap.isPending ? "Applying…" : "Apply"}
+          {write.isPending ? "Applying…" : "Apply"}
         </Button>
       </div>
     </Card>

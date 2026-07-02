@@ -155,16 +155,24 @@ function ReviewDialog({ proposal, onClose }: { proposal: EvolutionProposal | nul
         <>
           <Button variant="ghost" onClick={() => { setTyped(""); onClose(); }}>Cancel</Button>
           {options.map((d) => {
+            // commit/rollback route through the ecosystem bridge — 501 until M7.
+            const ecosystemPending = d === "commit" || d === "rollback";
             const isApprove = d === "approve" || d === "commit";
-            const blocked = isApprove && highRisk && !approveOk;
+            const highRiskBlocked = isApprove && highRisk && !approveOk;
+            const blocked = review.isPending || ecosystemPending || highRiskBlocked;
+            const title = ecosystemPending
+              ? "Requires the ecosystem bridge (M7)"
+              : highRiskBlocked
+                ? `Type "${phrase}" to confirm`
+                : undefined;
             return (
               <Button
                 key={d}
                 variant={d === "reject" || d === "rollback" ? "danger" : "primary"}
-                disabled={review.isPending || blocked}
+                disabled={blocked}
                 onClick={() => act(d)}
                 data-testid={`review-${d}`}
-                title={blocked ? `Type "${phrase}" to confirm` : undefined}
+                title={title}
               >
                 {d}
               </Button>

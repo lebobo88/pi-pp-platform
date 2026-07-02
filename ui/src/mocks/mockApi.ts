@@ -23,6 +23,9 @@ import {
   mockCaps,
   mockSettings,
   mockJanitor,
+  mockJanitorEmpty,
+  mockForums,
+  mockTaxonomy,
   mockMissabilityChecks,
   mockReplayBundle,
   mockProjectDetails,
@@ -136,54 +139,88 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
     });
   }
 
-  if (method === "POST" && p === apiPaths.profileBootstrap) {
-    const b = (body as { project_path?: string; profile?: string } | null) ?? {};
-    return json({ ok: true, project_path: b.project_path, profile: b.profile });
+  // Projects: register (POST) / remove (DELETE).
+  if (method === "POST" && p === apiPaths.projects) {
+    const b = (body as { path?: string; project_path?: string; name?: string } | null) ?? {};
+    const path = b.path ?? b.project_path;
+    if (!path) return errorResponse(422, "validation failed", { path: "required" });
+    const name = b.name ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+    // 201 Created with a ProjectDetail-ish body.
+    return json(
+      {
+        path,
+        name,
+        profile: null,
+        run_count: 0,
+        last_run_at: null,
+        active_profile: null,
+        constitution: { present: false, sha: null, updated_at: null, sections: null },
+        agents_md: { present: false, sha: null, updated_at: null, sections: null },
+        master_plan: { present: false, sha: null, updated_at: null, sections: null },
+        recent_runs: [],
+      },
+      201,
+    );
+  }
+  const projDelete = p.match(/^\/api\/v1\/projects\/([^/]+)$/);
+  if (method === "DELETE" && projDelete) {
+    return json({ removed: true, path: decode(projDelete[1]!) });
   }
 
-  // Profile detect / write.
-  const detect = p.match(/^\/api\/v1\/projects\/([^/]+)\/profile\/detect$/);
-  if (method === "POST" && detect) {
-    const path = decode(detect[1]!);
-    const current = mockProjectDetails[path]?.active_profile ?? null;
+  // Profile detect (POST /profiles/detect, body {project_path}) — ProfileDetection.
+  if (method === "POST" && p === apiPaths.profilesDetect) {
+    const b = (body as { project_path?: string } | null) ?? {};
+    if (!b.project_path) return errorResponse(422, "validation failed", { project_path: "required" });
+    const current = mockProjectDetails[b.project_path]?.active_profile ?? null;
     return json({
-      detected: current ?? "web-ui",
-      current,
-      reasons: ["package.json has react + vite", "tailwind config present", "no server entrypoint found"],
-      diff: `--- a/.harness/profile.yaml\n+++ b/.harness/profile.yaml\n@@\n+name: ${current ?? "web-ui"}\n+required_taxonomy_sections: ["4.4","4.8","4.10"]\n`,
+      recommendation: current ?? "web-ui",
+      confidence: current ? "high" : "medium",
+      signals: ["package.json has react + vite", "tailwind config present", "no server entrypoint found"],
+      alternatives: ["internal-tool", "sdk"],
     });
   }
+  // Profile write (PUT /projects/:path/profile, body {name} | {yaml}).
   const writeProfile = p.match(/^\/api\/v1\/projects\/([^/]+)\/profile$/);
   if (method === "PUT" && writeProfile) {
-    const b = (body as { yaml?: string; profile?: string } | null) ?? {};
-    if (b.yaml && /INVALID|!!bad/.test(b.yaml)) {
-      return errorResponse(422, "profile validation failed", { yaml: "unknown key or malformed yaml near line 1" });
+    const b = (body as { yaml?: string; name?: string } | null) ?? {};
+    if (b.name) return json({ path: `${decode(writeProfile[1]!)}/.harness/profile.yaml`, name: b.name });
+    if (typeof b.yaml === "string") {
+      if (/INVALID|!!bad/.test(b.yaml) || !/name\s*:/.test(b.yaml)) {
+        return errorResponse(422, "validation failed", { yaml: "profile must be a mapping with a string `name`" });
+      }
+      return json({ path: `${decode(writeProfile[1]!)}/.harness/profile.yaml`, yaml: b.yaml });
     }
-    return json({ ok: true, profile: b.profile ?? "custom" });
+    return errorResponse(422, "validation failed", { body: "provide `name` (built-in) or `yaml` (raw profile)" });
   }
 
-  // Doctor re-run + janitor run.
+  // Doctor re-run: async ack (result would arrive via SSE).
   if (method === "POST" && p === apiPaths.doctor) {
-    return json(mockDoctor);
+    return json({ ok: true, started: true }, 202);
   }
+  // Janitor: {dry_run:true} previews empty; otherwise "executes" the fixture.
   if (method === "POST" && p === apiPaths.janitor) {
-    const b = (body as { execute?: boolean } | null) ?? {};
-    return json({ ...mockJanitor, swept: b.execute ? mockJanitor.swept : 0, reclaimed_bytes: b.execute ? mockJanitor.reclaimed_bytes : 0 });
+    const b = (body as { dry_run?: boolean } | null) ?? {};
+    if (b.dry_run) return json({ ...mockJanitorEmpty, ran_at: new Date().toISOString(), dry_run: true });
+    return json(mockJanitor);
   }
 
-  // Settings (tier ladder + judge pool).
+  // Settings (tier ladder + judge pool) — mock-only until a server route lands.
   if (method === "PUT" && p === apiPaths.settings) {
     return json(body ?? mockSettings);
   }
 
+  // Evolution review: approve/reject ack; commit/rollback → 501 (ecosystem bridge).
   const review = p.match(/^\/api\/v1\/evolution\/proposals\/([^/]+)\/review$/);
   if (method === "POST" && review) {
     const id = decode(review[1]!);
     const decision = (body as { decision?: string } | null)?.decision ?? "approve";
-    const statusMap: Record<string, string> = { approve: "approved", reject: "rejected", commit: "committed", rollback: "rolled_back" };
+    if (decision === "commit" || decision === "rollback") {
+      return errorResponse(501, "evolution_commit_pending");
+    }
     const existing = mockEvolutionProposals.find((x) => x.id === id);
-    if (!existing) return errorResponse(404, `proposal ${id} not found`);
-    return json({ ...existing, status: statusMap[decision] ?? existing.status });
+    if (!existing) return errorResponse(404, `proposal ${id} not pending or not found`);
+    const status = decision === "approve" ? "approved" : "rejected";
+    return json({ id, decision, status, updated: true });
   }
 
   if (method === "PUT" && p === apiPaths.budgetCaps) {
@@ -235,6 +272,16 @@ function route(method: string, url: URL, body: unknown): Response | null {
   if (runReplay) return json(mockReplayBundle);
   const runMiss = p.match(/^\/api\/v1\/runs\/([^/]+)\/missability$/);
   if (runMiss) return json(mockMissabilityChecks);
+  const runBorda = p.match(/^\/api\/v1\/runs\/([^/]+)\/borda$/);
+  if (runBorda) {
+    return json([
+      { stage_id: "stg_impl", borda: { leader_attempt_id: "att_impl_b", ranking: [
+        { attempt_id: "att_impl_b", points: 6, rank: 1 },
+        { attempt_id: "att_impl_a", points: 4, rank: 2 },
+        { attempt_id: "att_impl_c", points: 2, rank: 3 },
+      ] } },
+    ]);
+  }
   const runMatch = p.match(/^\/api\/v1\/runs\/([^/]+)$/);
   if (runMatch) {
     const id = decode(runMatch[1]!);
@@ -245,9 +292,22 @@ function route(method: string, url: URL, body: unknown): Response | null {
   if (p === apiPaths.providers) return json(mockProviders);
   if (p === apiPaths.models) return json(mockModels);
   if (p === apiPaths.budgetCaps) return json(mockCaps);
+  const budgetScope = p.match(/^\/api\/v1\/budgets\/([^/]+)$/);
+  if (budgetScope) {
+    const scope = decode(budgetScope[1]!);
+    return json(mockBudgets.find((b) => b.scope === scope) ?? null);
+  }
   if (p === apiPaths.budgets) return json(mockBudgets);
-  if (p === apiPaths.janitor) return json(mockJanitor);
+  if (p === apiPaths.janitor) return json(mockJanitorEmpty);
   if (p === apiPaths.settings) return json(mockSettings);
+  if (p === apiPaths.taxonomy) return json(mockTaxonomy);
+  if (p === apiPaths.forums) return json(mockForums);
+  const forumMatch = p.match(/^\/api\/v1\/forums\/([^/]+)$/);
+  if (forumMatch) {
+    const id = decode(forumMatch[1]!);
+    const f = mockForums.find((x) => x.id === id);
+    return f ? json(f) : errorResponse(404, `forum ${id} not found`);
+  }
 
   if (p === apiPaths.teams) return json(mockTeams);
   const teamMatch = p.match(/^\/api\/v1\/teams\/([^/]+)$/);

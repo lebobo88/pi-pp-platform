@@ -170,9 +170,8 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
       <KeyValue
         labelWidth={92}
         rows={[
-          { label: "cli", value: provider.cli_version ?? (provider.cli_installed ? "installed" : "missing"), mono: true },
           { label: "api key", value: provider.has_api_key ? (provider.masked_key ?? "set") : "—", mono: true },
-          { label: "logged in", value: provider.logged_in ? "yes" : "no" },
+          { label: "configured", value: provider.configured ? "yes" : "no" },
         ]}
       />
 

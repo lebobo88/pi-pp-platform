@@ -55,3 +55,13 @@ export function useRunMissability(runId: string | undefined) {
     enabled: !!runId,
   });
 }
+
+/** Persisted Borda rankings (best-effort). The live ranking arrives via SSE. */
+export function useRunBorda(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["runs", "borda", runId ?? ""],
+    queryFn: ({ signal }) =>
+      api.get<Array<{ stage_id: string; borda: unknown }>>(apiPaths.runBorda(runId!), { signal }),
+    enabled: !!runId,
+  });
+}

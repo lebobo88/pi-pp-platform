@@ -9,6 +9,9 @@ import { DataTable, type Column } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { Pill } from "@/features/common/chips";
 import { useProjects } from "@/api/queries/projects";
+import { useRegisterProject } from "@/api/mutations/misc";
+import { ApiClientError } from "@/api/client";
+import { toast } from "@/stores/uiStore";
 import { formatRelative } from "@/lib/format";
 
 /** Rough absolute-path shape check (Windows drive or POSIX root). */
@@ -57,19 +60,39 @@ export function ProjectsPage() {
 
 function RegisterDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [path, setPath] = useState("");
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const register = useRegisterProject();
   const valid = looksLikePath(path.trim());
   const dirty = path.trim().length > 0;
+
+  const submit = () => {
+    setFieldError(null);
+    register.mutate(
+      { path: path.trim() },
+      {
+        onSuccess: (p) => {
+          toast({ tone: "success", title: "Project registered", message: p.name });
+          setPath("");
+          onClose();
+        },
+        onError: (e) => {
+          if (e instanceof ApiClientError && e.fieldErrors?.path) setFieldError(e.fieldErrors.path);
+          else toast({ tone: "error", title: "Register failed", message: e instanceof Error ? e.message : "" });
+        },
+      },
+    );
+  };
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={() => { setPath(""); setFieldError(null); onClose(); }}
       title="Register project"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!valid} title={valid ? "Registration lands with the M6 control agent" : "Enter a valid absolute path"}>
-            Register
+          <Button variant="ghost" onClick={() => { setPath(""); onClose(); }}>Cancel</Button>
+          <Button variant="primary" disabled={!valid || register.isPending} onClick={submit}>
+            {register.isPending ? "Registering…" : "Register"}
           </Button>
         </>
       }
@@ -84,8 +107,9 @@ function RegisterDialog({ open, onClose }: { open: boolean; onClose: () => void 
       {dirty && !valid && (
         <p className="mt-1 text-[11px] text-fail">Must be an absolute path (e.g. C:/… or /…).</p>
       )}
+      {fieldError && <p className="mt-1 text-[11px] text-fail">{fieldError}</p>}
       <p className="mt-2 text-[11px] text-ink-3">
-        Read-only placeholder — this validates the path shape only. Actual registration is wired by the control-plane milestone.
+        The server validates that the path exists on disk; the client checks the shape.
       </p>
     </Modal>
   );

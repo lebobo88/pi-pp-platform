@@ -6,6 +6,8 @@ import {
   type TeamSpec,
   type ProfileSpec,
   type RubricInfo,
+  type Forum,
+  type TaxonomySection,
 } from "@shared/api-types";
 
 export function useTeams() {
@@ -50,5 +52,21 @@ export function useRubric(id: string | undefined) {
     queryKey: qk.rubric(id ?? ""),
     queryFn: ({ signal }) => api.get<RubricInfo>(apiPaths.rubric(id!), { signal }),
     enabled: !!id,
+  });
+}
+
+export function useForums() {
+  return useQuery({
+    queryKey: ["forums"],
+    queryFn: ({ signal }) => api.get<Forum[]>(apiPaths.forums, { signal }),
+    staleTime: 60_000,
+  });
+}
+
+export function useTaxonomy() {
+  return useQuery({
+    queryKey: ["taxonomy"],
+    queryFn: ({ signal }) => api.get<TaxonomySection[]>(apiPaths.taxonomy, { signal }),
+    staleTime: 60_000,
   });
 }

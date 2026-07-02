@@ -151,7 +151,8 @@ export interface MissabilityCheckRow {
   id: string;
   run_id: string;
   check_id: string;
-  status: "pass" | "fail" | "skipped" | string;
+  /** The server emits "n/a" (not "skipped") for checks that don't apply. */
+  status: "pass" | "fail" | "n/a" | string;
   evidence_path: string | null;
   created_at: string;
 }
@@ -214,19 +215,27 @@ export interface Project {
 
 /**
  * Provider (vendor) health as surfaced to the UI. NEVER carries a raw API key
- * — only a masked fragment (e.g. "sk-…4f9c") suitable for display.
+ * — only a masked, non-reversible fingerprint suitable for display.
+ *
+ * The pi runtime has NO sub-CLIs, so `cli_installed`/`cli_version`/`logged_in`
+ * are LEGACY fields the server always returns as `false`/`null`/`false` (they
+ * were codex/gemini/copilot CLI fields in the old daemon). The UI does not
+ * display them. `degraded` is likewise always `false` on the pi server.
  */
 export interface ProviderStatus {
   vendor: Vendor;
-  /** CLI installed AND a usable credential present. */
+  /** A usable credential is present for this vendor. */
   configured: boolean;
+  /** @deprecated legacy CLI-era field — always false on the pi server. */
   cli_installed: boolean;
+  /** @deprecated legacy CLI-era field — always null on the pi server. */
   cli_version: string | null;
   has_api_key: boolean;
+  /** @deprecated legacy CLI-era field — always false on the pi server. */
   logged_in: boolean;
-  /** Masked key fragment for display; null when no key is set. */
+  /** Masked key fingerprint for display; null when no key is set. */
   masked_key: string | null;
-  /** Creds say "configured" but a smoke probe revealed a broken bridge. */
+  /** @deprecated legacy field — always false on the pi server. */
   degraded: boolean;
 }
 
@@ -404,31 +413,73 @@ export interface BudgetCap {
  * Replay bundle — mirror daemon/src/orchestrator/replay.ts reconstruction
  * ──────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Reproducible-replay bundle — mirrors @pp/core `buildReplayBundle`. Nested
+ * stages → attempts → verdicts, not a flat list.
+ */
 export interface ReplayBundle {
   run_id: string;
+  request_text: string;
+  project_path: string;
+  team: string | null;
+  mode: string;
+  forum: string | null;
+  n: number | null;
+  status: string;
   head_sha: string | null;
   tree_dirty_hash: string | null;
-  cli_versions: Record<string, string | null>;
-  cli_flags: Record<string, unknown> | null;
+  profile_snapshot: unknown;
+  taxonomy_mapping: unknown;
+  cli_versions: unknown;
+  started_at: string;
+  finished_at: string | null;
   stages: Array<{
-    stage_id: string;
+    id: string;
     kind: string;
     gate_type: string;
-    prompt_hashes: string[];
+    status: string;
+    attempts: Array<{
+      id: string;
+      producer: string;
+      model_id: string;
+      attempted_tier: string | null;
+      retry_index: number;
+      parent_attempt_id: string | null;
+      tokens_in: number | null;
+      tokens_out: number | null;
+      cost_usd: number | null;
+      verdicts: Array<{
+        judge_producer: string;
+        judge_model_id: string;
+        rubric_id: string | null;
+        outcome: string;
+        cross_vendor: boolean;
+      }>;
+    }>;
   }>;
-  artifacts: Array<{ path: string; sha256: string; bytes: number }>;
-  generated_at: string;
+  artifacts: Array<{ kind: string | null; path: string; sha256: string }>;
+  tier_resolution: unknown;
+  cli_flags: unknown;
+  reproduction_notes: string;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
  * Janitor report — mirror daemon/src/orchestrator/janitor.ts
  * ──────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Janitor report — mirrors the server. The pi janitor sweeps abandoned
+ * worktrees / locks / branches; entries carry `bytes: 0` (no size accounting)
+ * and `reclaimed_bytes: 0`. A GET returns an empty report (`ran_at: null`, no
+ * persistence); a POST actually runs (or previews with `dry_run: true`).
+ */
 export interface JanitorReport {
-  ran_at: string;
+  ran_at: string | null;
   swept: number;
   reclaimed_bytes: number;
   entries: Array<{ path: string; kind: string; bytes: number; age_days: number }>;
+  dry_run?: boolean;
+  crashed_runs?: unknown;
 }
 
 /** Raw text body of an on-disk artifact / candidate output (by path). */
@@ -496,12 +547,6 @@ export interface ProviderTestResult {
   detail?: string;
 }
 
-/** Apply a built-in profile (or write a profile.yaml) to a project. */
-export interface ProfileBootstrapRequest {
-  project_path: string;
-  profile: string;
-}
-
 /** Autogenesis review decision. */
 export type EvolutionDecision = "approve" | "reject" | "commit" | "rollback";
 
@@ -511,31 +556,87 @@ export interface EvolutionReviewRequest {
   note?: string;
 }
 
+/**
+ * Review response from the server. `approve`/`reject` mutate the proposal and
+ * return this ack; `commit`/`rollback` route through the ecosystem bridge and
+ * currently return `501` (TODO(M7)).
+ */
+export interface EvolutionReviewResponse {
+  id: string;
+  decision: EvolutionDecision;
+  status: string;
+  updated: boolean;
+}
+
 /** Replace the set of budget caps. */
 export interface SetBudgetCapsRequest {
   caps: BudgetCap[];
 }
 
-/** Detected-profile preview for the bootstrap flow. */
+/**
+ * Profile detection result — mirrors @pp/core `detectProfile` (`ProfileDetection`).
+ * The server returns this from `POST /profiles/detect`.
+ */
 export interface DetectProfileResult {
-  detected: string;
-  current: string | null;
-  reasons: string[];
-  /** Unified diff of the resulting .harness/profile.yaml, when available. */
-  diff: string | null;
+  recommendation: string | null;
+  confidence: "high" | "medium" | "low" | string;
+  signals: string[];
+  alternatives: string[];
+  flags?: unknown;
 }
 
-/** Write (or validate) a project's profile.yaml. */
+/** Write (or validate) a project's profile.yaml via `PUT /projects/:path/profile`. */
 export interface WriteProfileRequest {
-  /** Either apply a built-in by name… */
-  profile?: string;
-  /** …or write raw yaml (validated server-side; 422 on error). */
+  /** Apply a built-in profile by name… */
+  name?: string;
+  /** …or write raw yaml (validated server-side; 422 on parse/shape error). */
   yaml?: string;
 }
 
-/** Janitor run mode. */
+/** Janitor run mode: `dry_run: true` previews, otherwise it executes. */
 export interface JanitorRunRequest {
-  execute: boolean;
+  dry_run: boolean;
+}
+
+/** `POST /doctor` is async: it acks immediately and emits `doctor.result` on SSE. */
+export interface DoctorRunAck {
+  ok: boolean;
+  started: boolean;
+}
+
+/** Register a project via `POST /projects`. */
+export interface RegisterProjectRequest {
+  path: string;
+  name?: string;
+}
+
+/* ── Forums (governance-review pipelines) — mirror @pp/core forums.ts ──── */
+
+export interface ForumStage {
+  kind: string;
+  artifact_kind?: string;
+  gate_type: GateType | string;
+  generator_agent: string;
+  judge_tier: JudgeTier;
+  rubric_id?: string;
+}
+
+/** Full forum (from `GET /forums/:id`). List returns the summary subset. */
+export interface Forum {
+  id: string;
+  title: string;
+  description: string;
+  produces: string;
+  stages?: ForumStage[];
+  required_missability_checks?: string[];
+}
+
+/** A taxonomy section (from `GET /taxonomy`) — mirrors @pp/core TAXONOMY_SECTIONS. */
+export interface TaxonomySection {
+  id: string;
+  title: string;
+  default_artifact_kinds: string[];
+  master_plan_section: string;
 }
 
 /**
@@ -742,8 +843,10 @@ export const apiPaths = {
 
   projects: `${API_BASE}/projects`,
   project: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}`,
+  /** GET reads / PUT writes `.harness/profile.yaml` (body: {name} | {yaml}). */
   projectProfile: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/profile`,
-  projectProfileDetect: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/profile/detect`,
+  /** POST — body {project_path}; returns a ProfileDetection. */
+  profilesDetect: `${API_BASE}/profiles/detect`,
   projectMasterPlan: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/master-plan`,
   projectAgentsMd: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/agents-md`,
   projectConstitution: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/constitution`,
@@ -753,6 +856,7 @@ export const apiPaths = {
   runEvents: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
   runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
+  runBorda: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/borda`,
   runAbort: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/abort`,
   runStageRetry: (runId: string, stageId: string) =>
     `${API_BASE}/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
@@ -773,7 +877,10 @@ export const apiPaths = {
 
   profiles: `${API_BASE}/profiles`,
   profile: (name: string) => `${API_BASE}/profiles/${encodeURIComponent(name)}`,
-  profileBootstrap: `${API_BASE}/profiles/bootstrap`,
+
+  forums: `${API_BASE}/forums`,
+  forum: (id: string) => `${API_BASE}/forums/${encodeURIComponent(id)}`,
+  taxonomy: `${API_BASE}/taxonomy`,
 
   rubrics: `${API_BASE}/rubrics`,
   rubric: (id: string) => `${API_BASE}/rubrics/${encodeURIComponent(id)}`,
@@ -783,6 +890,8 @@ export const apiPaths = {
   evolutionReview: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}/review`,
 
   janitor: `${API_BASE}/system/janitor`,
+  /** Tier-ladder + judge-pool settings. NOTE: not yet a server route — mock-only
+   *  until the settings persistence lands (TODO(M7)). */
   settings: `${API_BASE}/settings`,
 
   /** Fetch a file/artifact body by its (project-relative) path. */

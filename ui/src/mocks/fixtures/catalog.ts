@@ -12,6 +12,8 @@ import type {
   DoctorReport,
   RunSummary,
   JanitorReport,
+  Forum,
+  TaxonomySection,
 } from "@shared/api-types";
 import { MOCK_RUN_ID, mockRunTree } from "./runTree";
 
@@ -86,37 +88,13 @@ export const mockRunSummaries: RunSummary[] = [
   },
 ];
 
+// The pi runtime has no sub-CLIs: cli_installed/cli_version/logged_in/degraded
+// are legacy fields the server always returns false/null. masked_key carries the
+// engine's non-reversible fingerprint. These fixtures mirror that exactly.
 export const mockProviders: ProviderStatus[] = [
-  {
-    vendor: "anthropic",
-    configured: true,
-    cli_installed: true,
-    cli_version: "claude 2.1.4",
-    has_api_key: true,
-    logged_in: true,
-    masked_key: "sk-ant-…9f2c",
-    degraded: false,
-  },
-  {
-    vendor: "openai",
-    configured: true,
-    cli_installed: true,
-    cli_version: "codex 0.34.0",
-    has_api_key: true,
-    logged_in: false,
-    masked_key: "sk-…a71b",
-    degraded: false,
-  },
-  {
-    vendor: "google",
-    configured: false,
-    cli_installed: true,
-    cli_version: "gemini 0.9.2",
-    has_api_key: false,
-    logged_in: false,
-    masked_key: null,
-    degraded: true,
-  },
+  { vendor: "anthropic", configured: true, cli_installed: false, cli_version: null, has_api_key: true, logged_in: false, masked_key: "sk-ant-…9f2c", degraded: false },
+  { vendor: "openai", configured: true, cli_installed: false, cli_version: null, has_api_key: true, logged_in: false, masked_key: "sk-…a71b", degraded: false },
+  { vendor: "google", configured: false, cli_installed: false, cli_version: null, has_api_key: false, logged_in: false, masked_key: null, degraded: false },
 ];
 
 export const mockModels: ModelInfo[] = [
@@ -145,16 +123,43 @@ export const mockCaps: BudgetCap[] = [
   { scope: "run", limit_usd: 3, warn_pct: 0.8, block_pct: 1.0 },
 ];
 
+/** GET /system/janitor is empty (no persistence); this is a POST-execute result. */
+export const mockJanitorEmpty: JanitorReport = { ran_at: null, swept: 0, reclaimed_bytes: 0, entries: [] };
 export const mockJanitor: JanitorReport = {
   ran_at: "2026-07-01T03:00:00.000Z",
-  swept: 14,
-  reclaimed_bytes: 48_372_110,
+  swept: 3,
+  reclaimed_bytes: 0,
   entries: [
-    { path: ".harness/candidates/run_5vB9kFg6hL2", kind: "abandoned_worktree", bytes: 22_100_000, age_days: 2 },
-    { path: ".harness/runs/run_old_a/logs", kind: "stale_logs", bytes: 14_200_000, age_days: 31 },
-    { path: ".harness/tmp/critique-cache", kind: "tmp", bytes: 12_072_110, age_days: 7 },
+    { path: ".harness/candidates/run_5vB9kFg6hL2", kind: "worktree", bytes: 0, age_days: 0 },
+    { path: "C:/AiAppDeployments/acme-checkout/.harness/.lock", kind: "lock", bytes: 0, age_days: 0 },
+    { path: "pp/cand-run_5vB9kFg6hL2-a", kind: "branch", bytes: 0, age_days: 0 },
   ],
 };
+
+/** Governance forums — mirror @pp/core forums.ts (id/title/description/produces). */
+export const mockForums: Forum[] = [
+  { id: "framing", title: "Problem framing / discovery review", description: "Confirms the problem, target users, and success metric before scope work begins.", produces: "Problem statement, evidence, success metrics" },
+  { id: "architecture", title: "Architecture review", description: "Reviews the technical approach, ADRs, and system boundaries.", produces: "ADRs, C4 sketches, tech design" },
+  { id: "security", title: "Security review", description: "Threat model, control mapping, and privacy review. Cross-vendor on every gate.", produces: "Threat model, control matrix, PIA" },
+  { id: "api-design", title: "API / contract review", description: "OpenAPI/AsyncAPI stability and integration wiring.", produces: "OpenAPI, event catalog" },
+  { id: "data-governance", title: "Data governance review", description: "ERD, lineage, retention, and analytics events.", produces: "ERD, retention policy, lineage" },
+  { id: "release-readiness", title: "Release readiness review", description: "Rollout, rollback, migration runbook, and comms.", produces: "Rollout plan, rollback plan" },
+  { id: "cost", title: "Cost review", description: "Budget envelope and tier-ladder cost analysis.", produces: "Cost model, budget caps" },
+  { id: "privacy", title: "Privacy review", description: "PIA/DPIA, data-flow, and retention/deletion.", produces: "PIA, data-flow map" },
+  { id: "accessibility", title: "Accessibility review", description: "WCAG 2.2 AA conformance and a11y plan.", produces: "A11y plan, conformance report" },
+  { id: "incident-postmortem", title: "Incident post-mortem", description: "Blameless post-mortem and corrective actions.", produces: "Post-mortem, action items" },
+];
+
+/** Taxonomy sections — abridged mirror of @pp/core TAXONOMY_SECTIONS. */
+export const mockTaxonomy: TaxonomySection[] = [
+  { id: "4.1", title: "Strategy, business context, and investment logic", default_artifact_kinds: ["vision_brief", "business_case", "okrs"], master_plan_section: "2. Business and portfolio context" },
+  { id: "4.3", title: "Product scope, requirements, and prioritization", default_artifact_kinds: ["prd", "feature_spec", "acceptance_criteria"], master_plan_section: "6. Functional requirements" },
+  { id: "4.6", title: "Architecture and technical strategy", default_artifact_kinds: ["adr", "c4_diagram", "tech_design_doc"], master_plan_section: "11. Architecture and technical strategy" },
+  { id: "4.7", title: "Interfaces, contracts, and integration wiring", default_artifact_kinds: ["openapi", "asyncapi", "event_catalog"], master_plan_section: "12. Interfaces and contracts" },
+  { id: "4.8", title: "Engineering implementation system and code quality", default_artifact_kinds: ["coding_standard", "diff", "code"], master_plan_section: "13. Engineering standards and delivery model" },
+  { id: "4.9", title: "Security, privacy, compliance, and trust", default_artifact_kinds: ["threat_model", "control_matrix", "pia"], master_plan_section: "14. Security, privacy, and compliance" },
+  { id: "4.10", title: "Quality engineering and verification", default_artifact_kinds: ["test_strategy", "contract_tests", "performance_budget"], master_plan_section: "15. Test and verification strategy" },
+];
 
 const DAY = "2026-07-01";
 export const mockBudgets: BudgetEntry[] = [
