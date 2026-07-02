@@ -84,6 +84,7 @@ describe("New run wizard → run view (full UI-driven run)", () => {
       return !!sel && sel.options.length > 1;
     });
 
+    // Step 1: pick a project + type a request.
     await act(async () => {
       const project = container.querySelector<HTMLSelectElement>('[data-testid="wizard-project"]')!;
       setValue(project, project.options[1]!.value);
@@ -91,19 +92,30 @@ describe("New run wizard → run view (full UI-driven run)", () => {
       setValue(request, "Add a coupon-code field to checkout and validate it server-side.");
     });
 
-    // Submit enables once the form is valid.
+    // Walk steps 1→2→3→4 (single mode is valid by default at every step).
+    const clickNext = async () => {
+      await waitFor(() => {
+        const btn = container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]');
+        return !!btn && !btn.disabled;
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]')!.click();
+      });
+    };
+    await clickNext(); // → step 2
+    await clickNext(); // → step 3
+    await clickNext(); // → step 4
+
     await waitFor(() => {
-      const btn = container.querySelector<HTMLButtonElement>('[data-testid="wizard-submit"]');
+      const btn = container.querySelector<HTMLButtonElement>('[data-testid="wizard-launch"]');
       return !!btn && !btn.disabled;
     });
-
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="wizard-submit"]')!.click();
+      container.querySelector<HTMLButtonElement>('[data-testid="wizard-launch"]')!.click();
     });
 
     // Navigation to the run view, which fetches + renders the (fake) run tree.
-    // "Pipeline" only appears on RunDetailPage, so it proves navigation landed
-    // (the wizard's own textarea already contains "coupon-code").
+    // "Pipeline" only appears on RunDetailPage, so it proves navigation landed.
     await waitFor(() => (container.textContent ?? "").includes("Pipeline"));
     expect(container.textContent).toContain("implementation");
     expect(container.textContent).toContain("coupon-code");

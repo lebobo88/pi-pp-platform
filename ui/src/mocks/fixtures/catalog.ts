@@ -130,6 +130,16 @@ export const mockModels: ModelInfo[] = [
   { id: "gemini-2.5-flash", vendor: "google", tier: null, input_per_1m: 0.3, output_per_1m: 0.9 },
 ];
 
+export const mockSettings = {
+  tier_models: {
+    fable: "claude-fable-5",
+    opus: "claude-opus-4-7",
+    sonnet: "claude-sonnet-4-6",
+    haiku: "claude-haiku-4-5-20251001",
+  },
+  judge_pool: ["gpt-5.4", "gemini-2.5-pro", "claude-opus-4-7"],
+} as const;
+
 export const mockCaps: BudgetCap[] = [
   { scope: "day", limit_usd: 8, warn_pct: 0.8, block_pct: 1.0 },
   { scope: "run", limit_usd: 3, warn_pct: 0.8, block_pct: 1.0 },
@@ -326,6 +336,18 @@ export const mockEvolutionProposals: EvolutionProposal[] = [
     eights_proposal_id: null,
     status: "approved",
     created_at: "2026-06-27T11:05:00.000Z",
+  },
+  {
+    id: "evo_4402",
+    run_id: "run_7bQ1mNr4tZ9",
+    resource_rid: "rubric:owasp-asvs@2",
+    proposed_change: "Relax ASVS V2.1.1 (password length) check to WARN when the project is a non-auth internal tool.",
+    justification: "5 internal-tool runs flagged V2.1.1 as a false positive on services with no auth surface.",
+    signal_count: 5,
+    risk_class: "high",
+    eights_proposal_id: "eights_prop_1042",
+    status: "pending",
+    created_at: "2026-07-01T08:12:00.000Z",
   },
 ];
 

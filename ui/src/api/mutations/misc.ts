@@ -8,6 +8,12 @@ import {
   type ProfileBootstrapRequest,
   type BudgetCap,
   type SetBudgetCapsRequest,
+  type DetectProfileResult,
+  type WriteProfileRequest,
+  type DoctorReport,
+  type JanitorReport,
+  type JanitorRunRequest,
+  type HarnessSettings,
 } from "@shared/api-types";
 
 export function useReviewProposal() {
@@ -40,5 +46,43 @@ export function useSetCaps() {
     mutationFn: (caps: BudgetCap[]) =>
       api.put<BudgetCap[]>(apiPaths.budgetCaps, { caps } satisfies SetBudgetCapsRequest),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.budgetCaps }),
+  });
+}
+
+export function useDetectProfile(path: string) {
+  return useMutation({
+    mutationFn: () => api.post<DetectProfileResult>(apiPaths.projectProfileDetect(path)),
+  });
+}
+
+export function useWriteProfile(path: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: WriteProfileRequest) => api.put<{ ok: boolean }>(apiPaths.projectProfile(path), req),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.project(path) }),
+  });
+}
+
+export function useRunDoctor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<DoctorReport>(apiPaths.doctor),
+    onSuccess: (data) => qc.setQueryData(qk.doctor, data),
+  });
+}
+
+export function useRunJanitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (execute: boolean) => api.post<JanitorReport>(apiPaths.janitor, { execute } satisfies JanitorRunRequest),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.janitor }),
+  });
+}
+
+export function useSaveSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: HarnessSettings) => api.put<HarnessSettings>(apiPaths.settings, settings),
+    onSuccess: (data) => qc.setQueryData(["settings"], data),
   });
 }

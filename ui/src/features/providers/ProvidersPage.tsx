@@ -1,5 +1,6 @@
-import { useState } from "react";
-import type { ModelInfo, ProviderStatus, ProviderTestResult } from "@shared/api-types";
+import { useEffect, useState } from "react";
+import type { ModelInfo, ProviderStatus, ProviderTestResult, HarnessSettings } from "@shared/api-types";
+import { CLAUDE_TIERS } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
@@ -10,7 +11,9 @@ import { StatusChip, StatusDot } from "@/components/StatusChip";
 import { KeyValue } from "@/components/KeyValue";
 import { Pill, TierChip } from "@/features/common/chips";
 import { useProviders, useModels } from "@/api/queries/providers";
-import { useSetProviderKey, useTestProvider } from "@/api/mutations/providers";
+import { useSettings } from "@/api/queries/system";
+import { useSetProviderKey, useTestProvider, useDeleteProviderKey } from "@/api/mutations/providers";
+import { useSaveSettings } from "@/api/mutations/misc";
 import { toast } from "@/stores/uiStore";
 import { formatUsd, formatDuration } from "@/lib/format";
 
@@ -38,6 +41,8 @@ export function ProvidersPage() {
         </div>
       )}
 
+      <SettingsPanel providers={providers ?? []} models={models ?? []} />
+
       <Card title="Model catalog" flush>
         <DataTable
           columns={modelColumns}
@@ -51,9 +56,109 @@ export function ProvidersPage() {
   );
 }
 
+/* ── Tier ladder + judge pool ──────────────────────────────────────────── */
+
+function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; models: ModelInfo[] }) {
+  const { data: settings } = useSettings();
+  const save = useSaveSettings();
+  const [draft, setDraft] = useState<HarnessSettings | null>(null);
+  useEffect(() => {
+    if (settings) setDraft(settings);
+  }, [settings]);
+
+  if (!draft) return null;
+
+  const configuredVendors = new Set(providers.filter((p) => p.configured).map((p) => p.vendor));
+  const availableModels = models.filter((m) => configuredVendors.has(m.vendor));
+  const vendorOf = (id: string) => models.find((m) => m.id === id)?.vendor ?? "?";
+
+  const judgeVendors = new Set(draft.judge_pool.map(vendorOf));
+  const crossVendorOk = judgeVendors.size >= 2;
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
+  const commit = () =>
+    save.mutate(draft, {
+      onSuccess: () => toast({ tone: "success", title: "Settings saved" }),
+      onError: (e) => toast({ tone: "error", title: "Save failed", message: e instanceof Error ? e.message : "" }),
+    });
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card
+        title="Tier ladder"
+        actions={<Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>}
+      >
+        <p className="mb-2 text-[11px] text-ink-3">Map each Claude tier to a model. Only models from configured providers are listed.</p>
+        <div className="space-y-2">
+          {CLAUDE_TIERS.map((tier) => (
+            <div key={tier} className="flex items-center gap-2">
+              <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
+              <select
+                value={draft.tier_models[tier] ?? ""}
+                onChange={(e) => setDraft({ ...draft, tier_models: { ...draft.tier_models, [tier]: e.target.value } })}
+                className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+              >
+                {(availableModels.length ? availableModels : models).map((m) => (
+                  <option key={m.id} value={m.id}>{m.id}</option>
+                ))}
+              </select>
+              {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card
+        title="Judge pool"
+        actions={<Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>}
+      >
+        <p className="mb-2 text-[11px] text-ink-3">Ordered judge models. Cross-vendor coverage requires ≥2 vendors.</p>
+        <ul className="space-y-1">
+          {draft.judge_pool.map((id, i) => (
+            <li key={id} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
+              <span className="mono w-4 text-[11px] text-ink-3">{i + 1}</span>
+              <span className="mono flex-1 text-[12px] text-ink-1">{id}</span>
+              <Pill>{vendorOf(id)}</Pill>
+              <button type="button" className="text-ink-3 hover:text-ink-1" disabled={i === 0}
+                onClick={() => {
+                  const next = [...draft.judge_pool];
+                  [next[i - 1], next[i]] = [next[i]!, next[i - 1]!];
+                  setDraft({ ...draft, judge_pool: next });
+                }}>↑</button>
+              <button type="button" className="text-fail/70 hover:text-fail"
+                onClick={() => setDraft({ ...draft, judge_pool: draft.judge_pool.filter((x) => x !== id) })}>✕</button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-2 flex items-center gap-2">
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value && !draft.judge_pool.includes(e.target.value)) {
+                setDraft({ ...draft, judge_pool: [...draft.judge_pool, e.target.value] });
+              }
+              e.target.value = "";
+            }}
+            className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+          >
+            <option value="">add judge model…</option>
+            {models.filter((m) => !draft.judge_pool.includes(m.id)).map((m) => (
+              <option key={m.id} value={m.id}>{m.id}</option>
+            ))}
+          </select>
+        </div>
+        {!crossVendorOk && (
+          <p className="mt-2 text-[11px] text-warn">All judges share a single vendor — cross-vendor gates (spec/design/security/contract) will have no eligible judge.</p>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function ProviderCard({ provider }: { provider: ProviderStatus }) {
   const tone = provider.degraded ? "warn" : provider.configured ? "pass" : "dim";
   const [keyOpen, setKeyOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const test = useTestProvider(provider.vendor);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
 
@@ -86,6 +191,9 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
         >
           {test.isPending ? "Testing…" : "Test"}
         </Button>
+        {provider.has_api_key && (
+          <Button size="sm" variant="danger" onClick={() => setDeleteOpen(true)}>Remove</Button>
+        )}
         {testResult && (
           <span className="flex items-center gap-1.5 text-[11px]">
             <StatusDot tone={testResult.ok ? "pass" : "fail"} />
@@ -95,7 +203,38 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
       </div>
 
       <SetKeyModal vendor={provider.vendor} open={keyOpen} onClose={() => setKeyOpen(false)} />
+      <DeleteKeyModal vendor={provider.vendor} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
     </Card>
+  );
+}
+
+function DeleteKeyModal({ vendor, open, onClose }: { vendor: string; open: boolean; onClose: () => void }) {
+  const del = useDeleteProviderKey(vendor);
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Remove ${vendor} key?`}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="danger"
+            disabled={del.isPending}
+            onClick={() =>
+              del.mutate(undefined, {
+                onSuccess: () => { toast({ tone: "warn", title: `${vendor} key removed` }); onClose(); },
+                onError: (e) => toast({ tone: "error", title: "Remove failed", message: e instanceof Error ? e.message : "" }),
+              })
+            }
+          >
+            {del.isPending ? "Removing…" : "Remove key"}
+          </Button>
+        </>
+      }
+    >
+      This deletes the stored credential. The vendor becomes <span className="mono">unconfigured</span> until a new key is set.
+    </Modal>
   );
 }
 

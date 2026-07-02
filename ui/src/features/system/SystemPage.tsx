@@ -8,6 +8,10 @@ import { StatusChip, StatusDot } from "@/components/StatusChip";
 import { Pill } from "@/features/common/chips";
 import { useState } from "react";
 import { useDoctor, useJanitor } from "@/api/queries/system";
+import { useRunDoctor, useRunJanitor } from "@/api/mutations/misc";
+import { Button } from "@/components/Button";
+import { Modal } from "@/components/Modal";
+import { toast } from "@/stores/uiStore";
 import { formatBytes, formatRelative, formatDuration } from "@/lib/format";
 
 export function SystemPage() {
@@ -33,8 +37,20 @@ function Check({ ok }: { ok: boolean }) {
 
 function DoctorPanel() {
   const { data, isLoading } = useDoctor();
+  const rerun = useRunDoctor();
   if (isLoading) return <EmptyState title="Running doctor…" compact />;
-  if (!data) return <EmptyState title="Doctor unavailable" description="The daemon did not respond." />;
+  if (!data) {
+    return (
+      <div className="space-y-3">
+        <EmptyState title="Doctor unavailable" description="The daemon did not respond." />
+        <div className="flex justify-center">
+          <Button variant="primary" disabled={rerun.isPending} onClick={() => rerun.mutate()}>
+            {rerun.isPending ? "Running…" : "Run doctor"}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   const vendors = Object.keys(data.vendors_configured) as Array<keyof DoctorReport["vendors_configured"]>;
 
@@ -45,6 +61,19 @@ function DoctorPanel() {
         <StatusChip tone={data.cross_vendor_ready ? "pass" : "warn"} label={data.cross_vendor_ready ? "cross-vendor ready" : "single-vendor"} />
         {data.gemini_disabled && <StatusChip tone="dim" label="gemini disabled" />}
         <span className="mono text-[11px] text-ink-3">{data.db_path}</span>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          disabled={rerun.isPending}
+          onClick={() =>
+            rerun.mutate(undefined, {
+              onSuccess: () => toast({ tone: "success", title: "Doctor re-run complete" }),
+              onError: (e) => toast({ tone: "error", title: "Doctor failed", message: e instanceof Error ? e.message : "" }),
+            })
+          }
+        >
+          {rerun.isPending ? "Running…" : "Re-run doctor"}
+        </Button>
       </div>
 
       <Card title="Provider matrix" flush>
@@ -129,13 +158,30 @@ function DoctorPanel() {
 
 function JanitorPanel() {
   const { data, isLoading } = useJanitor();
+  const run = useRunJanitor();
+  const [confirmExec, setConfirmExec] = useState(false);
   if (isLoading) return <EmptyState title="Loading janitor report…" compact />;
   if (!data) return <EmptyState title="No janitor report" compact />;
+
+  const dryRun = () =>
+    run.mutate(false, {
+      onSuccess: (r) => toast({ tone: "info", title: "Janitor dry-run", message: `${r.entries.length} candidates found` }),
+      onError: (e) => toast({ tone: "error", title: "Dry-run failed", message: e instanceof Error ? e.message : "" }),
+    });
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-4">
-        <Card title="Last sweep" className="flex-1">
+        <Card
+          title="Last sweep"
+          className="flex-1"
+          actions={
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={run.isPending} onClick={dryRun}>Dry run</Button>
+              <Button size="sm" variant="danger" disabled={run.isPending} onClick={() => setConfirmExec(true)}>Execute</Button>
+            </div>
+          }
+        >
           <KeyValue
             rows={[
               { label: "ran", value: formatRelative(data.ran_at) },
@@ -145,6 +191,31 @@ function JanitorPanel() {
           />
         </Card>
       </div>
+
+      <Modal
+        open={confirmExec}
+        onClose={() => setConfirmExec(false)}
+        title="Execute janitor sweep?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmExec(false)}>Cancel</Button>
+            <Button
+              variant="danger"
+              disabled={run.isPending}
+              onClick={() =>
+                run.mutate(true, {
+                  onSuccess: (r) => { toast({ tone: "warn", title: "Janitor executed", message: `reclaimed ${formatBytes(r.reclaimed_bytes)}` }); setConfirmExec(false); },
+                  onError: (e) => toast({ tone: "error", title: "Execute failed", message: e instanceof Error ? e.message : "" }),
+                })
+              }
+            >
+              {run.isPending ? "Sweeping…" : "Delete swept files"}
+            </Button>
+          </>
+        }
+      >
+        This permanently deletes abandoned worktrees, stale logs, and temp caches older than the retention window. This cannot be undone.
+      </Modal>
 
       <Card title="Swept entries" flush>
         <table className="w-full text-[12px]">

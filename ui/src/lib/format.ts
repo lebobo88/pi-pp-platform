@@ -93,3 +93,8 @@ export function basename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? p;
 }
+
+/** Rough token estimate (~4 chars/token) for a live count on inputs. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.trim().length / 4);
+}

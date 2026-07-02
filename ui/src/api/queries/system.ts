@@ -6,6 +6,7 @@ import {
   type DoctorReport,
   type EvolutionProposal,
   type JanitorReport,
+  type HarnessSettings,
 } from "@shared/api-types";
 
 export function useHealth() {
@@ -35,5 +36,13 @@ export function useJanitor() {
   return useQuery({
     queryKey: qk.janitor,
     queryFn: ({ signal }) => api.get<JanitorReport>(apiPaths.janitor, { signal }),
+  });
+}
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: ({ signal }) => api.get<HarnessSettings>(apiPaths.settings, { signal }),
+    staleTime: 60_000,
   });
 }

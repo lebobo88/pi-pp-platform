@@ -516,6 +516,39 @@ export interface SetBudgetCapsRequest {
   caps: BudgetCap[];
 }
 
+/** Detected-profile preview for the bootstrap flow. */
+export interface DetectProfileResult {
+  detected: string;
+  current: string | null;
+  reasons: string[];
+  /** Unified diff of the resulting .harness/profile.yaml, when available. */
+  diff: string | null;
+}
+
+/** Write (or validate) a project's profile.yaml. */
+export interface WriteProfileRequest {
+  /** Either apply a built-in by name… */
+  profile?: string;
+  /** …or write raw yaml (validated server-side; 422 on error). */
+  yaml?: string;
+}
+
+/** Janitor run mode. */
+export interface JanitorRunRequest {
+  execute: boolean;
+}
+
+/**
+ * Harness settings the control plane edits: the Claude tier→model ladder and
+ * the ordered judge pool. Persisted server-side; read-only vendors are derived
+ * from provider config.
+ */
+export interface HarnessSettings {
+  tier_models: Record<ClaudeTier, string>;
+  /** Ordered judge model ids; cross-vendor coverage is derived. */
+  judge_pool: string[];
+}
+
 /* ────────────────────────────────────────────────────────────────────────
  * Error envelope
  * ──────────────────────────────────────────────────────────────────────── */
@@ -709,6 +742,8 @@ export const apiPaths = {
 
   projects: `${API_BASE}/projects`,
   project: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}`,
+  projectProfile: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/profile`,
+  projectProfileDetect: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/profile/detect`,
   projectMasterPlan: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/master-plan`,
   projectAgentsMd: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/agents-md`,
   projectConstitution: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/constitution`,
@@ -748,6 +783,7 @@ export const apiPaths = {
   evolutionReview: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}/review`,
 
   janitor: `${API_BASE}/system/janitor`,
+  settings: `${API_BASE}/settings`,
 
   /** Fetch a file/artifact body by its (project-relative) path. */
   content: (path: string) => `${API_BASE}/content?path=${encodeURIComponent(path)}`,

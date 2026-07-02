@@ -23,3 +23,11 @@ export function useTestProvider(vendor: string) {
     mutationFn: () => api.post<ProviderTestResult>(apiPaths.providerTest(vendor)),
   });
 }
+
+export function useDeleteProviderKey(vendor: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.del<ProviderStatus>(apiPaths.providerKey(vendor)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.providers }),
+  });
+}

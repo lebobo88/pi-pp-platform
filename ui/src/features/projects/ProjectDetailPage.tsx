@@ -18,7 +18,9 @@ import {
   useConstitution,
 } from "@/api/queries/projects";
 import { useProfile, useProfiles } from "@/api/queries/library";
-import { useBootstrapProfile } from "@/api/mutations/misc";
+import { useBootstrapProfile, useDetectProfile, useWriteProfile } from "@/api/mutations/misc";
+import { ApiClientError } from "@/api/client";
+import { DiffView } from "@/components/DiffView";
 import { Button } from "@/components/Button";
 import { toast } from "@/stores/uiStore";
 import { formatRelative, shortId } from "@/lib/format";
@@ -81,11 +83,56 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "profile" && <ProfileView name={project.active_profile} />}
+      {tab === "profile" && <ProfileView name={project.active_profile} path={project.path} />}
       {tab === "master-plan" && <MasterPlanPanel path={path!} />}
       {tab === "agents-md" && <AgentsMdPanel path={path!} />}
       {tab === "constitution" && <ConstitutionPanel path={path!} />}
     </Page>
+  );
+}
+
+/** Detected-profile preview with a confirm-to-write step. */
+function DetectPreview({
+  path,
+  result,
+  onDone,
+}: {
+  path: string;
+  result: import("@shared/api-types").DetectProfileResult;
+  onDone: () => void;
+}) {
+  const write = useWriteProfile(path);
+  return (
+    <div className="mt-3 rounded-md border border-line-1 bg-bg-1 p-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] text-ink-2">detected</span>
+        <Pill tone="accent">{result.detected}</Pill>
+        {result.current && <span className="text-[11px] text-ink-3">(was {result.current})</span>}
+      </div>
+      <ul className="mt-2 list-disc pl-5 text-[11px] text-ink-3">
+        {result.reasons.map((r, i) => (<li key={i}>{r}</li>))}
+      </ul>
+      {result.diff && <div className="mt-2"><DiffView patch={result.diff} /></div>}
+      <div className="mt-3 flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={write.isPending}
+          onClick={() =>
+            write.mutate(
+              { profile: result.detected },
+              {
+                onSuccess: () => { toast({ tone: "success", title: "Profile written", message: result.detected }); onDone(); },
+                onError: (e) => toast({ tone: "error", title: "Write failed", message: e instanceof Error ? e.message : "" }),
+              },
+            )
+          }
+        >
+          {write.isPending ? "Writing…" : "Confirm & write profile.yaml"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDone}>Dismiss</Button>
+      </div>
+    </div>
   );
 }
 
@@ -169,18 +216,67 @@ function RecentRunsTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (id: st
   );
 }
 
-/** Read-only profile view: resolved spec + a yaml-ish rendering. */
-function ProfileView({ name }: { name: string | null }) {
+/** Editable profile view: resolved spec + a yaml editor with detect + save. */
+function ProfileView({ name, path }: { name: string | null; path: string }) {
   const { data: profile, isLoading } = useProfile(name ?? undefined);
-  if (!name) return <EmptyState title="No active profile" compact />;
+  const detect = useDetectProfile(path);
+  const write = useWriteProfile(path);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [yamlError, setYamlError] = useState<string | null>(null);
+  const [detectResult, setDetectResult] = useState<import("@shared/api-types").DetectProfileResult | null>(null);
+
+  if (!name) {
+    return (
+      <Card title="No active profile">
+        <p className="text-[12px] text-ink-3">This project has no profile. Detect one to seed <span className="mono">.harness/profile.yaml</span>.</p>
+        <div className="mt-2">
+          <Button size="sm" variant="primary" disabled={detect.isPending} onClick={() => detect.mutate(undefined, { onSuccess: setDetectResult })}>
+            {detect.isPending ? "Detecting…" : "Detect profile"}
+          </Button>
+        </div>
+        {detectResult && <DetectPreview path={path} result={detectResult} onDone={() => setDetectResult(null)} />}
+      </Card>
+    );
+  }
   if (isLoading) return <Card title="Profile"><div className="text-[12px] text-ink-3">Loading…</div></Card>;
   if (!profile) return <EmptyState title="Profile unavailable" compact />;
 
-  const yaml = toYamlish(profile);
+  const yaml = draft ?? toYamlish(profile);
+  const dirty = draft != null && draft !== toYamlish(profile);
+
+  const save = () => {
+    setYamlError(null);
+    write.mutate(
+      { yaml },
+      {
+        onSuccess: () => { toast({ tone: "success", title: "Profile saved" }); setDraft(null); },
+        onError: (e) => {
+          if (e instanceof ApiClientError && e.fieldErrors?.yaml) setYamlError(e.fieldErrors.yaml);
+          else toast({ tone: "error", title: "Save failed", message: e instanceof Error ? e.message : "" });
+        },
+      },
+    );
+  };
+
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card title={<span className="flex items-center gap-2">Profile <Pill tone="accent">{profile.name}</Pill></span>} actions={<CopyButton value={yaml} label="Copy" />} flush>
-        <pre className="mono max-h-[440px] overflow-auto p-3 text-[12px] leading-relaxed text-ink-2">{yaml}</pre>
+      <Card
+        title={<span className="flex items-center gap-2">Profile <Pill tone="accent">{profile.name}</Pill></span>}
+        actions={
+          <div className="flex items-center gap-2">
+            <CopyButton value={yaml} label="Copy" />
+            <Button size="sm" variant="primary" disabled={!dirty || write.isPending} onClick={save}>{write.isPending ? "Saving…" : "Save"}</Button>
+          </div>
+        }
+        flush
+      >
+        <textarea
+          value={yaml}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          className="mono h-[440px] w-full resize-none bg-bg-0 p-3 text-[12px] leading-relaxed text-ink-2 outline-none"
+        />
+        {yamlError && <p className="border-t border-line-1 px-3 py-1.5 text-[11px] text-fail">{yamlError}</p>}
       </Card>
       <Card title="Resolved spec">
         <KeyValue
