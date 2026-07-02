@@ -4,14 +4,33 @@
 `pair-programmer` multi-agent code-generation harness that
 runs entirely on [`@earendil-works/pi-*`](https://www.npmjs.com/package/@earendil-works/pi-ai)
 **0.80.3** — with **zero dependence on the Claude Code, Gemini, Codex, or Copilot
-CLIs**. Generation and cross-vendor judging happen through the pi model APIs
-(OpenAI, Google, Anthropic) instead of shelling out to vendor CLIs, and the whole
-platform is driven from a web UI plus a small set of local binaries.
+CLIs**. Generation and cross-**provider** judging happen through the pi model APIs
+instead of shelling out to vendor CLIs, and the whole platform is driven from a
+web UI plus a small set of local binaries.
 
-> Status: pre-1.0. Milestones M1–M7 are complete (harness port, pi engine,
-> pilot lifecycle, best-of/teams/forums, live server run-control, the full UI,
-> and the 29-hook parity layer); M8 is the closing parity-audit + docs pass. See
-> the [milestone status](#milestone-status) table.
+> Status: pre-1.0. Milestones M1–M8 are complete. Since then: a **dynamic
+> provider/model catalog** (configure keys + models for any of pi's ~35
+> providers — OpenAI, Anthropic, Google, DeepSeek, xAI, Mistral, Groq, …, sourced
+> live from pi), a **hardened + containerized deploy** path
+> ([`docs/DEPLOY.md`](docs/DEPLOY.md)), a **real live end-to-end validation**
+> harness ([`docs/VALIDATION.md`](docs/VALIDATION.md)), a real Playwright
+> browser-validation drive, and CI. See [milestone status](#milestone-status).
+
+## Providers & models (dynamic catalog)
+
+Providers, their models, and pricing are sourced **live from pi's builtin
+catalog (~35 providers)** — nothing is hand-maintained. A governance catalog
+(`packages/core/catalog.json` + a `~/.pi-pp-platform/catalog.json` override)
+controls which providers are enabled, the generation ladders, and the judge
+pool. In the UI's **Providers & Models** page you can add a key for any provider
+(stored write-only), pick any provider/model as a **generator** or **judge**,
+and the model catalog + pricing populate automatically. Cross-provider judging
+only ever routes to providers you've keyed.
+
+> Coding stages need a model that reliably calls file-editing tools (Claude,
+> OpenAI/codex, and similar). Authoring/spec/design stages work with any capable
+> model; some models answer conversationally and won't produce a diff for
+> agentic coding.
 
 ## What it is
 
@@ -91,10 +110,19 @@ pnpm start           # builds, then boots ppd on http://127.0.0.1:7878
 ```
 
 Provider API keys can be set from the UI (**Providers & Models → Set key**,
-write-only) or through the engine's credential store. Full cross-vendor judging
-needs keys for all three vendors (OpenAI, Google, Anthropic); with fewer, the
-harness degrades gracefully, and with none it still runs in demo/mock mode
+write-only) for any of pi's ~35 providers, or through the engine's credential
+store / env vars. Cross-provider judging needs ≥2 keyed providers; with one it
+surfaces gates for human review, and with none it still runs in demo/mock mode
 (see [INSTALL.md](docs/INSTALL.md#provider-keys)).
+
+Additional run modes:
+
+```bash
+pnpm dev            # fake-engine API + Vite HMR (no keys)         → http://localhost:5273
+pnpm serve          # PRODUCTION: real pi engine, persistent DB, PP_HOST/token gate
+pnpm validate:live  # REAL end-to-end: gen (one provider) + judge (another). Needs keys.
+docker compose up   # containerized (see docs/DEPLOY.md)
+```
 
 The `ppp` binary (`@pp/pilot`) drives a run from the command line; `ppd`
 (`@pp/server`) hosts the API + UI. See [docs/INSTALL.md](docs/INSTALL.md) for the
@@ -122,10 +150,14 @@ the pilot's event bus is bridged to SSE so the run view animates in real time.
 | M7 | Hooks parity (29), autogenesis wiring, visual/browser, prompt port (75) | `e192fb2` / `f52fca9` | ✅ done |
 | M7a | `@pp/mcp-adapter` — pp_harness MCP server | `6594efc` | ✅ done |
 | M8a–b | Parity matrix + audit scaffold; ecosystem guard; docs | `1efc912` / `da85f68` | ✅ done |
-| M8 | Parity audit close-out + final docs sweep | — | 🚧 in progress |
+| M8 | Parity audit close-out + final docs sweep | — | ✅ done |
+| — | Dynamic provider/model catalog (35 providers, catalog-sourced) | — | ✅ done |
+| — | Hardened + containerized deploy (`serve`, Dockerfile, compose, DEPLOY.md) | — | ✅ done |
+| — | Live validation (`validate:live`) + real Playwright browser drive + CI | — | ✅ done |
 
-(Commit refs are from `git log`. M1–M7 are complete; M8 is the closing parity +
-docs pass.)
+(Commit refs are from `git log`. The platform is now beyond the original M1–M8
+port: see the top-of-file status note for the provider-catalog, deploy, and
+validation work.)
 
 ## License
 
