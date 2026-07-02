@@ -8,7 +8,11 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts"],
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
+    // pi has no codex/gemini/claude sub-CLIs; skip core's captureCliVersions()
+    // subprocess probes (a slow `claude --version` otherwise adds ~6s to the
+    // first startRun and can push run-driving tests past the timeout).
+    env: { PP_SKIP_CLI_VERSIONS: "1" },
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
   },
 });
