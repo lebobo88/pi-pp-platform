@@ -188,6 +188,13 @@ export class RunSupervisor {
   }
 
   // ── event bridge ────────────────────────────────────────────────────────
+  //
+  // WIRE CONTRACT: the forwarded SSE frame shape below — event `type` = the
+  // pilot event type, and `data` = the pilot event payload with stage_id /
+  // attempt_id / pilot_seq folded in — is the SOURCE OF TRUTH the UI's live-run
+  // store (ui/src/stores/liveRunStore.ts, M5i) is aligned to. Do NOT change the
+  // forwarded shape (key names, id placement) without coordinating with
+  // ui-foundation, or the live-run animation re-breaks.
   private forward(ev: PilotEvent): void {
     // The supervisor owns the terminal run.finalized (fired from done handler),
     // so it carries the authoritative RunResult status exactly once.
