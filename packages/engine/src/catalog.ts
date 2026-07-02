@@ -7,48 +7,72 @@
  */
 import { ModelRegistry, type AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { Model, Api } from "@earendil-works/pi-ai/compat";
+import {
+  ladder as catalogLadder,
+  judgePool,
+  judgePoolProviders,
+  killSwitchEnvFor,
+} from "@pp/core";
 import type { GenProvider } from "./envelope.js";
+import { projectCatalogModelsJson } from "./catalog-to-modelsjson.js";
 
-export type Tier = "fable" | "opus" | "sonnet" | "haiku";
+/** Default-ladder tier names. Open string: a ladder can define any tier set. */
+export type Tier = string;
 
-/** Platform tier → concrete pinned model (all Anthropic for M2). */
-export const TIER_MODELS: Record<Tier, { provider: GenProvider; id: string }> = {
-  fable: { provider: "anthropic", id: "claude-fable-5" },
-  opus: { provider: "anthropic", id: "claude-opus-4-7" },
-  sonnet: { provider: "anthropic", id: "claude-sonnet-4-6" },
-  haiku: { provider: "anthropic", id: "claude-haiku-4-5-20251001" },
-};
+interface TierModel { provider: GenProvider; id: string }
 
-/** Cross-vendor judge pools, keyed by vendor. */
-export const JUDGE_POOLS = {
-  openai: { default: "gpt-5.4", escalated: "gpt-5.5" },
-  google: { default: "gemini-3.1-pro-preview" },
-  anthropic: { default: "claude-opus-4-7" },
-} as const;
+/** Build the default-ladder tier→model map from the catalog. */
+function buildTierModels(): Record<string, TierModel> {
+  const l = catalogLadder();
+  const provider = l?.provider ?? "anthropic";
+  const out: Record<string, TierModel> = {};
+  for (const [tier, id] of Object.entries(l?.tiers ?? {})) {
+    out[tier] = { provider, id };
+  }
+  return out;
+}
 
-const KILL_SWITCH_ENV: Record<GenProvider, string> = {
-  openai: "PP_DISABLE_OPENAI",
-  google: "PP_DISABLE_GOOGLE",
-  anthropic: "PP_DISABLE_ANTHROPIC",
-};
+/**
+ * Platform tier → concrete pinned model, derived from the catalog's default
+ * generation ladder. Computed at module load; the default catalog reproduces
+ * the historical all-Anthropic map exactly.
+ */
+export const TIER_MODELS: Record<Tier, TierModel> = buildTierModels();
 
-/** True when a provider is disabled via its per-provider kill switch. */
+interface JudgePool { default: string; escalated?: string }
+
+/** Build cross-provider judge pools (keyed by provider) from the catalog. */
+function buildJudgePools(): Record<string, JudgePool> {
+  const out: Record<string, JudgePool> = {};
+  for (const e of judgePool()) {
+    if (out[e.provider]) continue; // first entry per provider wins
+    out[e.provider] = e.escalated ? { default: e.model, escalated: e.escalated } : { default: e.model };
+  }
+  return out;
+}
+
+/** Cross-provider judge pools, keyed by provider. */
+export const JUDGE_POOLS: Record<string, JudgePool> = buildJudgePools();
+
+/** True when a provider is disabled via its per-provider kill switch
+ * (PP_DISABLE_<PROVIDER>, e.g. PP_DISABLE_OPENAI, PP_DISABLE_MISTRAL). */
 export function isProviderDisabled(provider: GenProvider): boolean {
-  return process.env[KILL_SWITCH_ENV[provider]] === "1";
+  return process.env[killSwitchEnvFor(provider)] === "1";
 }
 
 /**
  * The judge providers eligible for a given generator.
  *
- * - honors the per-provider kill switches (PP_DISABLE_OPENAI/GOOGLE/ANTHROPIC),
- * - when `requiredCrossVendor` is true, excludes the generator's own vendor.
+ * - iterates the catalog judge pool's providers,
+ * - honors the per-provider kill switches (PP_DISABLE_<PROVIDER>),
+ * - when `requiredCrossVendor` is true, excludes the generator's own provider
+ *   (the generalized JUDGE-1 cross-vendor → cross-provider invariant).
  */
 export function eligibleJudgeProviders(
   generatorProvider: GenProvider,
   requiredCrossVendor: boolean,
 ): GenProvider[] {
-  const all: GenProvider[] = ["openai", "google", "anthropic"];
-  return all.filter((p) => {
+  return judgePoolProviders().filter((p) => {
     if (isProviderDisabled(p)) return false;
     if (requiredCrossVendor && p === generatorProvider) return false;
     return true;
@@ -64,7 +88,12 @@ export class ModelCatalog {
   readonly registry: ModelRegistry;
 
   constructor(authStorage: AuthStorage, modelsJsonPath?: string) {
-    this.registry = ModelRegistry.create(authStorage, modelsJsonPath);
+    // When the catalog enables providers/models pi does not ship, they are
+    // projected into a models.json under the platform dir; pi merges it
+    // (custom wins). For the default (all pi-shipped) catalog this is undefined
+    // and behavior is identical to passing no path.
+    const path = modelsJsonPath ?? projectCatalogModelsJson();
+    this.registry = ModelRegistry.create(authStorage, path);
   }
 
   /** Resolve a concrete model. Throws if the provider/id is not in the registry. */
@@ -82,6 +111,7 @@ export class ModelCatalog {
   /** Resolve a platform tier to its pinned model. */
   resolveTier(tier: Tier): Model<Api> {
     const t = TIER_MODELS[tier];
+    if (!t) throw new Error(`unknown tier "${tier}" — not in the default generation ladder`);
     return this.resolve(t.provider, t.id);
   }
 
@@ -103,7 +133,8 @@ export class ModelCatalog {
       : eligible;
     const provider = ordered[0]!;
     const pool = JUDGE_POOLS[provider];
-    const model = opts.escalated && "escalated" in pool ? pool.escalated : pool.default;
+    if (!pool) return null;
+    const model = opts.escalated && pool.escalated ? pool.escalated : pool.default;
     return { provider, model };
   }
 }

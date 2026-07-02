@@ -1,6 +1,7 @@
 /**
  * Centralized constants. Avoid spreading magic numbers across the codebase.
  */
+import { normalizeProviderAlias } from "./catalog/config.js";
 
 /** Default ceiling on validator (judge) calls per single run. Phase 4 enforces. */
 export const DEFAULT_LOOP_CEILING = 6;
@@ -136,12 +137,15 @@ export type Vendor = typeof VENDORS[number];
 export const PRODUCERS = ["codex", "gemini", "claude", "copilot"] as const;
 export type Producer = typeof PRODUCERS[number];
 
-export function vendorFor(producer: string): Vendor | null {
+export function vendorFor(producer: string): string | null {
   if (producer === "codex") return "openai";
   if (producer === "gemini") return "google";
   if (producer === "claude") return "anthropic";
   if (producer === "copilot") return "openai";
-  return null;
+  // Generalized: a producer may directly name a catalog provider (e.g. a
+  // "mistral" generator/judge). Fold it onto its catalog provider so the
+  // cross_vendor (→ cross_provider) flag stays accurate beyond the 3 built-ins.
+  return normalizeProviderAlias(producer);
 }
 
 /** Set PP_COPILOT_FALLBACK=0 to disable the copilot CLI fallback for codex/gemini. */

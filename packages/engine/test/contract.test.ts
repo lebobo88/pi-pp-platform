@@ -104,16 +104,20 @@ describe("ModelCatalog", () => {
   });
 
   it("maps every tier to a resolvable model", () => {
-    for (const tier of Object.keys(TIER_MODELS) as Array<keyof typeof TIER_MODELS>) {
+    for (const tier of Object.keys(TIER_MODELS)) {
+      const spec = TIER_MODELS[tier]!;
       const m = catalog.resolveTier(tier);
-      expect(m.id).toBe(TIER_MODELS[tier].id);
+      expect(m.id).toBe(spec.id);
     }
   });
 
   it("judge pools point at builtin models", () => {
-    expect(catalog.resolve("openai", JUDGE_POOLS.openai.default).id).toBe("gpt-5.4");
-    expect(catalog.resolve("openai", JUDGE_POOLS.openai.escalated).id).toBe("gpt-5.5");
-    expect(catalog.resolve("google", JUDGE_POOLS.google.default).id).toBe("gemini-3.1-pro-preview");
-    expect(catalog.resolve("anthropic", JUDGE_POOLS.anthropic.default).id).toBe("claude-opus-4-7");
+    const openai = JUDGE_POOLS.openai!;
+    const google = JUDGE_POOLS.google!;
+    const anthropic = JUDGE_POOLS.anthropic!;
+    expect(catalog.resolve("openai", openai.default).id).toBe("gpt-5.4");
+    expect(catalog.resolve("openai", openai.escalated!).id).toBe("gpt-5.5");
+    expect(catalog.resolve("google", google.default).id).toBe("gemini-3.1-pro-preview");
+    expect(catalog.resolve("anthropic", anthropic.default).id).toBe("claude-opus-4-7");
   });
 });

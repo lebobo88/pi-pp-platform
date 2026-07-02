@@ -53,8 +53,10 @@ const now = () => new Date().toISOString();
 // When no provider is attached, the smoke functions below return "skipped".
 export type CritiqueSmokeResult = { status: "ok"|"fail"|"skipped"; model: string; exit_code?: number; stderr_tail?: string; wall_ms?: number; reason?: string };
 export type CritiqueSmokeFn = () => Promise<CritiqueSmokeResult>;
-const critiqueSmokeProviders: { openai?: CritiqueSmokeFn; google?: CritiqueSmokeFn } = {};
-export function setCritiqueSmokeProviders(p: { openai?: CritiqueSmokeFn; google?: CritiqueSmokeFn }): void { Object.assign(critiqueSmokeProviders, p); }
+// Keyed by provider id so any catalog provider (not just openai/google) can
+// attach a smoke. The doctor consumers below still read .openai/.google.
+const critiqueSmokeProviders: Record<string, CritiqueSmokeFn> = {};
+export function setCritiqueSmokeProviders(p: Record<string, CritiqueSmokeFn>): void { Object.assign(critiqueSmokeProviders, p); }
 
 export type StartRunInput = {
   request_text: string;

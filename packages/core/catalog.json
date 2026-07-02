@@ -1,0 +1,76 @@
+{
+  "_comment": "Bundled default provider/model catalog — the single source of truth for which providers exist, their models + pricing, the generation ladders, and the judge pool. A user override at ~/.pi-pp-platform/catalog.json (dir honors PP_PLATFORM_DIR) deep-merges over this default, winning per provider-id and per model-id. An absent/partial user file reproduces the historical 3-vendor behavior for everything it does not mention. Keep in sync with assets/catalog.json.",
+  "_updated": "2026-07-02",
+  "version": 1,
+
+  "default_ladder": "claude",
+  "generation_ladders": {
+    "claude": {
+      "provider": "anthropic",
+      "order": ["haiku", "sonnet", "opus"],
+      "off_ladder": ["fable"],
+      "tiers": {
+        "haiku": "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus": "claude-opus-4-7",
+        "fable": "claude-fable-5"
+      },
+      "copilot_tiers": {
+        "haiku": "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus": "claude-opus-4-6",
+        "fable": "claude-fable-5"
+      }
+    }
+  },
+
+  "judge_pool": [
+    { "provider": "openai", "model": "gpt-5.4", "escalated": "gpt-5.5" },
+    { "provider": "google", "model": "gemini-3.1-pro-preview" },
+    { "provider": "anthropic", "model": "claude-opus-4-7" }
+  ],
+
+  "providers": {
+    "openai": {
+      "display_name": "OpenAI",
+      "enabled": true,
+      "env_key_hint": "OPENAI_API_KEY",
+      "pi_provider": "openai",
+      "models": {
+        "gpt-5.5":           { "input_per_1m": 5.00, "output_per_1m": 15.00 },
+        "gpt-5.4":           { "input_per_1m": 4.00, "output_per_1m": 12.00 },
+        "gpt-5.3-codex":     { "input_per_1m": 3.00, "output_per_1m": 9.00 },
+        "gpt-5.1-codex-max": { "input_per_1m": 6.00, "output_per_1m": 18.00 }
+      }
+    },
+    "google": {
+      "display_name": "Google",
+      "enabled": true,
+      "env_key_hint": "GEMINI_API_KEY",
+      "pi_provider": "google",
+      "models": {
+        "gemini-3.1-pro-preview": { "input_per_1m": 7.00, "output_per_1m": 21.00 },
+        "gemini-2.5-pro":         { "input_per_1m": 3.50, "output_per_1m": 10.50 },
+        "gemini-2.5-flash":       { "input_per_1m": 0.30, "output_per_1m": 0.90 }
+      }
+    },
+    "anthropic": {
+      "display_name": "Anthropic",
+      "enabled": true,
+      "env_key_hint": "ANTHROPIC_API_KEY",
+      "pi_provider": "anthropic",
+      "models": {
+        "claude-fable-5":            { "input_per_1m": 30.00, "output_per_1m": 150.00 },
+        "claude-opus-4-7":           { "input_per_1m": 15.00, "output_per_1m": 75.00 },
+        "claude-opus-4-6":           { "input_per_1m": 15.00, "output_per_1m": 75.00 },
+        "claude-sonnet-4-6":         { "input_per_1m": 3.00,  "output_per_1m": 15.00 },
+        "claude-haiku-4-5-20251001": { "input_per_1m": 0.80,  "output_per_1m": 4.00 },
+        "claude-haiku-4-5":          { "input_per_1m": 0.80,  "output_per_1m": 4.00 }
+      }
+    }
+  },
+
+  "_pricing_notes": {
+    "claude-fable-5": "CONSERVATIVE PLACEHOLDER — 2x opus-4-7 rates. Requires authoritative pricing confirmation from Anthropic before production use."
+  }
+}

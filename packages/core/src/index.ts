@@ -64,6 +64,9 @@ export * from "./hooks/bash-safety.js";
 export { buildCritiqueOutputSchema, validateCritiqueResult, normalizeCritiqueResult, extractJsonValue } from "./mcp/critique-schema.js";
 export type { CritiqueOutcome, CritiqueVerdict } from "./mcp/critique-schema.js";
 
+// Provider/model catalog (dynamic vendor space — single source of truth).
+export * from "./catalog/config.js";
+
 // Pricing
 export * from "./util/prices.js";
 

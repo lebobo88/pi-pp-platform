@@ -6,9 +6,14 @@
  * the orchestrator never sees provider-specific fields.
  */
 import type { AssistantMessage, Model, Api, Usage } from "@earendil-works/pi-ai/compat";
-import { computeCost } from "@pp/core";
+import { computeCost, knownProviderIds, normalizeProviderAlias } from "@pp/core";
 
-export type GenProvider = "anthropic" | "openai" | "google";
+/**
+ * An open provider id (pi's provider space). Historically this was the closed
+ * union "anthropic" | "openai" | "google"; it is now any provider present in
+ * the catalog (or any pi provider id we pass through verbatim).
+ */
+export type GenProvider = string;
 
 export interface GenResult {
   /** Concatenated assistant text output. */
@@ -36,19 +41,16 @@ export interface GenResult {
   usage_detail?: Usage;
 }
 
-const KNOWN_PROVIDERS: readonly GenProvider[] = ["anthropic", "openai", "google"];
-
 /**
- * Map a pi provider id to the platform's three-vendor space. pi model ids for
- * the pinned catalog use exactly "anthropic" | "openai" | "google"; anything
- * else (e.g. "openai-codex") is folded onto its closest vendor.
+ * Normalize a pi provider id to a catalog provider id. Exact catalog matches
+ * win; pi variant ids (e.g. "openai-codex", "google-vertex", "azure-openai-*")
+ * fold onto their catalog provider for pricing/judge-key alignment; anything
+ * unrecognized is returned verbatim so a newly-enabled provider still flows
+ * through. Unlike the old three-vendor version, this NEVER throws.
  */
 export function toGenProvider(provider: string): GenProvider {
-  if ((KNOWN_PROVIDERS as readonly string[]).includes(provider)) return provider as GenProvider;
-  if (provider.startsWith("openai") || provider.includes("azure")) return "openai";
-  if (provider.startsWith("google") || provider.includes("gemini") || provider.includes("vertex")) return "google";
-  if (provider.startsWith("anthropic") || provider.includes("claude")) return "anthropic";
-  throw new Error(`unsupported provider "${provider}" — platform judges/generators are openai|google|anthropic only`);
+  if (knownProviderIds().includes(provider)) return provider;
+  return normalizeProviderAlias(provider) ?? provider;
 }
 
 /** Concatenate the text content blocks of an assistant message. */

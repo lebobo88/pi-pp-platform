@@ -11,14 +11,16 @@ import {
   type CritiqueSmokeResult,
   type CritiqueSmokeFn,
 } from "@pp/core";
+import { judgePoolProviders } from "@pp/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
-import { JUDGE_POOLS, type ModelCatalog } from "./catalog.js";
+import { JUDGE_POOLS, isProviderDisabled, type ModelCatalog } from "./catalog.js";
 import { resolveProviderApiKey } from "./auth.js";
 import { defaultComplete, type LlmComplete } from "./llm.js";
 import { critique } from "./critique.js";
 import type { GenProvider } from "./envelope.js";
 
-export type ProbeProvider = keyof typeof JUDGE_POOLS; // "openai" | "google" | "anthropic"
+/** Any provider present in the catalog judge pool. */
+export type ProbeProvider = string;
 
 export interface DoctorDeps {
   catalog: ModelCatalog;
@@ -38,8 +40,9 @@ export interface DoctorProbeResult {
 /** 1-token "Reply with OK" completion against the provider's judge model. */
 export async function doctorProbe(provider: ProbeProvider, deps: DoctorDeps): Promise<DoctorProbeResult> {
   const complete = deps.complete ?? defaultComplete;
-  const modelId = JUDGE_POOLS[provider].default;
+  const modelId = JUDGE_POOLS[provider]?.default ?? "";
   try {
+    if (!modelId) throw new Error(`no judge model for provider "${provider}" in the catalog`);
     const model = deps.catalog.resolve(provider, modelId);
     const apiKey = await resolveProviderApiKey(deps.authStorage, provider);
     const t0 = Date.now();
@@ -59,7 +62,7 @@ const SMOKE_RUBRIC =
 
 function critiqueSmokeFor(provider: GenProvider, deps: DoctorDeps): CritiqueSmokeFn {
   const complete = deps.complete ?? defaultComplete;
-  const modelId = JUDGE_POOLS[provider].default;
+  const modelId = JUDGE_POOLS[provider]?.default ?? "";
   return async (): Promise<CritiqueSmokeResult> => {
     const t0 = Date.now();
     try {
@@ -94,12 +97,17 @@ function critiqueSmokeFor(provider: GenProvider, deps: DoctorDeps): CritiqueSmok
 }
 
 /**
- * Register openai + google critique smokes into @pp/core so /pp:doctor's
- * critique-smoke step exercises the real pi judge path.
+ * Register critique smokes into @pp/core so /pp:doctor's critique-smoke step
+ * exercises the real pi judge path. Covers every catalog judge-pool provider
+ * except anthropic (which runs in-process) and any provider disabled via its
+ * kill switch. For the default catalog this is exactly {openai, google}.
  */
 export function attachToCore(deps: DoctorDeps): void {
-  setCritiqueSmokeProviders({
-    openai: critiqueSmokeFor("openai", deps),
-    google: critiqueSmokeFor("google", deps),
-  });
+  const smokes: Record<string, CritiqueSmokeFn> = {};
+  for (const provider of judgePoolProviders()) {
+    if (provider === "anthropic") continue;
+    if (isProviderDisabled(provider)) continue;
+    smokes[provider] = critiqueSmokeFor(provider, deps);
+  }
+  setCritiqueSmokeProviders(smokes);
 }

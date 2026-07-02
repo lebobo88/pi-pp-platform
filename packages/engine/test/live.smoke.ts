@@ -9,7 +9,7 @@ import { createEngine, setProviderKey, type ProbeProvider } from "../src/index.j
 
 const LIVE = process.env.PP_LIVE === "1";
 
-const PROVIDER_ENV: Record<ProbeProvider, string> = {
+const PROVIDER_ENV: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   google: "GEMINI_API_KEY",
@@ -19,7 +19,7 @@ describe.runIf(LIVE)("live provider probes (PP_LIVE=1)", () => {
   const engine = createEngine({ mode: "pi" });
 
   for (const provider of Object.keys(PROVIDER_ENV) as ProbeProvider[]) {
-    const envKey = process.env[PROVIDER_ENV[provider]];
+    const envKey = process.env[PROVIDER_ENV[provider]!];
     it.runIf(!!envKey)(`doctorProbe(${provider}) reaches the model`, async () => {
       // Seed the platform store from the env key for this run.
       setProviderKey(engine.authStorage, provider, envKey!);
