@@ -29,6 +29,7 @@
     "@fastify/static": "^8.0.0",
     "@pp/core": "workspace:*",
     "@pp/engine": "workspace:*",
+    "@pp/pilot": "workspace:*",
     "fastify": "^5.0.0",
     "yaml": "^2.4.0",
     "zod": "^3.23.0"

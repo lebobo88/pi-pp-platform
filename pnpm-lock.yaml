@@ -153,6 +153,9 @@ importers:
       '@pp/engine':
         specifier: workspace:*
         version: link:../engine
+      '@pp/pilot':
+        specifier: workspace:*
+        version: link:../pilot
       fastify:
         specifier: ^5.0.0
         version: 5.9.0

@@ -51,6 +51,20 @@ describe("health + library reads", () => {
     expect(Array.isArray((await get("/api/v1/models")).json())).toBe(true);
   });
 
+  it("GET /api/v1/settings returns defaults; PUT persists", async () => {
+    const def = (await get("/api/v1/settings")).json() as { tier_models: Record<string, string>; judge_pool: string[] };
+    expect(def.tier_models.fable).toBe("claude-fable-5");
+    expect(Array.isArray(def.judge_pool)).toBe(true);
+
+    const next = { tier_models: { fable: "claude-fable-5", opus: "claude-opus-4-7", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5-20251001" }, judge_pool: ["gpt-5.4"] };
+    const put = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: next });
+    expect(put.statusCode).toBe(200);
+    expect((await get("/api/v1/settings")).json()).toEqual(next);
+
+    const bad = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { tier_models: { fable: "x" } } });
+    expect(bad.statusCode).toBe(422);
+  });
+
   it("GET /api/v1/doctor is reachable", async () => {
     const r = await get("/api/v1/doctor");
     expect(r.statusCode).toBe(200);
@@ -144,18 +158,31 @@ describe("provider keys — write-only + masked", () => {
   });
 });
 
-describe("run reads + run-control 501", () => {
+describe("run reads + run-control validation", () => {
   it("GET /runs empty, unknown run 404", async () => {
     expect((await get("/api/v1/runs")).json()).toEqual([]);
     expect((await get("/api/v1/runs/run_missing")).statusCode).toBe(404);
   });
 
-  it("run-control routes return 501 run_control_pending", async () => {
-    const start = await app.inject({ method: "POST", url: "/api/v1/runs", payload: { project_path: "x", request_text: "y", mode: "single" } });
-    expect(start.statusCode).toBe(501);
-    expect((start.json() as { error: string }).error).toBe("run_control_pending");
+  it("POST /runs with a missing project dir → 404; abort of an inactive run → 404", async () => {
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/runs",
+      payload: { project_path: join(tmpdir(), "pp-no-such-dir-zzz"), request_text: "y", mode: "single" },
+    });
+    expect(start.statusCode).toBe(404);
+    expect((start.json() as { error: string }).error).toBe("project_not_found");
 
     const abort = await app.inject({ method: "POST", url: "/api/v1/runs/run_x/abort" });
-    expect(abort.statusCode).toBe(501);
+    expect(abort.statusCode).toBe(404);
+  });
+
+  it("POST /runs with best_of + tier flags → 422", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/api/v1/runs",
+      payload: { project_path: tmpdir(), request_text: "x", mode: "best_of", n: 3, tier_cap: "opus" },
+    });
+    expect(r.statusCode).toBe(422);
   });
 });

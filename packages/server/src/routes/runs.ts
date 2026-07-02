@@ -79,11 +79,5 @@ export function registerRunRoutes(app: FastifyInstance): void {
     return { path, kind: contentKind(path), content };
   });
 
-  // ── Run control — registered but pending the pilot (M5d) ──
-  const pending = async (_req: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
-    reply.code(501).send({ error: "run_control_pending", hint: "pilot wiring in M5d" });
-  app.post(`${V1}/runs`, pending);
-  app.post(`${V1}/runs/:id/abort`, pending);
-  app.post(`${V1}/runs/:id/stages/:stageId/retry`, pending);
-  app.post(`${V1}/runs/:id/stages/:stageId/gate`, pending);
+  // Run-control POSTs are registered by registerRunControlRoutes (run-control.ts).
 }

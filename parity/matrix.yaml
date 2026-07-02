@@ -489,7 +489,7 @@ rows:
     verify:
       - {type: export, module: packages/server/dist/index.js, symbol: buildApp, op: defined}
       - {type: export, module: packages/server/dist/index.js, symbol: createInMemoryBus, op: defined}
-      - {type: test, file: packages/server/test/rest.test.ts, contains: run_control_pending}
+      - {type: test, file: packages/server/test/rest.test.ts, contains: masked_key}
       - {type: test, file: packages/server/test/sse.test.ts, contains: text/event-stream}
     status: done
   - id: HTTP2
@@ -506,12 +506,14 @@ rows:
     status: done
   - id: HTTP3
     subsystem: http-plane
-    capability: run-control mutations (start/abort/retry/gate) — pilot-wired
+    capability: run-control mutations (start/abort/retry/gate) — RunSupervisor + pilot bus → SSE
     disposition: REBUILD
-    replacement_note: "registered but 501 in M5c; pilot wiring in M5d"
+    replacement_note: "@pp/server RunSupervisor (M5d): concurrency, abort, budget tripwires, pilot EventBus bridged to SSE"
     verify:
-      - {type: todo, note: "M5d pilot↔server wiring"}
-    status: pending
+      - {type: export, module: packages/server/dist/index.js, symbol: RunSupervisor, op: defined}
+      - {type: test, file: packages/server/test/run-control.test.ts, contains: budget.tripwire}
+      - {type: test, file: packages/server/test/run-control.test.ts, contains: "drives a fake RunPilot to complete"}
+    status: done
 
   # ── MCP compat ──
   - id: MCP1

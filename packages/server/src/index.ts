@@ -11,6 +11,7 @@ export {
   type SseFrame,
   type SsePublish,
 } from "./bus.js";
+export { RunSupervisor, type StartRunInput, type StartResult } from "./supervisor.js";
 export type { ServerDeps } from "./deps.js";
 export {
   allProviderStatuses,

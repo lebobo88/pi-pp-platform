@@ -8,13 +8,15 @@
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import { setDbPath } from "@pp/core";
-import { createEngine } from "@pp/engine";
+import { createEngine, type Engine } from "@pp/engine";
 import { createInMemoryBus, type BusPort } from "./bus.js";
+import { RunSupervisor } from "./supervisor.js";
 import { registerSecurity } from "./security.js";
 import { registerLegacyRoutes } from "./routes/legacy.js";
 import { registerLibraryRoutes } from "./routes/library.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerRunControlRoutes } from "./routes/run-control.js";
 import { registerProviderRoutes } from "./routes/providers.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerStatic } from "./routes/static.js";
@@ -25,10 +27,15 @@ export interface BuildAppOptions {
   dbPath?: string;
   /** Absolute path to the built UI (ui/dist) for static serving. */
   uiDistPath?: string;
-  /** Inject an event bus (the pilot's real bus in M5d); default in-memory. */
+  /** Inject an event bus; default in-memory. */
   bus?: BusPort;
   /** Bearer token gate; default process.env.PP_API_TOKEN. */
   token?: string;
+  /**
+   * Per-run engine factory used by the RunSupervisor. Default: createEngine
+   * with mode "fake" when PP_LLM=fake, else "pi". Tests inject a scripted engine.
+   */
+  makeEngine?: () => Engine;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -36,9 +43,15 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
 
+  const bus = opts.bus ?? createInMemoryBus();
+  const makeEngine = opts.makeEngine ?? (() => createEngine({ mode: process.env.PP_LLM === "fake" ? "fake" : "pi" }));
+
   const deps: ServerDeps = {
-    bus: opts.bus ?? createInMemoryBus(),
+    bus,
+    // A "pi" engine for key management / doctor / gate re-judge (always the real
+    // platform auth storage, independent of the per-run engine mode).
     engine: createEngine({ mode: "pi" }),
+    supervisor: new RunSupervisor(bus, makeEngine),
     uiDistPath: opts.uiDistPath,
   };
 
@@ -48,6 +61,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   registerLibraryRoutes(app, deps);
   registerProjectRoutes(app);
   registerRunRoutes(app);
+  registerRunControlRoutes(app, deps);
   registerProviderRoutes(app, deps);
   registerEventRoutes(app, deps);
 

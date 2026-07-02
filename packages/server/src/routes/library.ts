@@ -18,7 +18,9 @@ import {
   runJanitor,
   doctor,
   listProposals, setProposalStatus,
+  getPlatformSetting, setPlatformSetting,
 } from "@pp/core";
+import { TIER_MODELS, JUDGE_POOLS } from "@pp/engine";
 import { modelsWire } from "../wire.js";
 import { V1, type ServerDeps } from "../deps.js";
 
@@ -34,6 +36,28 @@ const ReviewBody = z.object({
   decision: z.enum(["approve", "reject", "commit", "rollback"]),
   note: z.string().optional(),
 });
+
+const SETTINGS_KEY = "harness_settings";
+const SettingsBody = z.object({
+  tier_models: z.object({
+    fable: z.string().min(1),
+    opus: z.string().min(1),
+    sonnet: z.string().min(1),
+    haiku: z.string().min(1),
+  }),
+  judge_pool: z.array(z.string().min(1)).min(1),
+});
+function defaultSettings() {
+  return {
+    tier_models: {
+      fable: TIER_MODELS.fable.id,
+      opus: TIER_MODELS.opus.id,
+      sonnet: TIER_MODELS.sonnet.id,
+      haiku: TIER_MODELS.haiku.id,
+    },
+    judge_pool: [JUDGE_POOLS.openai.default, JUDGE_POOLS.google.default, JUDGE_POOLS.anthropic.default],
+  };
+}
 
 export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): void {
   // ── Teams ──
@@ -82,6 +106,17 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
   // ── Models ──
   app.get(`${V1}/models`, async () => modelsWire());
 
+  // ── Harness settings (tier ladder + judge pool) persisted to platform_settings ──
+  app.get(`${V1}/settings`, async () => getPlatformSetting(SETTINGS_KEY) ?? defaultSettings());
+  app.put(`${V1}/settings`, async (req, reply) => {
+    const parsed = SettingsBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: "validation failed", details: parsed.error.flatten() });
+    }
+    setPlatformSetting(SETTINGS_KEY, parsed.data);
+    return parsed.data;
+  });
+
   // ── Budgets + caps (caps BEFORE :scope so it doesn't shadow) ──
   app.get(`${V1}/budgets/caps`, async () => getBudgetCaps());
   app.put(`${V1}/budgets/caps`, async (req, reply) => {
@@ -127,17 +162,30 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
 
   // ── Doctor: GET quick, POST async (emits doctor.result on the bus) ──
   app.get(`${V1}/doctor`, async () => doctor({ smoke: false }));
-  app.post(`${V1}/doctor`, async (_req, reply) => {
-    // Fire-and-forget: run the smoke doctor, then publish the result.
+  app.post(`${V1}/doctor`, async (req, reply) => {
+    const body = (req.body ?? {}) as { smoke?: boolean };
+    const smoke = !!body.smoke;
+    // Fire-and-forget: core doctor (+ critique smokes when smoke) + per-provider
+    // engine probes, then publish doctor.result on the bus.
     void (async () => {
       try {
-        const report = await doctor({ smoke: true });
-        deps.bus.publish({ type: "doctor.result", data: report });
+        const report = (await doctor({ smoke })) as Record<string, unknown>;
+        const engine_probes: Record<string, unknown> = {};
+        if (smoke) {
+          for (const vendor of ["openai", "google", "anthropic"] as const) {
+            try {
+              engine_probes[vendor] = await deps.engine.doctorProbe(vendor);
+            } catch (err) {
+              engine_probes[vendor] = { ok: false, error: (err as Error).message };
+            }
+          }
+        }
+        deps.bus.publish({ type: "doctor.result", data: { ...report, engine_probes } });
       } catch {
         /* best-effort */
       }
     })();
-    return reply.code(202).send({ ok: true, started: true });
+    return reply.code(202).send({ ok: true, started: true, smoke });
   });
 
   // ── Janitor: GET reports nothing swept yet; POST runs it (dry_run previews) ──
