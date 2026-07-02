@@ -100,8 +100,8 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
   // ── Taxonomy (DELTA: not in apiPaths yet) ──
   app.get(`${V1}/taxonomy`, async () => TAXONOMY_SECTIONS);
 
-  // ── Models ──
-  app.get(`${V1}/models`, async () => modelsWire());
+  // ── Models (pi catalog for every visible provider) ──
+  app.get(`${V1}/models`, async () => modelsWire(deps.engine.authStorage));
 
   // ── Harness settings (tier ladder + judge pool) persisted to platform_settings ──
   app.get(`${V1}/settings`, async () => getPlatformSetting(SETTINGS_KEY) ?? defaultSettings());

@@ -4,7 +4,7 @@
  * match the wire shape 1:1 (see the deltas noted in each function).
  */
 import { prices, enabledProviders, catalog } from "@pp/core";
-import { getProviderStatus, type ProviderStatus as EngineProviderStatus } from "@pp/engine";
+import { getProviderStatus, listPiModels, providersWithCredential, type ProviderStatus as EngineProviderStatus } from "@pp/engine";
 
 /** The AuthStorage type, derived from the engine signature (no pi dep in @pp/server). */
 type AuthStorage = Parameters<typeof getProviderStatus>[0];
@@ -16,6 +16,21 @@ export type WireVendor = string;
  * catalog.json overrides — prefer this over the WIRE_VENDORS snapshot. */
 export function wireVendors(): string[] {
   return enabledProviders();
+}
+
+/**
+ * Providers to surface as cards / in the model catalog: enabled catalog
+ * providers PLUS any provider that has a stored credential — so a keyed provider
+ * (e.g. deepseek/xai) always gets a card even before it is enabled in the
+ * catalog. Catalog providers come first, then keyed-only ones.
+ */
+export function visibleProviders(storage: AuthStorage): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of [...enabledProviders(), ...providersWithCredential(storage)]) {
+    if (!seen.has(id)) { seen.add(id); out.push(id); }
+  }
+  return out;
 }
 
 /** Back-compat snapshot for importers expecting a constant. Prefer wireVendors(). */
@@ -55,7 +70,7 @@ export function providerStatusWire(storage: AuthStorage, vendor: WireVendor): Wi
 }
 
 export function allProviderStatuses(storage: AuthStorage): WireProviderStatus[] {
-  return wireVendors().map((v) => providerStatusWire(storage, v));
+  return visibleProviders(storage).map((v) => providerStatusWire(storage, v));
 }
 
 export interface WireModelInfo {
@@ -65,6 +80,7 @@ export interface WireModelInfo {
   tier: string | null;
   input_per_1m: number;
   output_per_1m: number;
+  context_window?: number;
   note?: string;
 }
 
@@ -77,21 +93,48 @@ function tierById(): Record<string, string> {
   return out;
 }
 
-/**
- * Flatten the @pp/core price table into the UI ModelInfo list. The price table
- * is provider→modelId→{input,output} (per-1M USD); tier is looked up across the
- * catalog's generation ladders. Only enabled catalog providers are emitted.
- */
-export function modelsWire(): WireModelInfo[] {
-  const table = prices();
-  const enabled = new Set(wireVendors());
+/** pi model ids merged with any catalog-declared custom models, for one provider. */
+export function modelsForProviderMerged(provider: string): WireModelInfo[] {
   const byId = tierById();
+  const cat = catalog().providers[provider]?.models ?? {};
+  const priceTable = prices()[provider] ?? {};
   const out: WireModelInfo[] = [];
-  for (const [vendor, models] of Object.entries(table)) {
-    if (!enabled.has(vendor)) continue;
-    for (const [id, rate] of Object.entries(models)) {
-      out.push({ id, vendor, tier: byId[id] ?? null, input_per_1m: rate.input, output_per_1m: rate.output });
-    }
+  const seen = new Set<string>();
+  for (const m of listPiModels(provider)) {
+    seen.add(m.id);
+    out.push({
+      id: m.id,
+      vendor: provider,
+      tier: byId[m.id] ?? null,
+      input_per_1m: m.input_per_1m,
+      output_per_1m: m.output_per_1m,
+      context_window: m.context_window,
+    });
+  }
+  // Catalog-declared models pi does not ship (custom) — priced from the catalog.
+  for (const [id, m] of Object.entries(cat)) {
+    if (seen.has(id)) continue;
+    const rate = priceTable[id];
+    out.push({
+      id,
+      vendor: provider,
+      tier: byId[id] ?? null,
+      input_per_1m: rate?.input ?? m.input_per_1m,
+      output_per_1m: rate?.output ?? m.output_per_1m,
+    });
+  }
+  return out;
+}
+
+/**
+ * The full UI model catalog: pi's models (with pricing + context) for every
+ * visible provider (enabled catalog ∪ keyed), plus any catalog custom models.
+ * Tiers are looked up across the catalog's generation ladders.
+ */
+export function modelsWire(storage: AuthStorage): WireModelInfo[] {
+  const out: WireModelInfo[] = [];
+  for (const provider of visibleProviders(storage)) {
+    out.push(...modelsForProviderMerged(provider));
   }
   return out;
 }

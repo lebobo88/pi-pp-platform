@@ -2,22 +2,22 @@
  * Provider key management. Keys are WRITE-ONLY: the raw key travels only in the
  * PUT body and is never echoed — responses carry the masked ProviderStatus.
  *
- * The provider set is DYNAMIC — driven by the catalog (enabledProviders), not a
- * fixed openai|google|anthropic list. `GET /providers/available` surfaces the
- * full installable set (catalog + curated pi providers) for the add-provider UI.
+ * The provider + model sets are DYNAMIC and sourced from pi's builtin catalog
+ * (~35 providers) plus the platform catalog. GET /providers surfaces every
+ * enabled-or-keyed provider; GET /providers/available lists the full installable
+ * set for the add-provider UI; GET /providers/:vendor/models returns pi's models.
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { setProviderKey, clearProviderKey } from "@pp/engine";
-import { installableProviders, modelsForProvider } from "@pp/core";
-import { allProviderStatuses, providerStatusWire, wireVendors, type WireVendor } from "../wire.js";
+import { setProviderKey, clearProviderKey, listPiProviders, listPiModels, piEnvKeyHint } from "@pp/engine";
+import { catalog, knownProviderIds } from "@pp/core";
+import { allProviderStatuses, providerStatusWire, visibleProviders, modelsForProviderMerged } from "../wire.js";
 import { V1, type ServerDeps } from "../deps.js";
 
 const KeyBody = z.object({ api_key: z.string().min(8) });
 
-/** Accept any enabled catalog provider (or one the operator is adding a key for). */
-function asVendor(v: string): WireVendor | null {
-  return wireVendors().includes(v) ? v : null;
+function prettyName(id: string): string {
+  return id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): void {
@@ -25,20 +25,32 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
 
   app.get(`${V1}/providers`, async () => allProviderStatuses(storage));
 
-  // Installable set for the add-provider picker: catalog providers (enabled or
-  // not) + curated pi providers, each with an env-key hint and whether a key is
-  // already configured.
-  app.get(`${V1}/providers/available`, async () =>
-    installableProviders().map((p) => ({
-      ...p,
-      configured: providerStatusWire(storage, p.id).has_api_key,
-    })),
-  );
+  // Installable set for the add-provider picker: every catalog provider AND
+  // every provider pi ships a catalog for, with an env-key hint + configured flag.
+  app.get(`${V1}/providers/available`, async () => {
+    const cat = catalog().providers;
+    const ids = Array.from(new Set([...knownProviderIds(), ...listPiProviders()]));
+    return ids
+      .map((id) => {
+        const c = cat[id];
+        return {
+          id,
+          display_name: c?.display_name ?? prettyName(id),
+          env_key_hint: c?.env_key_hint ?? piEnvKeyHint(id),
+          in_catalog: !!c,
+          enabled: c ? c.enabled !== false : false,
+          configured: providerStatusWire(storage, id).has_api_key,
+          model_count: listPiModels(id).length,
+        };
+      })
+      .sort((a, b) =>
+        a.in_catalog === b.in_catalog ? a.id.localeCompare(b.id) : a.in_catalog ? -1 : 1,
+      );
+  });
 
   app.put(`${V1}/providers/:vendor/key`, async (req, reply) => {
-    // A key may be set for ANY provider id (auth is provider-agnostic), so the
-    // key route does not gate on the enabled set — that lets the operator
-    // configure a provider before/without enabling it in the catalog.
+    // A key may be set for ANY provider id (auth is provider-agnostic). Once set,
+    // the provider becomes visible in GET /providers with its pi model list.
     const vendor = (req.params as { vendor: string }).vendor;
     const parsed = KeyBody.safeParse(req.body);
     if (!parsed.success) {
@@ -60,12 +72,14 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
 
   app.get(`${V1}/providers/:vendor/models`, async (req) => {
     const vendor = (req.params as { vendor: string }).vendor;
-    return { provider: vendor, models: modelsForProvider(vendor) };
+    return { provider: vendor, models: modelsForProviderMerged(vendor).map((m) => m.id) };
   });
 
   app.post(`${V1}/providers/:vendor/test`, async (req, reply) => {
-    const vendor = asVendor((req.params as { vendor: string }).vendor);
-    if (!vendor) return reply.code(404).send({ error: "unknown or disabled provider" });
+    // Testable when pi knows the provider or a key is stored for it.
+    const vendor = (req.params as { vendor: string }).vendor;
+    const known = listPiModels(vendor).length > 0 || visibleProviders(storage).includes(vendor);
+    if (!known) return reply.code(404).send({ error: "unknown provider" });
     const probe = await deps.engine.doctorProbe(vendor);
     return {
       vendor,

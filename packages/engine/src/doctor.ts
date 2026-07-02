@@ -14,6 +14,7 @@ import {
 import { judgePoolProviders } from "@pp/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { JUDGE_POOLS, isProviderDisabled, type ModelCatalog } from "./catalog.js";
+import { listPiModels } from "./models.js";
 import { resolveProviderApiKey } from "./auth.js";
 import { defaultComplete, type LlmComplete } from "./llm.js";
 import { critique } from "./critique.js";
@@ -40,9 +41,11 @@ export interface DoctorProbeResult {
 /** 1-token "Reply with OK" completion against the provider's judge model. */
 export async function doctorProbe(provider: ProbeProvider, deps: DoctorDeps): Promise<DoctorProbeResult> {
   const complete = deps.complete ?? defaultComplete;
-  const modelId = JUDGE_POOLS[provider]?.default ?? "";
+  // Prefer the provider's configured judge model; fall back to its first pi
+  // model so any provider (deepseek/xai/…) can be reachability-tested.
+  const modelId = JUDGE_POOLS[provider]?.default ?? listPiModels(provider)[0]?.id ?? "";
   try {
-    if (!modelId) throw new Error(`no judge model for provider "${provider}" in the catalog`);
+    if (!modelId) throw new Error(`no known model for provider "${provider}"`);
     const model = deps.catalog.resolve(provider, modelId);
     const apiKey = await resolveProviderApiKey(deps.authStorage, provider);
     const t0 = Date.now();
