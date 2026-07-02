@@ -1,0 +1,47 @@
+{
+  "name": "@pp/core",
+  "version": "0.1.0",
+  "description": "Pair Programmer platform core: orchestration state machine, rubrics, gates, taxonomy, best-of-N, ecosystem writes. Engine-agnostic (CLI critique bridges removed; critique smoke is injectable).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run build && node test/ecosystem.unit.mjs && node test/tdd-parser.unit.mjs && node test/missability.unit.mjs && node --test test/finalize-gates-b.unit.mjs && node --test test/finalize-gates-c.unit.mjs && node --test test/fable-tier.unit.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "prices.json"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@playwright/test": "^1.48.0",
+    "better-sqlite3": "^11.0.0",
+    "execa": "^9.0.0",
+    "nanoid": "^5.0.0",
+    "pino": "^9.0.0",
+    "pixelmatch": "^6.0.0",
+    "playwright": "^1.48.0",
+    "pngjs": "^7.0.0",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}
