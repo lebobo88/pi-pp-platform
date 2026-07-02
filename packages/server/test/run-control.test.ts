@@ -58,7 +58,6 @@ async function makeServer(makeEngineFn: () => Engine, maxConcurrent?: number): P
   process.env.PP_PLATFORM_DIR = join(home, "platform");
   delete process.env.PP_ECOSYSTEM;
   delete process.env.PP_API_TOKEN;
-  process.env.PP_SKIP_CLI_VERSIONS = "1";
   if (maxConcurrent) process.env.PP_MAX_CONCURRENT_RUNS = String(maxConcurrent);
   else delete process.env.PP_MAX_CONCURRENT_RUNS;
   const { buildApp } = await import("../src/app.js");

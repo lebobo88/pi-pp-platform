@@ -9,7 +9,6 @@ const home = mkdtempSync(join(tmpdir(), "pp-srv-home-"));
 process.env.PP_PLATFORM_DIR = join(home, "platform");
 delete process.env.PP_ECOSYSTEM;
 delete process.env.PP_API_TOKEN;
-process.env.PP_SKIP_CLI_VERSIONS = "1";
 const dbPath = join(home, "state.db");
 
 let app: FastifyInstance;

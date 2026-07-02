@@ -40,7 +40,6 @@ OpenAI / Google.
 | `PP_LLM` | `fake` (demo) / `pi` (start) | engine mode |
 | `PP_API_TOKEN` | unset | when set, all routes except `GET /healthz` require `Authorization: Bearer <token>` |
 | `PP_MAX_CONCURRENT_RUNS` | `2` | live-run concurrency (extras queue) |
-| `PP_SKIP_CLI_VERSIONS` | `1` (demo) | skip the sub-CLI `--version` probes in `startRun` |
 
 The server binds loopback only and never returns raw provider keys (only masked
 fingerprints).

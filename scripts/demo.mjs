@@ -17,7 +17,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 process.env.PP_LLM = process.env.PP_LLM ?? "fake";
 process.env.PP_UI_DIST = process.env.PP_UI_DIST ?? join(root, "ui", "dist");
 process.env.PP_DB_PATH = process.env.PP_DB_PATH ?? join(mkdtempSync(join(tmpdir(), "pp-demo-")), "demo.db");
-process.env.PP_SKIP_CLI_VERSIONS = process.env.PP_SKIP_CLI_VERSIONS ?? "1";
 process.env.PP_PORT = process.env.PP_PORT ?? "7878";
 // Ecosystem stays off in the demo (no eights-daemon spawn).
 delete process.env.PP_ECOSYSTEM;
