@@ -120,6 +120,7 @@ export class JudgePolicy {
     eligible = eligible.filter((p) => {
       if (p !== genProvider) return true;
       const pool = JUDGE_POOLS[p];
+      if (!pool) return false; // no judge model for this provider — cannot serve
       return pool.default !== input.generatorModel;
     });
 
@@ -140,10 +141,16 @@ export class JudgePolicy {
     this.lastProviderByRun.set(runId, provider);
 
     const pool = JUDGE_POOLS[provider];
-    const escalated =
-      !!input.retry && provider === "openai" && "escalated" in pool;
-    const judge_model =
-      escalated && "escalated" in pool ? pool.escalated : pool.default;
+    if (!pool) {
+      throw new JudgeUnavailableError(
+        `judge provider "${provider}" has no catalog judge-pool entry`,
+        input.gateType,
+        required,
+        genProvider,
+      );
+    }
+    const escalated = !!input.retry && provider === "openai" && !!pool.escalated;
+    const judge_model = escalated && pool.escalated ? pool.escalated : pool.default;
 
     return {
       judge_producer: providerToProducer(provider),

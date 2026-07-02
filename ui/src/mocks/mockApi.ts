@@ -11,6 +11,7 @@ import {
   mockProjects,
   mockRunSummaries,
   mockProviders,
+  mockAvailableProviders,
   mockModels,
   mockBudgets,
   mockTeams,
@@ -74,11 +75,12 @@ function decode(seg: string): string {
   }
 }
 
-/** Mask an API key for display: keep a short suffix, never the raw value. */
-function maskKey(vendor: string, raw: string): string {
-  const prefix = vendor === "anthropic" ? "sk-ant-" : vendor === "openai" ? "sk-" : "";
-  const tail = raw.replace(/\s/g, "").slice(-4);
-  return `${prefix}…${tail}`;
+/** Mask an API key for display: first 3 + last 4, never the raw value.
+ * Provider-agnostic (mirrors the engine's maskKey), so it works for any provider. */
+function maskKey(_vendor: string, raw: string): string {
+  const k = raw.replace(/\s/g, "");
+  if (k.length <= 8) return "*".repeat(k.length);
+  return `${k.slice(0, 3)}…${k.slice(-4)}`;
 }
 
 /** Handle a control-plane mutation. Returns null when unmatched. */
@@ -204,7 +206,7 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
     return json(mockJanitor);
   }
 
-  // Settings (tier ladder + judge pool) — mock-only until a server route lands.
+  // Settings (generation ladders + judge pool) — echoes the persisted body.
   if (method === "PUT" && p === apiPaths.settings) {
     return json(body ?? mockSettings);
   }
@@ -290,6 +292,12 @@ function route(method: string, url: URL, body: unknown): Response | null {
   }
 
   if (p === apiPaths.providers) return json(mockProviders);
+  if (p === apiPaths.providersAvailable) return json(mockAvailableProviders);
+  const provModelsMatch = p.match(/^\/api\/v1\/providers\/([^/]+)\/models$/);
+  if (provModelsMatch) {
+    const vendor = decode(provModelsMatch[1]!);
+    return json({ provider: vendor, models: mockModels.filter((m) => m.vendor === vendor).map((m) => m.id) });
+  }
   if (p === apiPaths.models) return json(mockModels);
   if (p === apiPaths.budgetCaps) return json(mockCaps);
   const budgetScope = p.match(/^\/api\/v1\/budgets\/([^/]+)$/);

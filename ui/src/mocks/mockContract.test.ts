@@ -87,4 +87,25 @@ describe("mock ↔ server contract (M5e)", () => {
     const ack = await api.post<{ ok: boolean; started: boolean }>(apiPaths.doctor);
     expect(ack).toMatchObject({ ok: true, started: true });
   });
+
+  it("dynamic providers — /available lists catalog + curated pi providers; /:vendor/models", async () => {
+    const avail = await api.get<Array<{ id: string; in_catalog: boolean; env_key_hint: string | null }>>(
+      apiPaths.providersAvailable,
+    );
+    expect(avail.find((p) => p.id === "anthropic")?.in_catalog).toBe(true);
+    const mistral = avail.find((p) => p.id === "mistral");
+    expect(mistral?.in_catalog).toBe(false);
+    expect(mistral?.env_key_hint).toBe("MISTRAL_API_KEY");
+
+    const models = await api.get<{ provider: string; models: string[] }>(apiPaths.providerModels("anthropic"));
+    expect(models.provider).toBe("anthropic");
+    expect(models.models).toContain("claude-opus-4-7");
+  });
+
+  it("settings — generation ladders + judge-pool objects round-trip", async () => {
+    const s = await api.get<{ ladders: Record<string, Record<string, string>>; judge_pool: Array<{ provider: string; model: string }> }>(apiPaths.settings);
+    expect(s.ladders.claude!.fable).toBe("claude-fable-5");
+    expect(s.judge_pool[0]).toHaveProperty("provider");
+    expect(s.judge_pool[0]).toHaveProperty("model");
+  });
 });

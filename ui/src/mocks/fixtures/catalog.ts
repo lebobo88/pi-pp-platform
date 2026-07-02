@@ -14,6 +14,8 @@ import type {
   JanitorReport,
   Forum,
   TaxonomySection,
+  HarnessSettings,
+  InstallableProvider,
 } from "@shared/api-types";
 import { MOCK_RUN_ID, mockRunTree } from "./runTree";
 
@@ -108,15 +110,32 @@ export const mockModels: ModelInfo[] = [
   { id: "gemini-2.5-flash", vendor: "google", tier: null, input_per_1m: 0.3, output_per_1m: 0.9 },
 ];
 
-export const mockSettings = {
-  tier_models: {
-    fable: "claude-fable-5",
-    opus: "claude-opus-4-7",
-    sonnet: "claude-sonnet-4-6",
-    haiku: "claude-haiku-4-5-20251001",
+export const mockSettings: HarnessSettings = {
+  ladders: {
+    claude: {
+      haiku: "claude-haiku-4-5-20251001",
+      sonnet: "claude-sonnet-4-6",
+      opus: "claude-opus-4-7",
+      fable: "claude-fable-5",
+    },
   },
-  judge_pool: ["gpt-5.4", "gemini-2.5-pro", "claude-opus-4-7"],
-} as const;
+  judge_pool: [
+    { provider: "openai", model: "gpt-5.4" },
+    { provider: "google", model: "gemini-2.5-pro" },
+    { provider: "anthropic", model: "claude-opus-4-7" },
+  ],
+};
+
+/** GET /providers/available — catalog providers + a curated pi set (add-provider picker). */
+export const mockAvailableProviders: InstallableProvider[] = [
+  { id: "openai", display_name: "OpenAI", env_key_hint: "OPENAI_API_KEY", in_catalog: true, enabled: true, configured: true },
+  { id: "google", display_name: "Google", env_key_hint: "GEMINI_API_KEY", in_catalog: true, enabled: true, configured: false },
+  { id: "anthropic", display_name: "Anthropic", env_key_hint: "ANTHROPIC_API_KEY", in_catalog: true, enabled: true, configured: true },
+  { id: "mistral", display_name: "Mistral", env_key_hint: "MISTRAL_API_KEY", in_catalog: false, enabled: false, configured: false },
+  { id: "deepseek", display_name: "DeepSeek", env_key_hint: "DEEPSEEK_API_KEY", in_catalog: false, enabled: false, configured: false },
+  { id: "groq", display_name: "Groq", env_key_hint: "GROQ_API_KEY", in_catalog: false, enabled: false, configured: false },
+  { id: "xai", display_name: "xAI (Grok)", env_key_hint: "XAI_API_KEY", in_catalog: false, enabled: false, configured: false },
+];
 
 export const mockCaps: BudgetCap[] = [
   { scope: "day", limit_usd: 8, warn_pct: 0.8, block_pct: 1.0 },

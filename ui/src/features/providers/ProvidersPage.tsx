@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ModelInfo, ProviderStatus, ProviderTestResult, HarnessSettings } from "@shared/api-types";
-import { CLAUDE_TIERS } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
@@ -10,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { StatusChip, StatusDot } from "@/components/StatusChip";
 import { KeyValue } from "@/components/KeyValue";
 import { Pill, TierChip } from "@/features/common/chips";
-import { useProviders, useModels } from "@/api/queries/providers";
+import { useProviders, useModels, useAvailableProviders } from "@/api/queries/providers";
 import { useSettings } from "@/api/queries/system";
 import { useSetProviderKey, useTestProvider, useDeleteProviderKey } from "@/api/mutations/providers";
 import { useSaveSettings } from "@/api/mutations/misc";
@@ -23,18 +22,20 @@ export function ProvidersPage() {
 
   const modelColumns: Column<ModelInfo>[] = [
     { key: "id", header: "Model", render: (m) => m.id, sortValue: (m) => m.id, mono: true },
-    { key: "vendor", header: "Vendor", render: (m) => <Pill>{m.vendor}</Pill>, sortValue: (m) => m.vendor },
+    { key: "vendor", header: "Provider", render: (m) => <Pill>{m.vendor}</Pill>, sortValue: (m) => m.vendor },
     { key: "tier", header: "Tier", render: (m) => (m.tier ? <TierChip tier={m.tier} /> : <span className="text-ink-3">—</span>), sortValue: (m) => m.tier ?? "" },
     { key: "in", header: "$/1M in", render: (m) => formatUsd(m.input_per_1m), sortValue: (m) => m.input_per_1m, mono: true, align: "right" },
     { key: "out", header: "$/1M out", render: (m) => formatUsd(m.output_per_1m), sortValue: (m) => m.output_per_1m, mono: true, align: "right" },
   ];
 
   return (
-    <Page title="Providers & Models" description="Vendor credentials, health, and the priced model catalog." className="space-y-4">
+    <Page title="Providers & Models" description="Configure API keys for any provider, check health, and browse the priced model catalog." className="space-y-4">
+      <AddProviderPicker configured={new Set((providers ?? []).map((p) => p.vendor))} />
+
       {isLoading ? (
         <EmptyState title="Loading providers…" compact />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           {(providers ?? []).map((p) => (
             <ProviderCard key={p.vendor} provider={p} />
           ))}
@@ -56,6 +57,51 @@ export function ProvidersPage() {
   );
 }
 
+/* ── Add provider ──────────────────────────────────────────────────────── */
+
+function AddProviderPicker({ configured }: { configured: Set<string> }) {
+  const { data: available } = useAvailableProviders();
+  const [selectedId, setSelectedId] = useState("");
+  const [open, setOpen] = useState(false);
+
+  // Offer providers that don't already have a card (not in the enabled set).
+  const options = (available ?? []).filter((p) => !configured.has(p.id));
+  const selected = options.find((o) => o.id === selectedId) ?? null;
+  if (!options.length) return null;
+
+  return (
+    <Card title="Add a provider" className="max-w-xl">
+      <p className="mb-2 text-[11px] text-ink-3">
+        pi supports 30+ providers. Pick one and set its API key — it becomes available as a generator or judge.
+      </p>
+      <div className="flex items-center gap-2">
+        <select
+          value={selectedId}
+          onChange={(e) => setSelectedId(e.target.value)}
+          className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+        >
+          <option value="">select a provider…</option>
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.display_name}{o.in_catalog ? "" : " (pi)"}{o.env_key_hint ? ` · ${o.env_key_hint}` : ""}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" variant="primary" disabled={!selected} onClick={() => setOpen(true)}>
+          Set key
+        </Button>
+      </div>
+      {selected && (
+        <SetKeyModal
+          vendor={selected.id}
+          open={open}
+          onClose={() => { setOpen(false); setSelectedId(""); }}
+        />
+      )}
+    </Card>
+  );
+}
+
 /* ── Tier ladder + judge pool ──────────────────────────────────────────── */
 
 function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; models: ModelInfo[] }) {
@@ -66,14 +112,21 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
     if (settings) setDraft(settings);
   }, [settings]);
 
-  if (!draft) return null;
-
-  const configuredVendors = new Set(providers.filter((p) => p.configured).map((p) => p.vendor));
-  const availableModels = models.filter((m) => configuredVendors.has(m.vendor));
+  const configuredVendors = useMemo(
+    () => new Set(providers.filter((p) => p.configured).map((p) => p.vendor)),
+    [providers],
+  );
+  const availableModels = useMemo(
+    () => models.filter((m) => configuredVendors.has(m.vendor)),
+    [models, configuredVendors],
+  );
   const vendorOf = (id: string) => models.find((m) => m.id === id)?.vendor ?? "?";
 
-  const judgeVendors = new Set(draft.judge_pool.map(vendorOf));
-  const crossVendorOk = judgeVendors.size >= 2;
+  if (!draft) return null;
+
+  const modelOptions = availableModels.length ? availableModels : models;
+  const judgeProviders = new Set(draft.judge_pool.map((j) => j.provider));
+  const crossVendorOk = judgeProviders.size >= 2;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
   const commit = () =>
@@ -81,44 +134,46 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
       onSuccess: () => toast({ tone: "success", title: "Settings saved" }),
       onError: (e) => toast({ tone: "error", title: "Save failed", message: e instanceof Error ? e.message : "" }),
     });
+  const SaveBtn = <Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>;
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card
-        title="Tier ladder"
-        actions={<Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>}
-      >
-        <p className="mb-2 text-[11px] text-ink-3">Map each Claude tier to a model. Only models from configured providers are listed.</p>
-        <div className="space-y-2">
-          {CLAUDE_TIERS.map((tier) => (
-            <div key={tier} className="flex items-center gap-2">
-              <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
-              <select
-                value={draft.tier_models[tier] ?? ""}
-                onChange={(e) => setDraft({ ...draft, tier_models: { ...draft.tier_models, [tier]: e.target.value } })}
-                className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
-              >
-                {(availableModels.length ? availableModels : models).map((m) => (
-                  <option key={m.id} value={m.id}>{m.id}</option>
-                ))}
-              </select>
-              {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
+      <Card title="Generation ladders" actions={SaveBtn}>
+        <p className="mb-2 text-[11px] text-ink-3">Map each tier of a generation ladder to a model. Any provider's models can back a ladder; only models from configured providers are offered.</p>
+        <div className="space-y-3">
+          {Object.entries(draft.ladders).map(([ladderName, tiers]) => (
+            <div key={ladderName} className="space-y-2">
+              <div className="mono text-[11px] uppercase tracking-wide text-ink-3">{ladderName}</div>
+              {Object.entries(tiers).map(([tier, modelId]) => (
+                <div key={tier} className="flex items-center gap-2">
+                  <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
+                  <select
+                    value={modelId}
+                    onChange={(e) =>
+                      setDraft({ ...draft, ladders: { ...draft.ladders, [ladderName]: { ...tiers, [tier]: e.target.value } } })
+                    }
+                    className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                  >
+                    {modelOptions.map((m) => (
+                      <option key={m.id} value={m.id}>{m.id}</option>
+                    ))}
+                  </select>
+                  {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
+                </div>
+              ))}
             </div>
           ))}
         </div>
       </Card>
 
-      <Card
-        title="Judge pool"
-        actions={<Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>}
-      >
-        <p className="mb-2 text-[11px] text-ink-3">Ordered judge models. Cross-vendor coverage requires ≥2 vendors.</p>
+      <Card title="Judge pool" actions={SaveBtn}>
+        <p className="mb-2 text-[11px] text-ink-3">Ordered judge selections. Cross-provider coverage requires ≥2 distinct providers.</p>
         <ul className="space-y-1">
-          {draft.judge_pool.map((id, i) => (
-            <li key={id} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
+          {draft.judge_pool.map((j, i) => (
+            <li key={`${j.provider}:${j.model}`} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
               <span className="mono w-4 text-[11px] text-ink-3">{i + 1}</span>
-              <span className="mono flex-1 text-[12px] text-ink-1">{id}</span>
-              <Pill>{vendorOf(id)}</Pill>
+              <span className="mono flex-1 text-[12px] text-ink-1">{j.model}</span>
+              <Pill>{j.provider}</Pill>
               <button type="button" className="text-ink-3 hover:text-ink-1" disabled={i === 0}
                 onClick={() => {
                   const next = [...draft.judge_pool];
@@ -126,7 +181,7 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
                   setDraft({ ...draft, judge_pool: next });
                 }}>↑</button>
               <button type="button" className="text-fail/70 hover:text-fail"
-                onClick={() => setDraft({ ...draft, judge_pool: draft.judge_pool.filter((x) => x !== id) })}>✕</button>
+                onClick={() => setDraft({ ...draft, judge_pool: draft.judge_pool.filter((_, idx) => idx !== i) })}>✕</button>
             </li>
           ))}
         </ul>
@@ -134,21 +189,22 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
           <select
             defaultValue=""
             onChange={(e) => {
-              if (e.target.value && !draft.judge_pool.includes(e.target.value)) {
-                setDraft({ ...draft, judge_pool: [...draft.judge_pool, e.target.value] });
+              const id = e.target.value;
+              if (id && !draft.judge_pool.some((j) => j.model === id)) {
+                setDraft({ ...draft, judge_pool: [...draft.judge_pool, { provider: vendorOf(id), model: id }] });
               }
               e.target.value = "";
             }}
             className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
           >
             <option value="">add judge model…</option>
-            {models.filter((m) => !draft.judge_pool.includes(m.id)).map((m) => (
+            {models.filter((m) => !draft.judge_pool.some((j) => j.model === m.id)).map((m) => (
               <option key={m.id} value={m.id}>{m.id}</option>
             ))}
           </select>
         </div>
         {!crossVendorOk && (
-          <p className="mt-2 text-[11px] text-warn">All judges share a single vendor — cross-vendor gates (spec/design/security/contract) will have no eligible judge.</p>
+          <p className="mt-2 text-[11px] text-warn">All judges share a single provider — cross-vendor gates (spec/design/security/contract) will have no eligible judge.</p>
         )}
       </Card>
     </div>

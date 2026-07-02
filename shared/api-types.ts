@@ -33,8 +33,13 @@ export type VerdictOutcome = (typeof VERDICT_OUTCOME)[number];
 export const RUN_MODE = ["single", "best_of", "team", "review"] as const;
 export type RunMode = (typeof RUN_MODE)[number];
 
+/**
+ * Historical built-in providers, kept as a display hint. The real provider set
+ * is DYNAMIC (catalog-driven, exposed via GET /providers and /providers/available),
+ * so `Vendor` is an open provider id — any of pi's providers may appear.
+ */
 export const VENDORS = ["openai", "google", "anthropic"] as const;
-export type Vendor = (typeof VENDORS)[number];
+export type Vendor = string;
 
 export const CLAUDE_TIERS = ["haiku", "sonnet", "opus", "fable"] as const;
 export type ClaudeTier = (typeof CLAUDE_TIERS)[number];
@@ -239,18 +244,38 @@ export interface ProviderStatus {
   degraded: boolean;
 }
 
-/** A model the harness can route to, priced from assets/prices.json. */
+/** A model the harness can route to, priced from the catalog. */
 export interface ModelInfo {
   id: string;
   vendor: Vendor;
-  /** Claude tier this model backs, when it is a Claude model. */
-  tier: ClaudeTier | null;
+  /** Generation-ladder tier this model backs (any ladder), or null. */
+  tier: string | null;
   /** USD per 1M input tokens. */
   input_per_1m: number;
   /** USD per 1M output tokens. */
   output_per_1m: number;
   /** Free-form pricing caveat from prices.json `_pricing_notes`, if any. */
   note?: string;
+}
+
+/** A provider offered in the add-provider picker (catalog + curated pi set). */
+export interface InstallableProvider {
+  id: string;
+  display_name: string;
+  /** Env var pi reads a key from, for display; null when unknown. */
+  env_key_hint: string | null;
+  /** True when the provider already has a catalog entry (models + pricing). */
+  in_catalog: boolean;
+  /** True when the catalog entry is enabled. */
+  enabled: boolean;
+  /** True when a key is already configured for this provider. */
+  configured: boolean;
+}
+
+/** Models the catalog knows for a provider (for ladder / judge editors). */
+export interface ProviderModels {
+  provider: string;
+  models: string[];
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -649,14 +674,15 @@ export interface TaxonomySection {
 }
 
 /**
- * Harness settings the control plane edits: the Claude tier→model ladder and
- * the ordered judge pool. Persisted server-side; read-only vendors are derived
- * from provider config.
+ * Harness settings the control plane edits: the named generation ladders
+ * (ladderName → tier → model id) and the ordered judge pool. Persisted
+ * server-side. The default install has one ladder, "claude". Cross-provider
+ * judge coverage is derived from the pool's distinct providers.
  */
 export interface HarnessSettings {
-  tier_models: Record<ClaudeTier, string>;
-  /** Ordered judge model ids; cross-vendor coverage is derived. */
-  judge_pool: string[];
+  ladders: Record<string, Record<string, string>>;
+  /** Ordered judge selections; cross-provider coverage is derived. */
+  judge_pool: Array<{ provider: string; model: string }>;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -911,8 +937,10 @@ export const apiPaths = {
     `${API_BASE}/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/gate`,
 
   providers: `${API_BASE}/providers`,
+  providersAvailable: `${API_BASE}/providers/available`,
   providerKey: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/key`,
   providerTest: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/test`,
+  providerModels: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/models`,
   models: `${API_BASE}/models`,
 
   budgets: `${API_BASE}/budgets`,
@@ -937,8 +965,8 @@ export const apiPaths = {
   evolutionReview: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}/review`,
 
   janitor: `${API_BASE}/system/janitor`,
-  /** Tier-ladder + judge-pool settings. NOTE: not yet a server route — mock-only
-   *  until the settings persistence lands (TODO(M7)). */
+  /** Generation-ladders + judge-pool settings. GET/PUT persisted server-side
+   *  (packages/server/src/routes/library.ts). */
   settings: `${API_BASE}/settings`,
 
   /** Fetch a file/artifact body by its (project-relative) path. */

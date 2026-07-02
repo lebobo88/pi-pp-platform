@@ -7,7 +7,6 @@ import type {
   AttemptStatus,
   VerdictOutcome,
   RunMode,
-  ClaudeTier,
   Vendor,
 } from "@shared/api-types";
 import type { PipelineState } from "@/lib/runModel";
@@ -80,9 +79,9 @@ export function ModeChip({ mode }: { mode: RunMode }) {
   return <Pill tone={mode === "team" ? "accent" : "default"}>{label}</Pill>;
 }
 
-export function TierChip({ tier }: { tier: ClaudeTier | null | undefined }) {
+export function TierChip({ tier }: { tier: string | null | undefined }) {
   if (!tier) return null;
-  return <Pill tone={tier === "fable" ? "judge" : "default"} title="Claude tier">{tier}</Pill>;
+  return <Pill tone={tier === "fable" ? "judge" : "default"} title="generation-ladder tier">{tier}</Pill>;
 }
 
 export function VendorChip({ vendor }: { vendor: Vendor | string }) {

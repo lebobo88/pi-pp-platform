@@ -90,14 +90,14 @@ function DoctorPanel() {
           </thead>
           <tbody>
             {vendors.map((v) => {
-              const cred = data.vendor_credentials[v];
+              const cred = data.vendor_credentials[v] ?? { cli: false, api_key: false, logged_in: false };
               return (
                 <tr key={v} className="border-b border-line-1/60">
                   <td className="mono px-3 py-1.5 text-ink-1">{v}</td>
                   <td className="px-3 py-1.5 text-center"><Check ok={cred.cli} /></td>
                   <td className="px-3 py-1.5 text-center"><Check ok={cred.api_key} /></td>
                   <td className="px-3 py-1.5 text-center"><Check ok={cred.logged_in} /></td>
-                  <td className="px-3 py-1.5 text-center"><Check ok={data.vendors_configured[v]} /></td>
+                  <td className="px-3 py-1.5 text-center"><Check ok={!!data.vendors_configured[v]} /></td>
                   <td className="px-3 py-1.5 text-center">
                     {data.vendor_degraded[v] ? <StatusDot tone="fail" title="degraded" /> : <span className="text-ink-3">—</span>}
                   </td>
