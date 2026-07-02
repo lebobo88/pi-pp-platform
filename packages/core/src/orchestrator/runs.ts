@@ -2867,11 +2867,22 @@ async function tryGitCommand(cwd: string, args: string[]): Promise<string | null
   }
 }
 
+// CLI version probes are stable for the lifetime of a process, but each
+// `<cli> --version` spawn can be very slow (codex/gemini can take 15-30s on
+// some hosts). Memoize so start_run / doctor pay the probe cost at most once,
+// and let tests / headless runs skip it entirely via PP_SKIP_CLI_VERSIONS=1.
+let _cliVersionsCache: Record<string, string | null> | null = null;
 async function captureCliVersions(): Promise<Record<string, string | null>> {
+  if (_cliVersionsCache) return _cliVersionsCache;
+  if (process.env.PP_SKIP_CLI_VERSIONS === "1") {
+    _cliVersionsCache = { codex: null, gemini: null, claude: null, git: null, node: null };
+    return _cliVersionsCache;
+  }
   const out: Record<string, string | null> = {};
   for (const cli of ["codex", "gemini", "claude", "git", "node"]) {
     out[cli] = (await tryCmd(cli, ["--version"])) ?? null;
   }
+  _cliVersionsCache = out;
   return out;
 }
 

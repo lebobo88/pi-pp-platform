@@ -30,6 +30,10 @@ export default defineConfig({
     fileParallelism: false,
     env: {
       PP_HOME: process.env.PP_HOME,
+      // Skip the slow codex/gemini/claude `--version` probes in start_run/doctor
+      // (15-30s each on hosts where those CLIs are installed). The fake engine
+      // never needs real CLI versions.
+      PP_SKIP_CLI_VERSIONS: "1",
     },
   },
 });
