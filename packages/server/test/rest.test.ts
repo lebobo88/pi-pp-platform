@@ -52,16 +52,24 @@ describe("health + library reads", () => {
   });
 
   it("GET /api/v1/settings returns defaults; PUT persists", async () => {
-    const def = (await get("/api/v1/settings")).json() as { tier_models: Record<string, string>; judge_pool: string[] };
-    expect(def.tier_models.fable).toBe("claude-fable-5");
+    const def = (await get("/api/v1/settings")).json() as {
+      ladders: Record<string, Record<string, string>>;
+      judge_pool: Array<{ provider: string; model: string }>;
+    };
+    // Default catalog ships the "claude" ladder with fable off-ladder.
+    expect(def.ladders.claude!.fable).toBe("claude-fable-5");
     expect(Array.isArray(def.judge_pool)).toBe(true);
+    expect(def.judge_pool[0]).toMatchObject({ provider: "openai" });
 
-    const next = { tier_models: { fable: "claude-fable-5", opus: "claude-opus-4-7", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5-20251001" }, judge_pool: ["gpt-5.4"] };
+    const next = {
+      ladders: { claude: { fable: "claude-fable-5", opus: "claude-opus-4-7", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5-20251001" } },
+      judge_pool: [{ provider: "openai", model: "gpt-5.4" }],
+    };
     const put = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: next });
     expect(put.statusCode).toBe(200);
     expect((await get("/api/v1/settings")).json()).toEqual(next);
 
-    const bad = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { tier_models: { fable: "x" } } });
+    const bad = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { judge_pool: [] } });
     expect(bad.statusCode).toBe(422);
   });
 
@@ -167,6 +175,39 @@ describe("provider keys — write-only + masked", () => {
   it("PUT with a too-short key → 422", async () => {
     const r = await app.inject({ method: "PUT", url: "/api/v1/providers/anthropic/key", payload: { api_key: "x" } });
     expect(r.statusCode).toBe(422);
+  });
+
+  it("GET /providers/available lists catalog + curated pi providers", async () => {
+    const avail = (await get("/api/v1/providers/available")).json() as Array<{
+      id: string; in_catalog: boolean; env_key_hint: string | null; configured: boolean;
+    }>;
+    const ids = avail.map((p) => p.id);
+    // the 3 catalog providers are present and in_catalog
+    for (const id of ["openai", "google", "anthropic"]) {
+      expect(avail.find((p) => p.id === id)?.in_catalog).toBe(true);
+    }
+    // a curated pi provider (mistral) is offered even though it is not yet in the catalog
+    const mistral = avail.find((p) => p.id === "mistral");
+    expect(mistral).toBeTruthy();
+    expect(mistral!.in_catalog).toBe(false);
+    expect(mistral!.env_key_hint).toBe("MISTRAL_API_KEY");
+    expect(ids.length).toBeGreaterThan(3);
+  });
+
+  it("a key can be configured for a NON-original provider (mistral)", async () => {
+    const RAW = "sk-mistral-secrettestkey987654";
+    const put = await app.inject({ method: "PUT", url: "/api/v1/providers/mistral/key", payload: { api_key: RAW } });
+    expect(put.statusCode).toBe(200);
+    const body = put.json() as { has_api_key: boolean; masked_key: string | null };
+    expect(body.has_api_key).toBe(true);
+    expect(put.payload).not.toContain(RAW);
+    await app.inject({ method: "DELETE", url: "/api/v1/providers/mistral/key" });
+  });
+
+  it("GET /providers/:vendor/models returns catalog models", async () => {
+    const r = (await get("/api/v1/providers/anthropic/models")).json() as { provider: string; models: string[] };
+    expect(r.provider).toBe("anthropic");
+    expect(r.models).toContain("claude-opus-4-7");
   });
 });
 

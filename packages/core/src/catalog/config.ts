@@ -207,6 +207,64 @@ export function killSwitchEnvFor(provider: string): string {
   return `PP_DISABLE_${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
 
+/**
+ * Well-known pi providers offered in the "add provider" picker even before they
+ * are in the catalog. pi already ships API implementations + env-key mappings
+ * for these; adding one to the catalog (with models/pricing) enables it fully.
+ */
+const CURATED_PI_PROVIDERS: ReadonlyArray<{ id: string; display_name: string; env_key_hint: string }> = [
+  { id: "mistral", display_name: "Mistral", env_key_hint: "MISTRAL_API_KEY" },
+  { id: "deepseek", display_name: "DeepSeek", env_key_hint: "DEEPSEEK_API_KEY" },
+  { id: "groq", display_name: "Groq", env_key_hint: "GROQ_API_KEY" },
+  { id: "xai", display_name: "xAI (Grok)", env_key_hint: "XAI_API_KEY" },
+  { id: "openrouter", display_name: "OpenRouter", env_key_hint: "OPENROUTER_API_KEY" },
+  { id: "together", display_name: "Together", env_key_hint: "TOGETHER_API_KEY" },
+  { id: "fireworks", display_name: "Fireworks", env_key_hint: "FIREWORKS_API_KEY" },
+  { id: "cerebras", display_name: "Cerebras", env_key_hint: "CEREBRAS_API_KEY" },
+  { id: "moonshotai", display_name: "Moonshot (Kimi)", env_key_hint: "MOONSHOT_API_KEY" },
+  { id: "nvidia", display_name: "NVIDIA", env_key_hint: "NVIDIA_API_KEY" },
+  { id: "azure-openai", display_name: "Azure OpenAI", env_key_hint: "AZURE_OPENAI_API_KEY" },
+  { id: "amazon-bedrock", display_name: "Amazon Bedrock", env_key_hint: "AWS_ACCESS_KEY_ID" },
+  { id: "google-vertex", display_name: "Google Vertex", env_key_hint: "GOOGLE_APPLICATION_CREDENTIALS" },
+];
+
+export interface InstallableProviderInfo {
+  id: string;
+  display_name: string;
+  env_key_hint: string | null;
+  /** True when the provider already has a catalog entry (models + pricing). */
+  in_catalog: boolean;
+  /** True when the catalog entry is enabled. */
+  enabled: boolean;
+}
+
+/** The union of catalog providers and the curated pi set, for the add-provider picker. */
+export function installableProviders(): InstallableProviderInfo[] {
+  const c = catalog();
+  const out: InstallableProviderInfo[] = [];
+  const seen = new Set<string>();
+  for (const [id, p] of Object.entries(c.providers)) {
+    seen.add(id);
+    out.push({
+      id,
+      display_name: p.display_name ?? id,
+      env_key_hint: p.env_key_hint ?? null,
+      in_catalog: true,
+      enabled: p.enabled !== false,
+    });
+  }
+  for (const p of CURATED_PI_PROVIDERS) {
+    if (seen.has(p.id)) continue;
+    out.push({ id: p.id, display_name: p.display_name, env_key_hint: p.env_key_hint, in_catalog: false, enabled: false });
+  }
+  return out;
+}
+
+/** Model ids the catalog knows for a provider (for the ladder/judge editors). */
+export function modelsForProvider(provider: string): string[] {
+  return Object.keys(catalog().providers[provider]?.models ?? {});
+}
+
 /** Flatten the catalog's per-provider model pricing into a @pp/core price table. */
 export function pricesFromCatalog(): PriceTable {
   const out: PriceTable = {};

@@ -19,8 +19,8 @@ import {
   doctor,
   listProposals, setProposalStatus,
   getPlatformSetting, setPlatformSetting,
+  catalog, judgePool, judgePoolProviders,
 } from "@pp/core";
-import { TIER_MODELS, JUDGE_POOLS } from "@pp/engine";
 import { modelsWire } from "../wire.js";
 import { V1, type ServerDeps } from "../deps.js";
 
@@ -38,24 +38,21 @@ const ReviewBody = z.object({
 });
 
 const SETTINGS_KEY = "harness_settings";
+// Generalized beyond the fixed 4 Claude tiers: `ladders` is ladderName ->
+// (tier -> model id); `judge_pool` is an ordered list of {provider, model}.
 const SettingsBody = z.object({
-  tier_models: z.object({
-    fable: z.string().min(1),
-    opus: z.string().min(1),
-    sonnet: z.string().min(1),
-    haiku: z.string().min(1),
-  }),
-  judge_pool: z.array(z.string().min(1)).min(1),
+  ladders: z.record(z.record(z.string().min(1))),
+  judge_pool: z.array(z.object({ provider: z.string().min(1), model: z.string().min(1) })).min(1),
 });
 function defaultSettings() {
+  const c = catalog();
+  const ladders: Record<string, Record<string, string>> = {};
+  for (const [name, l] of Object.entries(c.generation_ladders)) {
+    ladders[name] = { ...l.tiers };
+  }
   return {
-    tier_models: {
-      fable: TIER_MODELS.fable.id,
-      opus: TIER_MODELS.opus.id,
-      sonnet: TIER_MODELS.sonnet.id,
-      haiku: TIER_MODELS.haiku.id,
-    },
-    judge_pool: [JUDGE_POOLS.openai.default, JUDGE_POOLS.google.default, JUDGE_POOLS.anthropic.default],
+    ladders,
+    judge_pool: judgePool().map((e) => ({ provider: e.provider, model: e.model })),
   };
 }
 
@@ -172,7 +169,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
         const report = (await doctor({ smoke })) as Record<string, unknown>;
         const engine_probes: Record<string, unknown> = {};
         if (smoke) {
-          for (const vendor of ["openai", "google", "anthropic"] as const) {
+          for (const vendor of judgePoolProviders()) {
             try {
               engine_probes[vendor] = await deps.engine.doctorProbe(vendor);
             } catch (err) {
