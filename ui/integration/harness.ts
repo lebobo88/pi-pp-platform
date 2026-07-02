@@ -66,7 +66,6 @@ export async function startServer(extraEnv: Record<string, string> = {}): Promis
       PP_PORT: String(port),
       PP_UI_DIST: "", // do not serve the SPA in the test
       PP_ECOSYSTEM: "", // keep the ecosystem guard off
-      PP_SKIP_CLI_VERSIONS: "1",
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
