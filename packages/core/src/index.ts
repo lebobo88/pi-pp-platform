@@ -28,6 +28,12 @@ export * from "./orchestrator/replay.js";
 export * from "./orchestrator/janitor.js";
 export * from "./orchestrator/tdd-gate.js";
 export * from "./orchestrator/artifact-validators/index.js";
+// M7a (@pp/mcp-adapter): pure read/record helpers the pp_harness-compat MCP
+// server needs. Exported here because @pp/core only publishes the "." entry.
+export * from "./orchestrator/loop-ceiling.js";
+export * from "./orchestrator/profile-detect.js";
+export * from "./orchestrator/design-templates.js";
+export { forceUnlock, type ForceUnlockResult } from "./util/lock.js";
 
 // Rubrics
 export * from "./rubrics/registry.js";

@@ -1,0 +1,38 @@
+{
+  "name": "@pp/mcp-adapter",
+  "version": "0.1.0",
+  "description": "pp_harness-compatible MCP stdio server over @pp/core. Lets external MCP hosts (Hydra gateway, TheEights pp-adapter, any MCP client) drive the platform's harness read/record surface. Generation/critique/best-of-worktree/ecosystem tools are registered but return a structured not_available_in_adapter error.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "pp-mcp": "dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@pp/core": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}
