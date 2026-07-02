@@ -29,11 +29,12 @@ import {
   finalizeStage,
   getStageFinalizeReadiness,
   getRubric,
-  CLAUDE_TIER_MODELS,
   type GateType,
   type Profile,
   type ClaudeTier,
 } from "@pp/core";
+import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
+import { generationModelIdForTier } from "../generation-model.js";
 import { loadRolePrompt, renderSystemPrompt } from "../prompts/loader.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
@@ -57,7 +58,7 @@ const ROTATION: Array<{ tier: ClaudeTier; seed: string }> = [
 
 function rotationFor(candidateIndex: number): { tier: ClaudeTier; seed: string; model_id: string } {
   const slot = ROTATION[(candidateIndex - 1) % ROTATION.length]!;
-  return { tier: slot.tier, seed: slot.seed, model_id: CLAUDE_TIER_MODELS[slot.tier] };
+  return { tier: slot.tier, seed: slot.seed, model_id: generationModelIdForTier(slot.tier) };
 }
 
 function gitDiffHead(cwd: string): string | null {
@@ -124,7 +125,14 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       profileName: ctx.profileName,
       requestText: ctx.requestText,
     });
-    const model = ctx.engine.catalog.resolve("anthropic", rot.model_id);
+    const genProvider = providerForModel(rot.model_id);
+    if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
+      throw new Error(
+        `generation model "${rot.model_id}" requires a key for provider "${genProvider}", which is not configured. ` +
+          `Add a key in Providers, or point your generation ladder at a keyed provider.`,
+      );
+    }
+    const model = ctx.engine.catalog.resolve(genProvider, rot.model_id);
     const gen = await ctx.engine.runCodingSession({
       cwd: c.worktree_path,
       systemPrompt,
@@ -187,10 +195,14 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
   // ── Judge each candidate for a score (cross-vendor), then Borda-pick. ─────
   let selection;
   try {
+    const genModelId = generationModelIdForTier("sonnet");
     selection = ctx.judgePolicy.select(ctx.run_id, {
       gateType: stage.gate_type as GateType,
       generatorProducer: "claude",
-      generatorModel: "claude-sonnet-4-6",
+      generatorProvider: providerForModel(genModelId),
+      keyedProviders:
+        ctx.engine.mode === "pi" ? providersWithCredential(ctx.engine.authStorage) : undefined,
+      generatorModel: genModelId,
       promptKeywords: ctx.requestText,
       profile: (ctx.profileName as Profile | undefined) ?? null,
       artifactKind: stage.artifact_kind ?? null,

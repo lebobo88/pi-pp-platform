@@ -29,6 +29,7 @@ import {
   type VerdictOutcome,
   type ClaudeTier,
 } from "@pp/core";
+import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { loadRolePrompt, renderSystemPrompt } from "../prompts/loader.js";
 import { resolveTier, escalateTierForRetry } from "../tier-resolver.js";
 import { JudgeUnavailableError } from "../errors.js";
@@ -125,7 +126,17 @@ async function generate(
     priorCritiques,
     requestText: ctx.requestText,
   });
-  const model = ctx.engine.catalog.resolve("anthropic", modelId);
+  // Resolve the generator's provider FROM the model (effective ladder), not the
+  // legacy hardcoded "anthropic". Preflight the credential so a missing key
+  // surfaces a clear, actionable reason instead of pi's raw auth error.
+  const genProvider = providerForModel(modelId);
+  if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
+    throw new Error(
+      `generation model "${modelId}" requires a key for provider "${genProvider}", which is not configured. ` +
+        `Add a key in Providers, or point your generation ladder at a provider you have keyed.`,
+    );
+  }
+  const model = ctx.engine.catalog.resolve(genProvider, modelId);
   const sessionDir = join(ctx.artifact_dir, stage.kind);
   mkdirSync(sessionDir, { recursive: true });
 
@@ -239,6 +250,12 @@ export async function judge(
     selection = ctx.judgePolicy.select(ctx.run_id, {
       gateType: stage.gate_type as GateType,
       generatorProducer: "claude",
+      // The real generator provider is derived from its model (effective ladder),
+      // so cross-provider judging excludes the actual generator, and only
+      // keyed providers are eligible — never routes to an unconfigured vendor.
+      generatorProvider: providerForModel(generatorModel),
+      keyedProviders:
+        ctx.engine.mode === "pi" ? providersWithCredential(ctx.engine.authStorage) : undefined,
       generatorModel,
       promptKeywords: ctx.requestText,
       profile: (ctx.profileName as Profile | undefined) ?? null,

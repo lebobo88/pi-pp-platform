@@ -66,6 +66,12 @@ export type JudgeSelectInput = {
    * collision when a candidate used the same Claude model the judge pool pins.
    */
   forceCrossVendor?: boolean;
+  /** The generator's REAL provider (derived from its effective-ladder model),
+   * overriding the producer→provider guess. Cross-provider judging excludes it. */
+  generatorProvider?: string;
+  /** When set, only providers with a configured credential are eligible judges —
+   * so a run never routes a judge to an unkeyed vendor. */
+  keyedProviders?: string[];
 };
 
 export type JudgeSelection = {
@@ -105,7 +111,7 @@ export class JudgePolicy {
       rubric_hint: input.rubricHint ?? null,
     });
 
-    const genProvider = producerToProvider(input.generatorProducer);
+    const genProvider = input.generatorProvider ?? producerToProvider(input.generatorProducer);
     const required = decision.required_cross_vendor || !!input.forceCrossVendor;
 
     // Base eligibility from the engine (drops kill-switched providers + the gen
@@ -114,6 +120,13 @@ export class JudgePolicy {
     let eligible = eligibleJudgeProviders(genProvider, required).filter(
       (p) => p !== "google" || geminiEnabled(),
     );
+
+    // Only providers with a configured credential can judge — never route to an
+    // unkeyed vendor (e.g. anthropic in the pool when no anthropic key is set).
+    if (input.keyedProviders) {
+      const keyed = new Set(input.keyedProviders);
+      eligible = eligible.filter((p) => keyed.has(p));
+    }
 
     // Same-vendor different-model invariant: if the only same-vendor option
     // would reuse the generator's exact model id, it cannot serve — drop it.
@@ -127,10 +140,12 @@ export class JudgePolicy {
     if (eligible.length === 0) {
       throw new JudgeUnavailableError(
         `no eligible judge for gate_type=${input.gateType} ` +
-          `(generator=${input.generatorProducer}/${input.generatorModel}, ` +
-          `required_cross_vendor=${required}). Every candidate vendor is disabled ` +
-          `or excluded. Configure another vendor (OPENAI/GEMINI/ANTHROPIC) and retry — ` +
-          `the harness will not downgrade the gate or fabricate a verdict.`,
+          `(generator=${genProvider}/${input.generatorModel}, ` +
+          `required_cross_vendor=${required}). Every candidate judge provider is ` +
+          `disabled, excluded, or has no configured key` +
+          (input.keyedProviders ? ` (keyed: ${input.keyedProviders.join(", ") || "none"})` : "") +
+          `. Configure a key for a judge provider different from the generator ` +
+          `(the harness will not downgrade the gate or fabricate a verdict).`,
         input.gateType,
         required,
         genProvider,

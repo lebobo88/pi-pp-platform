@@ -19,7 +19,6 @@
  */
 
 import {
-  CLAUDE_TIER_MODELS,
   shiftTier,
   tierIndex,
   isClaudeTier,
@@ -27,6 +26,7 @@ import {
   type ModelTierPolicy,
 } from "@pp/core";
 import type { Scope } from "@pp/core";
+import { generationModelIdForTier } from "./generation-model.js";
 import { TierResolutionError } from "./errors.js";
 
 /**
@@ -202,7 +202,7 @@ export function resolveTier(input: TierResolveInput): TierResolution {
     });
   }
 
-  return { tier, model_id: CLAUDE_TIER_MODELS[tier], trace };
+  return { tier, model_id: generationModelIdForTier(tier), trace };
 }
 
 /**
@@ -226,7 +226,7 @@ export function escalateTierForRetry(
   }
   return {
     tier: retryTier,
-    model_id: CLAUDE_TIER_MODELS[retryTier],
+    model_id: generationModelIdForTier(retryTier),
     trace: { layer: "retry", tier: retryTier, initial: initialTier, reason: `verdict:${verdictOutcome}` },
   };
 }

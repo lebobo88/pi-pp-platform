@@ -11,6 +11,7 @@
  * (fetches the latest list from the provider endpoint when a credential exists).
  */
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { catalog, normalizeProviderAlias } from "@pp/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 
 export interface PiModelInfo {
@@ -106,6 +107,34 @@ export function allPiModels(): PiModelInfo[] {
     return (models().getModels() as unknown as RawPiModel[]).map((m) => mapModel(m, m.provider ?? ""));
   } catch {
     return [];
+  }
+}
+
+let _modelProviderMap: Map<string, string> | null = null;
+
+/** The provider that owns a given model id (pi catalog ∪ platform catalog
+ * customs). Falls back to a provider-alias fold, else "anthropic". */
+export function providerForModel(modelId: string): string {
+  if (!_modelProviderMap) {
+    _modelProviderMap = new Map();
+    for (const m of allPiModels()) {
+      if (!_modelProviderMap.has(m.id)) _modelProviderMap.set(m.id, m.provider);
+    }
+    for (const [provider, p] of Object.entries(catalog().providers)) {
+      for (const id of Object.keys(p.models)) {
+        if (!_modelProviderMap.has(id)) _modelProviderMap.set(id, provider);
+      }
+    }
+  }
+  return _modelProviderMap.get(modelId) ?? normalizeProviderAlias(modelId) ?? "anthropic";
+}
+
+/** True when a provider has a usable stored/ambient credential (no key exposed). */
+export function hasCredential(storage: AuthStorage, provider: string): boolean {
+  try {
+    return storage.getAuthStatus(provider).configured;
+  } catch {
+    return false;
   }
 }
 
