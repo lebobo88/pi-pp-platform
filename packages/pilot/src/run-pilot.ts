@@ -37,6 +37,7 @@ import { JudgePolicy } from "./judge-policy.js";
 import { emit, type RunContext, type RunPilotOptions, type StageSpec } from "./types.js";
 import { runStage, reArchiveTierDecisions } from "./phases/stage-loop.js";
 import { runBestOfStage } from "./phases/best-of.js";
+import { runBrowserValidationStage } from "./phases/browser-validation.js";
 import { runMissabilityPhase } from "./phases/missability.js";
 import { runMasterPlanPhase } from "./phases/master-plan.js";
 import { runFinalizePhase, type StageReport } from "./phases/finalize.js";
@@ -146,9 +147,11 @@ export class RunPilot {
             break;
           }
           const outcome =
-            stage.bestOf && stage.bestOf >= 2
-              ? await runBestOfStage(ctx, stage, stage.bestOf)
-              : await runStage(ctx, stage);
+            stage.kind === "browser_validation"
+              ? await runBrowserValidationStage(ctx, stage)
+              : stage.bestOf && stage.bestOf >= 2
+                ? await runBestOfStage(ctx, stage, stage.bestOf)
+                : await runStage(ctx, stage);
           stages.push({ kind: stage.kind, outcome });
           if (outcome === "aborted") {
             ctx.finalStatus = "aborted";

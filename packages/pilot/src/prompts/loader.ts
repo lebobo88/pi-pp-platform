@@ -81,12 +81,18 @@ export function tierForModel(model: string | undefined): ClaudeTier | undefined 
 /** Parse `--- yaml --- body`. Returns empty frontmatter when absent. */
 export function parseFrontmatter(md: string): { frontmatter: RoleFrontmatter; body: string } {
   // Normalize a possible UTF-8 BOM and CRLF line endings so the frontmatter
-  // fence matches regardless of how the asset file was saved on disk.
+  // fence matches regardless of how the asset file was saved on disk. Locate
+  // the fences with indexOf rather than a backtracking `[\s\S]*?` regex — the
+  // latter is O(n^2) on prompts that have no closing fence (some executive
+  // agents), which made loading the full library pathologically slow.
   const normalized = md.replace(/^﻿/, "").replace(/\r\n/g, "\n");
-  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(normalized);
-  if (!m) return { frontmatter: {}, body: md };
-  const yamlBlock = m[1]!;
-  const body = m[2] ?? "";
+  if (!normalized.startsWith("---\n")) return { frontmatter: {}, body: md };
+  const close = normalized.indexOf("\n---", 4);
+  if (close < 0) return { frontmatter: {}, body: md };
+  const yamlBlock = normalized.slice(4, close);
+  // Body starts after the closing fence line (skip to the next newline).
+  const afterFence = normalized.indexOf("\n", close + 1);
+  const body = afterFence < 0 ? "" : normalized.slice(afterFence + 1);
   const frontmatter: RoleFrontmatter = {};
   // The agent frontmatter is deliberately flat (name/description/model/tools),
   // so a line-based parse avoids pulling a YAML dependency into a hot path and

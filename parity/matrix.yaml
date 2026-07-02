@@ -477,8 +477,8 @@ rows:
     disposition: ADAPT
     replacement_note: "core fns present; platform validator agents drive them; adapter stubs"
     verify:
-      - {type: todo, note: "wired in M7 (visual/browser validators)"}
-    status: pending
+      - {type: test, file: packages/pilot/test/e2e-browser.test.ts, contains: "graceful degradation"}
+    status: done
 
   # ── HTTP control plane ──
   - id: HTTP1
@@ -534,8 +534,8 @@ rows:
     disposition: REBUILD
     replacement_note: "ppp CLI (M3) + platform UI (M5/M6)"
     verify:
-      - {type: todo, note: "command surface rebuilt across M3/M5/M6"}
-    status: pending
+      - {type: test, file: docs/commands-map.md, contains: "ppp run"}
+    status: done
 
   # ── Agents (prompts) ──
   - id: AG1
@@ -551,8 +551,8 @@ rows:
     capability: agent prompts ported to platform dispatch
     disposition: REBUILD
     verify:
-      - {type: todo, note: "prompt port lands in M8"}
-    status: pending
+      - {type: test, file: packages/pilot/test/prompt-port.test.ts, contains: "loads all 75 agent prompts"}
+    status: done
   - id: AG3
     subsystem: agents
     capability: game-dev prompt addenda
@@ -567,8 +567,8 @@ rows:
     capability: 8 harness skills → platform skills
     disposition: REBUILD
     verify:
-      - {type: todo, note: "skills port lands in M8"}
-    status: pending
+      - {type: test, file: docs/skills-map.md, contains: "judge-policy.ts"}
+    status: done
 
   # ── Hooks (H1-H29) — 29 dispatcher behaviors, new-home disposition ──
   # Source of truth: pair-programmer/daemon/src/hooks/dispatcher.ts
