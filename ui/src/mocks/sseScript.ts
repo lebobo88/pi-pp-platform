@@ -17,54 +17,53 @@ function nowIso(offsetMs: number): string {
   return new Date(Date.parse("2026-07-01T14:14:00.000Z") + offsetMs).toISOString();
 }
 
-/** Per-run stream: a compact live replay of a best-of-3 implementation stage. */
+/**
+ * Per-run stream. Drives the REAL fixture stage/attempt ids so a fetched
+ * RunTree animates in place: the pipeline rail walks spec → design → contracts
+ * → implementation → docs, the implementation stage runs a best-of-3 race with
+ * streaming logs on the winner and a Borda update, and the run finalizes to
+ * `surfaced` (one missability check fails).
+ */
 export function runStreamScript(runId: string): ScriptedFrame[] {
   const frames: ScriptedFrame[] = [];
   const push = (delayMs: number, event: RunSseEvent) => {
     frames.push({ delayMs, event: { ...event, run_id: runId, ts: nowIso(delayMs), seq: seq++ } as RunSseEvent });
   };
 
-  push(400, {
-    type: "stage.started",
-    data: {
-      id: "stg_live_impl",
-      run_id: runId,
-      kind: "implementation",
-      gate_type: "code_style",
-      status: "open",
-      winner_attempt_id: null,
-      started_at: nowIso(400),
-      finished_at: null,
-      notes_json: null,
-    },
-  } as RunSseEvent);
+  const stageMeta = (id: string, kind: string, gate: string) => ({
+    id,
+    run_id: runId,
+    kind,
+    gate_type: gate,
+    status: "open" as const,
+    winner_attempt_id: null,
+    started_at: nowIso(0),
+    finished_at: null,
+    notes_json: null,
+  });
 
-  const cand = [
-    { id: "att_live_a", model: "claude-sonnet-4-6", producer: "claude" },
-    { id: "att_live_b", model: "claude-opus-4-7", producer: "claude" },
-    { id: "att_live_c", model: "gemini-2.5-pro", producer: "gemini" },
+  // Sequential single-attempt stages: spec → design → contracts.
+  const linear: Array<[stage: string, kind: string, gate: string, attempt: string]> = [
+    ["stg_spec", "spec", "spec", "att_spec_1"],
+    ["stg_design", "design", "design", "att_design_2"],
+    ["stg_contracts", "contracts", "contract", "att_contract_1"],
   ];
+  let t = 400;
+  for (const [stage, kind, gate, attempt] of linear) {
+    push(t, { type: "stage.started", data: stageMeta(stage, kind, gate) } as RunSseEvent);
+    push(t + 300, { type: "attempt.output", data: { attempt_id: attempt, stage_id: stage, chunk: `\x1b[34m[${kind}]\x1b[0m generating…\n` } } as RunSseEvent);
+    push(t + 900, { type: "stage.finalized", data: { stage_id: stage, status: "passed", winner_attempt_id: attempt } } as RunSseEvent);
+    t += 1200;
+  }
 
-  cand.forEach((c, i) => {
-    push(700 + i * 120, {
-      type: "attempt.started",
-      data: {
-        id: c.id,
-        stage_id: "stg_live_impl",
-        producer: c.producer,
-        model_id: c.model,
-        prompt_hash: null,
-        artifact_path: null,
-        tokens_in: null,
-        tokens_out: null,
-        cost_usd: null,
-        wall_ms: null,
-        retry_index: 0,
-        parent_attempt_id: null,
-        status: "ok",
-        attempted_tier: c.producer === "claude" ? (i === 1 ? "opus" : "sonnet") : null,
-        created_at: nowIso(700 + i * 120),
-      },
+  // Implementation: best-of-3 race on the real fixture ids.
+  const IMPL = "stg_impl";
+  push(t, { type: "stage.started", data: stageMeta(IMPL, "implementation", "code_style") } as RunSseEvent);
+  const cand = ["att_impl_a", "att_impl_b", "att_impl_c"];
+  cand.forEach((id, i) => {
+    push(t + 200 + i * 120, {
+      type: "attempt.output",
+      data: { attempt_id: id, stage_id: IMPL, chunk: `\x1b[2m[candidate ${i + 1}]\x1b[0m started\n` },
     } as RunSseEvent);
   });
 
@@ -79,82 +78,43 @@ export function runStreamScript(runId: string): ScriptedFrame[] {
     "\x1b[32mself-verify passed\x1b[0m",
   ];
   outputLines.forEach((line, i) => {
-    push(1400 + i * 500, {
+    push(t + 700 + i * 420, {
       type: "attempt.output",
-      data: { attempt_id: "att_live_b", stage_id: "stg_live_impl", chunk: line + "\n" },
+      data: { attempt_id: "att_impl_b", stage_id: IMPL, chunk: line + "\n" },
     } as RunSseEvent);
   });
 
-  push(5200, { type: "budget.tick", data: { scope: `run:${runId}`, tokens_in: 58120, tokens_out: 24230, cost_usd: 1.29 } } as RunSseEvent);
-
-  cand.forEach((c, i) => {
-    push(5400 + i * 150, {
-      type: "attempt.completed",
-      data: {
-        id: c.id,
-        stage_id: "stg_live_impl",
-        producer: c.producer,
-        model_id: c.model,
-        prompt_hash: `ph_${c.id}`,
-        artifact_path: `.harness/live/${c.id}.diff`,
-        tokens_in: 8000 + i * 100,
-        tokens_out: 3800 + i * 120,
-        cost_usd: c.producer === "claude" ? (i === 1 ? 0.379 : 0.083) : 0.066,
-        wall_ms: 70000 + i * 4000,
-        retry_index: 0,
-        parent_attempt_id: null,
-        status: c.id === "att_live_c" ? "needs_review" : "ok",
-        attempted_tier: c.producer === "claude" ? (i === 1 ? "opus" : "sonnet") : null,
-        created_at: nowIso(5400 + i * 150),
-      },
-    } as RunSseEvent);
-  });
-
-  push(6200, {
+  const bordaAt = t + 700 + outputLines.length * 420 + 200;
+  push(bordaAt, { type: "budget.tick", data: { scope: `run:${runId}`, tokens_in: 58120, tokens_out: 24230, cost_usd: 1.29 } } as RunSseEvent);
+  push(bordaAt + 200, {
     type: "borda.updated",
     data: {
-      stage_id: "stg_live_impl",
-      leader_attempt_id: "att_live_b",
+      stage_id: IMPL,
+      leader_attempt_id: "att_impl_b",
       ranking: [
-        { attempt_id: "att_live_b", points: 6, rank: 1 },
-        { attempt_id: "att_live_a", points: 4, rank: 2 },
-        { attempt_id: "att_live_c", points: 2, rank: 3 },
+        { attempt_id: "att_impl_b", points: 6, rank: 1 },
+        { attempt_id: "att_impl_a", points: 4, rank: 2 },
+        { attempt_id: "att_impl_c", points: 2, rank: 3 },
       ],
     },
   } as RunSseEvent);
-
-  cand.forEach((c, i) => {
-    push(6400 + i * 120, {
-      type: "verdict.recorded",
-      data: {
-        id: `vd_${c.id}`,
-        attempt_id: c.id,
-        judge_producer: "codex",
-        judge_model_id: "gpt-5.4",
-        rubric_id: "code-quality@3",
-        outcome: c.id === "att_live_b" ? "pass" : c.id === "att_live_c" ? "revise" : "pass",
-        critique_md: c.id === "att_live_b" ? "Borda winner — complete tests, clean error path." : "Solid but not selected.",
-        score_json: null,
-        cross_vendor: 1,
-        eights_memory_id: null,
-        created_at: nowIso(6400 + i * 120),
-      },
-    } as RunSseEvent);
-  });
-
-  push(7000, {
+  push(bordaAt + 700, {
     type: "stage.finalized",
-    data: { stage_id: "stg_live_impl", status: "passed", winner_attempt_id: "att_live_b" },
+    data: { stage_id: IMPL, status: "passed", winner_attempt_id: "att_impl_b" },
   } as RunSseEvent);
 
-  push(7600, {
+  // Docs stage surfaces on a failing missability check.
+  const docsAt = bordaAt + 1000;
+  push(docsAt, { type: "stage.started", data: stageMeta("stg_docs", "docs", "docs_polish") } as RunSseEvent);
+  push(docsAt + 300, { type: "attempt.output", data: { attempt_id: "att_docs_1", stage_id: "stg_docs", chunk: "\x1b[34m[docs]\x1b[0m drafting release notes…\n" } } as RunSseEvent);
+  push(docsAt + 800, {
     type: "missability.result",
-    data: { check_id: "changelog-present", status: "fail", evidence_path: ".harness/live/missability/changelog.json" },
+    data: { check_id: "changelog-present", status: "fail", evidence_path: ".harness/runs/run_9fK2aLpQ7vX3/missability/changelog.json" },
   } as RunSseEvent);
-
-  push(8200, {
+  push(docsAt + 1100, { type: "stage.finalized", data: { stage_id: "stg_docs", status: "surfaced", winner_attempt_id: null } } as RunSseEvent);
+  push(docsAt + 1500, {
     type: "run.finalized",
-    data: { run_id: runId, status: "surfaced", finished_at: nowIso(8200) },
+    data: { run_id: runId, status: "surfaced", finished_at: nowIso(docsAt + 1500) },
   } as RunSseEvent);
 
   return frames;

@@ -20,9 +20,34 @@ import {
   mockEvolutionProposals,
   mockDoctor,
   mockRunTree,
+  mockCaps,
+  mockJanitor,
+  mockMissabilityChecks,
+  mockReplayBundle,
+  mockProjectDetails,
+  mockMasterPlan,
+  mockAgentsMd,
+  mockConstitution,
 } from "./fixtures";
-import { MOCK_RUN_ID } from "./fixtures/runTree";
+import { MOCK_RUN_ID, mockWinningDiff } from "./fixtures/runTree";
 import { runStreamScript, globalStreamScript, type ScriptedFrame } from "./sseScript";
+import type { ArtifactContent } from "@shared/api-types";
+
+/** Resolve on-disk artifact/candidate content by path (mock). */
+function mockContentFor(path: string): ArtifactContent {
+  if (path.endsWith(".diff")) return { path, kind: "diff", content: mockWinningDiff };
+  if (path.endsWith(".md")) {
+    return {
+      path,
+      kind: "markdown",
+      content: `# ${path.split(/[\\/]/).pop()}\n\n${mockMasterPlan.markdown}`,
+    };
+  }
+  if (path.endsWith(".yaml") || path.endsWith(".json")) {
+    return { path, kind: "text", content: `# ${path}\n(sample contract body served by the mock daemon)` };
+  }
+  return { path, kind: "text", content: `(no preview for ${path})` };
+}
 
 const LATENCY_MS = 140;
 
@@ -53,6 +78,20 @@ function route(method: string, url: URL): Response | null {
   if (p === apiPaths.doctor) return json(mockDoctor);
 
   if (p === apiPaths.projects) return json(mockProjects);
+  // Project sub-resources (master-plan / agents-md / constitution) before the
+  // bare project match.
+  const projMaster = p.match(/^\/api\/v1\/projects\/([^/]+)\/master-plan$/);
+  if (projMaster) return json(mockMasterPlan);
+  const projAgents = p.match(/^\/api\/v1\/projects\/([^/]+)\/agents-md$/);
+  if (projAgents) return json(mockAgentsMd);
+  const projConst = p.match(/^\/api\/v1\/projects\/([^/]+)\/constitution$/);
+  if (projConst) return json(mockConstitution);
+  const projMatch = p.match(/^\/api\/v1\/projects\/([^/]+)$/);
+  if (projMatch) {
+    const path = decode(projMatch[1]!);
+    const detail = mockProjectDetails[path];
+    return detail ? json(detail) : errorResponse(404, `project ${path} not found`);
+  }
 
   if (p === apiPaths.runs) {
     const projectPath = url.searchParams.get("project_path");
@@ -62,6 +101,11 @@ function route(method: string, url: URL): Response | null {
     if (status) rows = rows.filter((r) => r.status === status);
     return json(rows);
   }
+  // Run sub-resources before the bare run match.
+  const runReplay = p.match(/^\/api\/v1\/runs\/([^/]+)\/replay$/);
+  if (runReplay) return json(mockReplayBundle);
+  const runMiss = p.match(/^\/api\/v1\/runs\/([^/]+)\/missability$/);
+  if (runMiss) return json(mockMissabilityChecks);
   const runMatch = p.match(/^\/api\/v1\/runs\/([^/]+)$/);
   if (runMatch) {
     const id = decode(runMatch[1]!);
@@ -71,7 +115,9 @@ function route(method: string, url: URL): Response | null {
 
   if (p === apiPaths.providers) return json(mockProviders);
   if (p === apiPaths.models) return json(mockModels);
+  if (p === apiPaths.budgetCaps) return json(mockCaps);
   if (p === apiPaths.budgets) return json(mockBudgets);
+  if (p === apiPaths.janitor) return json(mockJanitor);
 
   if (p === apiPaths.teams) return json(mockTeams);
   const teamMatch = p.match(/^\/api\/v1\/teams\/([^/]+)$/);
@@ -98,6 +144,11 @@ function route(method: string, url: URL): Response | null {
   }
 
   if (p === apiPaths.evolution) return json(mockEvolutionProposals);
+
+  if (p === "/api/v1/content") {
+    const path = url.searchParams.get("path") ?? "";
+    return json(mockContentFor(path));
+  }
 
   // Mutations: accept and echo. Later agents replace these with real behavior.
   if (method !== "GET" && p.startsWith(apiPaths.base)) {

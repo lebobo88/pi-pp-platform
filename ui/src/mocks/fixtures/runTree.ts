@@ -5,6 +5,8 @@ import type {
   AttemptRow,
   VerdictRow,
   ArtifactRow,
+  MissabilityCheckRow,
+  ReplayBundle,
 } from "@shared/api-types";
 
 /**
@@ -421,6 +423,32 @@ const artifacts: ArtifactRow[] = [
 ];
 
 export const mockRunTree: RunTree = { run, stages, attempts, verdicts, artifacts };
+
+/** Section-6 missability check results for the run. */
+export const mockMissabilityChecks: MissabilityCheckRow[] = [
+  { id: "mc_1", run_id: MOCK_RUN_ID, check_id: "changelog-present", status: "fail", evidence_path: ".harness/runs/run_9fK2aLpQ7vX3/missability/changelog.json", created_at: "2026-07-01T14:13:57.000Z" },
+  { id: "mc_2", run_id: MOCK_RUN_ID, check_id: "tests-cover-new-behavior", status: "pass", evidence_path: ".harness/runs/run_9fK2aLpQ7vX3/missability/tests.json", created_at: "2026-07-01T14:13:57.000Z" },
+  { id: "mc_3", run_id: MOCK_RUN_ID, check_id: "no-secrets-in-diff", status: "pass", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
+  { id: "mc_4", run_id: MOCK_RUN_ID, check_id: "acceptance-criteria-traced", status: "pass", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
+  { id: "mc_5", run_id: MOCK_RUN_ID, check_id: "rollback-documented", status: "skipped", evidence_path: null, created_at: "2026-07-01T14:13:57.000Z" },
+];
+
+/** Reproducible-replay bundle for the run. */
+export const mockReplayBundle: ReplayBundle = {
+  run_id: MOCK_RUN_ID,
+  head_sha: run.head_sha,
+  tree_dirty_hash: run.tree_dirty_hash,
+  cli_versions: { node: "v22.20.0", git: "2.45.1", claude: "claude 2.1.4", codex: "codex 0.34.0", gemini: "gemini 0.9.2" },
+  cli_flags: null,
+  stages: stages.map((s) => ({
+    stage_id: s.id,
+    kind: s.kind,
+    gate_type: s.gate_type,
+    prompt_hashes: attempts.filter((a) => a.stage_id === s.id).map((a) => a.prompt_hash ?? "").filter(Boolean),
+  })),
+  artifacts: artifacts.map((a) => ({ path: a.path, sha256: a.sha256, bytes: a.bytes })),
+  generated_at: "2026-07-01T14:14:10.000Z",
+};
 
 /** Unified diff shown on the implementation stage's winning attempt. */
 export const mockWinningDiff = `diff --git a/src/checkout/order.ts b/src/checkout/order.ts

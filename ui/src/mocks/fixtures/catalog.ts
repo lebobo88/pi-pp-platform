@@ -3,12 +3,15 @@ import type {
   ProviderStatus,
   ModelInfo,
   BudgetEntry,
+  BudgetCap,
   TeamSpec,
+  TeamStage,
   ProfileSpec,
   RubricInfo,
   EvolutionProposal,
   DoctorReport,
   RunSummary,
+  JanitorReport,
 } from "@shared/api-types";
 import { MOCK_RUN_ID, mockRunTree } from "./runTree";
 
@@ -46,6 +49,7 @@ export const mockRunSummaries: RunSummary[] = [
     status: "surfaced",
     started_at: "2026-07-01T14:02:11.000Z",
     finished_at: null,
+    cost_usd: 1.29,
   },
   {
     id: "run_7bQ1mNr4tZ9",
@@ -56,6 +60,7 @@ export const mockRunSummaries: RunSummary[] = [
     status: "complete",
     started_at: "2026-06-29T09:41:00.000Z",
     finished_at: "2026-06-29T09:58:12.000Z",
+    cost_usd: 0.42,
   },
   {
     id: "run_3xC8wDe2sK5",
@@ -66,6 +71,7 @@ export const mockRunSummaries: RunSummary[] = [
     status: "complete",
     started_at: "2026-06-28T16:20:00.000Z",
     finished_at: "2026-06-28T16:31:40.000Z",
+    cost_usd: 0.11,
   },
   {
     id: "run_5vB9kFg6hL2",
@@ -76,6 +82,7 @@ export const mockRunSummaries: RunSummary[] = [
     status: "crashed",
     started_at: "2026-06-30T22:15:00.000Z",
     finished_at: "2026-06-30T22:19:03.000Z",
+    cost_usd: 0.88,
   },
 ];
 
@@ -123,6 +130,22 @@ export const mockModels: ModelInfo[] = [
   { id: "gemini-2.5-flash", vendor: "google", tier: null, input_per_1m: 0.3, output_per_1m: 0.9 },
 ];
 
+export const mockCaps: BudgetCap[] = [
+  { scope: "day", limit_usd: 8, warn_pct: 0.8, block_pct: 1.0 },
+  { scope: "run", limit_usd: 3, warn_pct: 0.8, block_pct: 1.0 },
+];
+
+export const mockJanitor: JanitorReport = {
+  ran_at: "2026-07-01T03:00:00.000Z",
+  swept: 14,
+  reclaimed_bytes: 48_372_110,
+  entries: [
+    { path: ".harness/candidates/run_5vB9kFg6hL2", kind: "abandoned_worktree", bytes: 22_100_000, age_days: 2 },
+    { path: ".harness/runs/run_old_a/logs", kind: "stale_logs", bytes: 14_200_000, age_days: 31 },
+    { path: ".harness/tmp/critique-cache", kind: "tmp", bytes: 12_072_110, age_days: 7 },
+  ],
+};
+
 const DAY = "2026-07-01";
 export const mockBudgets: BudgetEntry[] = [
   { scope: `day:${DAY}`, tokens_in: 184300, tokens_out: 78210, cost_usd: 6.42, updated_at: "2026-07-01T14:13:59.000Z" },
@@ -131,6 +154,49 @@ export const mockBudgets: BudgetEntry[] = [
   { scope: "tier:opus", tokens_in: 29900, tokens_out: 13430, cost_usd: 0.86, updated_at: "2026-07-01T14:12:44.000Z" },
   { scope: "tier:sonnet", tokens_in: 21450, tokens_out: 9180, cost_usd: 0.20, updated_at: "2026-07-01T14:10:11.000Z" },
   { scope: "tier:haiku", tokens_in: 6770, tokens_out: 1620, cost_usd: 0.02, updated_at: "2026-07-01T14:13:59.000Z" },
+];
+
+/** Terse team factory for the long tail of built-in teams. */
+function genTeam(
+  name: string,
+  description: string,
+  stageSpecs: Array<[kind: string, gate: string, tier?: "cross_vendor" | "same_vendor"]>,
+  taxonomy: string[],
+): TeamSpec {
+  const stages: TeamStage[] = stageSpecs.map(([kind, gate, tier]) => ({
+    kind,
+    gate_type: gate,
+    generator: { agent: `${kind.replace(/_/g, "-")}-author`, primary: "claude" },
+    judge: { tier: tier ?? (gate === "security" || gate === "contract" || gate === "spec" ? "cross_vendor" : "same_vendor") },
+  }));
+  return { name, description, origin: "builtin", stages, taxonomy_required: taxonomy };
+}
+
+/** The long tail — compact built-in teams so the Library shows a full roster. */
+const MORE_TEAMS: TeamSpec[] = [
+  genTeam("refactor-team", "Invariants → behavior-preserving refactor → regression guard (TDD).", [["invariants", "spec"], ["refactor", "code_style"], ["tests", "code_style"]], ["4.8", "4.10"]),
+  genTeam("ux-team", "IA → flows → screen-state matrix → wireframes → a11y plan.", [["ia_map", "design"], ["user_flow", "design"], ["wireframes", "design"], ["a11y_plan", "design"]], ["4.4"]),
+  genTeam("design-system-team", "Design tokens → component specs → preview artifacts.", [["design_tokens", "design"], ["component_specs", "design"]], ["4.4", "4.7"]),
+  genTeam("ai-controls-team", "AI system spec → eval suite → tool-permission matrix → HITL workflow.", [["ai_system_spec", "spec"], ["eval_suite", "code_style"], ["tool_permissions", "security"], ["hitl_workflow", "design"]], ["4.15"]),
+  genTeam("data-team", "ERD → data dictionary → lineage → retention → migration plan.", [["erd", "design"], ["data_dictionary", "design"], ["lineage_map", "design"], ["migration_plan", "contract"]], ["4.5"]),
+  genTeam("discovery-team", "Research brief → personas → journey map → glossary.", [["research_brief", "spec"], ["personas", "spec"], ["journey_map", "design"]], ["4.2"]),
+  genTeam("strategy-team", "Vision brief → business case → OKRs → kill-criteria → risk register.", [["vision_brief", "spec"], ["business_case", "spec"], ["okrs", "spec"], ["risk_register", "security"]], ["4.1", "4.14"]),
+  genTeam("governance-team", "RACI → decision log → review forums → cadence.", [["raci", "design"], ["decision_log", "design"]], ["4.14"]),
+  genTeam("ops-team", "SLOs → telemetry taxonomy → dashboards → alerts → runbooks.", [["slo_doc", "spec"], ["telemetry_taxonomy", "design"], ["runbook", "docs_polish"]], ["4.12"]),
+  genTeam("release-team", "Rollout → rollback → migration runbook → comms.", [["rollout_plan", "spec"], ["rollback_plan", "contract"], ["migration_runbook", "docs_polish"]], ["4.11"]),
+  genTeam("retirement-team", "EOL plan → migration guide → archive/retention → sunset comms.", [["eol_plan", "spec"], ["migration_guide", "docs_polish"], ["sunset_comms", "docs_polish"]], ["4.16"]),
+  genTeam("deep-reasoning-team", "Fable-tier deep-reasoning pipeline for high-stakes spec + architecture.", [["deep_spec", "spec", "cross_vendor"], ["deep_design", "design", "cross_vendor"]], ["4.3", "4.6"]),
+  genTeam("game-feature-team", "GDD → mechanic spec → level greybox → encounter design → implementation.", [["mechanic_spec", "spec"], ["level_greybox", "design"], ["encounter_design", "design"], ["implementation", "code_style"]], ["4.3", "4.4", "4.8"]),
+  genTeam("game-live-ops-team", "Season plan → economy spreadsheet → progression curve → loot tables.", [["season_plan", "spec"], ["economy_spreadsheet", "design"], ["loot_table", "design"]], ["4.5", "4.11"]),
+  genTeam("game-accessibility-team", "GAG/XAG/APX-grounded accessibility plan for games.", [["accessibility_plan", "design", "cross_vendor"]], ["4.4"]),
+  genTeam("game-cert-team", "Cert submission packet → perf budget → platform TRC checklist.", [["cert_submission_packet", "spec"], ["performance_budget", "code_style"]], ["4.10", "4.11"]),
+  genTeam("api-platform-team", "OpenAPI contract → event catalog → threat model → contract tests.", [["openapi", "contract"], ["event_catalog", "contract"], ["threat_model", "security"], ["contract_tests", "code_style"]], ["4.7", "4.9", "4.10"]),
+  genTeam("perf-team", "Performance budget → profile → optimization → verification.", [["performance_budget", "spec"], ["performance_profile", "code_style"], ["optimization", "code_style"]], ["4.10"]),
+  genTeam("docs-team", "User docs → runbook → changelog → release notes.", [["user_doc", "docs_polish"], ["runbook", "docs_polish"], ["changelog", "docs_polish"]], ["4.13"]),
+  genTeam("privacy-team", "PIA → data-flow → retention/deletion → DPIA sign-off.", [["pia", "security"], ["data_flow", "security"], ["retention_deletion", "security"]], ["4.9"]),
+  genTeam("mobile-team", "Mobile IA → flows → platform a11y → implementation.", [["ia_map", "design"], ["user_flow", "design"], ["implementation", "code_style"]], ["4.4", "4.8"]),
+  genTeam("sdk-team", "Public API surface → semver contract → examples → reference docs.", [["route_inventory", "contract"], ["contract_tests", "code_style"], ["user_doc", "docs_polish"]], ["4.7", "4.13"]),
+  genTeam("embedded-team", "HAL design → memory budget → RTOS task map → implementation.", [["tech_design_doc", "design"], ["performance_budget", "code_style"], ["implementation", "code_style"]], ["4.6", "4.10"]),
 ];
 
 export const mockTeams: TeamSpec[] = [
@@ -171,6 +237,7 @@ export const mockTeams: TeamSpec[] = [
       { kind: "controls", gate_type: "security", generator: { agent: "security-reviewer", primary: "claude" }, judge: { tier: "cross_vendor", rubric: "owasp-asvs@2" } },
     ],
   },
+  ...MORE_TEAMS,
 ];
 
 export const mockProfiles: ProfileSpec[] = [

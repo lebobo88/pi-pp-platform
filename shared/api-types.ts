@@ -182,6 +182,12 @@ export interface RunSummary {
   status: RunStatus;
   started_at: string;
   finished_at: string | null;
+  /**
+   * Rolling run cost. Not a `runs` column — the daemon LEFT JOINs
+   * budgets(scope="run:<id>") into the list projection. Optional so a bare
+   * listing without the join still type-checks.
+   */
+  cost_usd?: number | null;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -347,6 +353,90 @@ export interface DoctorReport {
     chrome_mcp: { status: string; note: string };
   };
   db_path: string;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Project detail + managed documents (M5b read-only screens)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** Presence/freshness of a harness-managed document (CONSTITUTION/AGENTS.md/…). */
+export interface DocStatus {
+  present: boolean;
+  sha: string | null;
+  updated_at: string | null;
+  /** Number of managed sections, when applicable (master plan / AGENTS.md). */
+  sections: number | null;
+}
+
+/** A managed markdown document's full body (fetched for the panel view). */
+export interface DocContent {
+  path: string;
+  markdown: string;
+  sha: string;
+  updated_at: string;
+}
+
+/** Project overview enriched with managed-document status. */
+export interface ProjectDetail extends Project {
+  active_profile: string | null;
+  constitution: DocStatus;
+  agents_md: DocStatus;
+  master_plan: DocStatus;
+  recent_runs: RunSummary[];
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Budget caps
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** A configured spend cap for a budget scope prefix (read-only in M5b). */
+export interface BudgetCap {
+  /** Scope prefix the cap applies to: "day" | "run" | "model" | "tier". */
+  scope: string;
+  limit_usd: number;
+  /** Fraction (0..1) at which the harness downgrades the model tier. */
+  warn_pct: number;
+  /** Fraction (0..1) at which the harness blocks pending HITL. */
+  block_pct: number;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Replay bundle — mirror daemon/src/orchestrator/replay.ts reconstruction
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export interface ReplayBundle {
+  run_id: string;
+  head_sha: string | null;
+  tree_dirty_hash: string | null;
+  cli_versions: Record<string, string | null>;
+  cli_flags: Record<string, unknown> | null;
+  stages: Array<{
+    stage_id: string;
+    kind: string;
+    gate_type: string;
+    prompt_hashes: string[];
+  }>;
+  artifacts: Array<{ path: string; sha256: string; bytes: number }>;
+  generated_at: string;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Janitor report — mirror daemon/src/orchestrator/janitor.ts
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export interface JanitorReport {
+  ran_at: string;
+  swept: number;
+  reclaimed_bytes: number;
+  entries: Array<{ path: string; kind: string; bytes: number; age_days: number }>;
+}
+
+/** Raw text body of an on-disk artifact / candidate output (by path). */
+export interface ArtifactContent {
+  path: string;
+  /** "diff" | "markdown" | "text" | "json" | … (viewer hint). */
+  kind: string;
+  content: string;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -542,16 +632,22 @@ export const apiPaths = {
 
   projects: `${API_BASE}/projects`,
   project: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}`,
+  projectMasterPlan: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/master-plan`,
+  projectAgentsMd: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/agents-md`,
+  projectConstitution: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/constitution`,
 
   runs: `${API_BASE}/runs`,
   run: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}`,
   runEvents: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
+  runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
+  runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
 
   providers: `${API_BASE}/providers`,
   models: `${API_BASE}/models`,
 
   budgets: `${API_BASE}/budgets`,
   budget: (scope: string) => `${API_BASE}/budgets/${encodeURIComponent(scope)}`,
+  budgetCaps: `${API_BASE}/budgets/caps`,
 
   teams: `${API_BASE}/teams`,
   team: (name: string) => `${API_BASE}/teams/${encodeURIComponent(name)}`,
@@ -564,6 +660,11 @@ export const apiPaths = {
 
   evolution: `${API_BASE}/evolution/proposals`,
   evolutionProposal: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}`,
+
+  janitor: `${API_BASE}/system/janitor`,
+
+  /** Fetch a file/artifact body by its (project-relative) path. */
+  content: (path: string) => `${API_BASE}/content?path=${encodeURIComponent(path)}`,
 
   /** Global SSE stream. */
   events: `${API_BASE}/events`,

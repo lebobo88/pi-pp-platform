@@ -1,7 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
-import { apiPaths, type RunSummary, type RunTree, type RunStatus } from "@shared/api-types";
+import {
+  apiPaths,
+  type RunSummary,
+  type RunTree,
+  type RunStatus,
+  type ReplayBundle,
+  type MissabilityCheckRow,
+} from "@shared/api-types";
 
 export interface RunsFilter {
   project_path?: string;
@@ -29,6 +36,22 @@ export function useRun(runId: string | undefined) {
   return useQuery({
     queryKey: qk.run(runId ?? ""),
     queryFn: ({ signal }) => api.get<RunTree>(apiPaths.run(runId!), { signal }),
+    enabled: !!runId,
+  });
+}
+
+export function useRunReplay(runId: string | undefined) {
+  return useQuery({
+    queryKey: qk.runReplay(runId ?? ""),
+    queryFn: ({ signal }) => api.get<ReplayBundle>(apiPaths.runReplay(runId!), { signal }),
+    enabled: !!runId,
+  });
+}
+
+export function useRunMissability(runId: string | undefined) {
+  return useQuery({
+    queryKey: qk.runMissability(runId ?? ""),
+    queryFn: ({ signal }) => api.get<MissabilityCheckRow[]>(apiPaths.runMissability(runId!), { signal }),
     enabled: !!runId,
   });
 }

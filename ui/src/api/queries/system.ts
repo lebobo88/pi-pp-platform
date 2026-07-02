@@ -5,6 +5,7 @@ import {
   apiPaths,
   type DoctorReport,
   type EvolutionProposal,
+  type JanitorReport,
 } from "@shared/api-types";
 
 export function useHealth() {
@@ -27,5 +28,12 @@ export function useEvolutionProposals() {
   return useQuery({
     queryKey: qk.evolution,
     queryFn: ({ signal }) => api.get<EvolutionProposal[]>(apiPaths.evolution, { signal }),
+  });
+}
+
+export function useJanitor() {
+  return useQuery({
+    queryKey: qk.janitor,
+    queryFn: ({ signal }) => api.get<JanitorReport>(apiPaths.janitor, { signal }),
   });
 }

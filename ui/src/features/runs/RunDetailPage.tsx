@@ -1,0 +1,110 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router";
+import { Page } from "@/layout/Page";
+import { Tabs } from "@/components/Tabs";
+import { EmptyState } from "@/components/EmptyState";
+import { useRun } from "@/api/queries/runs";
+import { useRunStream } from "@/stores/useRunStream";
+import { useLiveRunOverlay } from "@/stores/useLiveRun";
+import { buildPipeline } from "@/lib/runModel";
+import { RunHeader } from "./components/RunHeader";
+import { StagePipeline } from "./components/StagePipeline";
+import { StageDetail } from "./components/StageDetail";
+import { BestOfBoard } from "./components/BestOfBoard";
+import {
+  ArtifactsPanel,
+  TaxonomyPanel,
+  MissabilityPanel,
+  RunBudgetPanel,
+  ReplayPanel,
+} from "./components/panels";
+
+type TabId = "pipeline" | "candidates" | "artifacts" | "taxonomy" | "missability" | "budget" | "replay";
+
+export function RunDetailPage() {
+  const { runId } = useParams();
+  const { data: tree, isLoading, error } = useRun(runId);
+  // Drive the live overlay (mock mode animates via the scripted SSE replay).
+  const streamStatus = useRunStream(runId);
+  const overlay = useLiveRunOverlay(runId ?? "");
+
+  const [tab, setTab] = useState<TabId>("pipeline");
+  const [selectedStage, setSelectedStage] = useState<string | null>(null);
+  const pinnedRef = useRef(false);
+
+  const pipeline = useMemo(() => (tree ? buildPipeline(tree, overlay) : []), [tree, overlay]);
+
+  // Default selection = first stage; auto-follow the running stage until the
+  // user clicks a node (then stay pinned).
+  useEffect(() => {
+    if (!tree) return;
+    if (selectedStage == null && pipeline.length > 0) {
+      setSelectedStage(pipeline[0]!.stageId);
+    }
+    if (!pinnedRef.current) {
+      const running = pipeline.find((n) => n.state === "running");
+      if (running && running.stageId !== selectedStage) setSelectedStage(running.stageId);
+    }
+  }, [tree, pipeline, selectedStage]);
+
+  const selectStage = (id: string) => {
+    pinnedRef.current = true;
+    setSelectedStage(id);
+  };
+
+  if (isLoading) {
+    return (
+      <Page title="Run">
+        <EmptyState title="Loading run…" compact />
+      </Page>
+    );
+  }
+  if (error || !tree) {
+    return (
+      <Page title="Run">
+        <EmptyState title="Run not found" description={runId} />
+      </Page>
+    );
+  }
+
+  const bestOfCount = pipeline.filter((n) => n.isBestOf).length;
+
+  return (
+    <Page title="Run" description={<span className="mono">{tree.run.id}</span>} className="space-y-4">
+      <RunHeader tree={tree} overlay={overlay} streamStatus={streamStatus} />
+
+      <Tabs
+        active={tab}
+        onChange={(t) => setTab(t as TabId)}
+        items={[
+          { id: "pipeline", label: "Pipeline" },
+          { id: "candidates", label: "Candidates", count: bestOfCount || undefined },
+          { id: "artifacts", label: "Artifacts", count: tree.artifacts.length || undefined },
+          { id: "taxonomy", label: "Taxonomy" },
+          { id: "missability", label: "Missability" },
+          { id: "budget", label: "Budget" },
+          { id: "replay", label: "Replay" },
+        ]}
+      />
+
+      {tab === "pipeline" && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+          <StagePipeline nodes={pipeline} selectedStageId={selectedStage} onSelect={selectStage} />
+          <StageDetail
+            tree={tree}
+            overlay={overlay}
+            stageId={selectedStage}
+            onOpenCandidates={() => setTab("candidates")}
+          />
+        </div>
+      )}
+
+      {tab === "candidates" && <BestOfBoard tree={tree} overlay={overlay} />}
+      {tab === "artifacts" && <ArtifactsPanel tree={tree} />}
+      {tab === "taxonomy" && <TaxonomyPanel tree={tree} />}
+      {tab === "missability" && <MissabilityPanel runId={tree.run.id} />}
+      {tab === "budget" && <RunBudgetPanel tree={tree} />}
+      {tab === "replay" && <ReplayPanel runId={tree.run.id} />}
+    </Page>
+  );
+}

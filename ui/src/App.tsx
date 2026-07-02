@@ -4,22 +4,19 @@ import { createQueryClient } from "@/api/queryClient";
 import { GlobalEvents } from "@/api/GlobalEvents";
 import { AppShell } from "@/layout/AppShell";
 import { ToastViewport } from "@/components/Toast";
-import {
-  DashboardPage,
-  ProjectsPage,
-  RunsPage,
-  NewRunPage,
-  RunDetailPage,
-  ProvidersPage,
-  BudgetsPage,
-  EvolutionPage,
-  LibraryTeamsPage,
-  LibraryRubricsPage,
-  LibraryProfilesPage,
-  SystemPage,
-  NotFoundPage,
-} from "@/routes/stubs";
+import { NewRunPage, EvolutionPage, NotFoundPage } from "@/routes/stubs";
 import { KitchenSinkPage } from "@/routes/KitchenSink";
+import { DashboardPage } from "@/features/dashboard/DashboardPage";
+import { ProjectsPage } from "@/features/projects/ProjectsPage";
+import { ProjectDetailPage } from "@/features/projects/ProjectDetailPage";
+import { RunsPage } from "@/features/runs/RunsPage";
+import { RunDetailPage } from "@/features/runs/RunDetailPage";
+import { ProvidersPage } from "@/features/providers/ProvidersPage";
+import { BudgetsPage } from "@/features/budgets/BudgetsPage";
+import { TeamsPage } from "@/features/library/TeamsPage";
+import { RubricsPage } from "@/features/library/RubricsPage";
+import { ProfilesPage } from "@/features/library/ProfilesPage";
+import { SystemPage } from "@/features/system/SystemPage";
 
 const queryClient = createQueryClient();
 
@@ -29,6 +26,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <DashboardPage /> },
       { path: "/projects", element: <ProjectsPage /> },
+      { path: "/projects/:projectPath", element: <ProjectDetailPage /> },
       { path: "/runs", element: <RunsPage /> },
       { path: "/runs/new", element: <NewRunPage /> },
       { path: "/runs/:runId", element: <RunDetailPage /> },
@@ -36,9 +34,9 @@ const router = createBrowserRouter([
       { path: "/budgets", element: <BudgetsPage /> },
       { path: "/evolution", element: <EvolutionPage /> },
       { path: "/library", element: <Navigate to="/library/teams" replace /> },
-      { path: "/library/teams", element: <LibraryTeamsPage /> },
-      { path: "/library/rubrics", element: <LibraryRubricsPage /> },
-      { path: "/library/profiles", element: <LibraryProfilesPage /> },
+      { path: "/library/teams", element: <TeamsPage /> },
+      { path: "/library/rubrics", element: <RubricsPage /> },
+      { path: "/library/profiles", element: <ProfilesPage /> },
       { path: "/system", element: <SystemPage /> },
       { path: "/kitchen-sink", element: <KitchenSinkPage /> },
       { path: "*", element: <NotFoundPage /> },
