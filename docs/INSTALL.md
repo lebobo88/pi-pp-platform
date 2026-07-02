@@ -44,13 +44,16 @@ VITE_MOCK=1 pnpm -F @pp/ui dev      # in-browser mock daemon, http://localhost:5
 
 ## Provider keys
 
-The harness talks to three model vendors through the pi APIs. Set keys from the
-UI (**Providers & Models → Set key**, write-only) or via the engine's credential
-store.
+The harness talks to three model vendors (Anthropic, OpenAI, Google) through the
+pi APIs. **Live runs require at least one provider key; cross-vendor judging
+requires two, and full parity requires all three.** Without any keys the platform
+still works fully in **demo/mock mode** (the deterministic fake engine).
 
-`TODO(M5c/M5d)`: the exact server key-storage location and any file-based
-fallback are finalized as the server key-management path lands — set keys through
-the UI once `ppd` is running.
+Set keys from the UI (**Providers & Models → Set key**). Keys are **write-only**:
+they are sent to the daemon once and never returned — the UI only ever shows a
+masked fingerprint. The engine persists them via its credential store
+(`AuthStorage`) at `%USERPROFILE%\.pi-pp-platform\auth.json` (Windows) /
+`~/.pi-pp-platform/auth.json` (POSIX). **Delete** a key from the same card.
 
 **What you get with how many keys:**
 
@@ -94,7 +97,8 @@ All configuration is via `PP_*` environment variables. Values verified against
 | `PP_COPILOT_FALLBACK` | _off_ | Copilot-mirror tier fallback behavior. |
 | `PP_STRICT_AGENT_TYPE` | _off_ | Strict agent-type validation. |
 | `PP_EIGHTS_DAEMON` | _(unset)_ | TheEights daemon endpoint (only relevant when `PP_ECOSYSTEM` is on). |
-| `PP_MAX_CONCURRENT_RUNS` | — | `TODO(M5d)`: run-concurrency cap is **not yet implemented**; the variable is documented here for forward-compatibility but has no effect today. |
+| `PP_LLM` | `pi` | Set to `fake` to use the deterministic fake engine (demo mode / offline). Any other value uses the real pi engine. |
+| `PP_MAX_CONCURRENT_RUNS` | `2` | Max simultaneous runs the `RunSupervisor` executes; extra runs are FIFO-queued and emit a `run.queued` event, then start when a slot frees. |
 
 ## MCP registration (`@pp/mcp-adapter`)
 
@@ -118,6 +122,34 @@ best-of-worktree, and ecosystem tools are registered but return a structured
 `not_available_in_adapter` error — the adapter is a read/record door, not a full
 run driver.
 
-`TODO(M7)`: hook event wiring, the autogenesis LLM analyzer, and the
-visual/browser validation steps are completed in M7; sections of the guide that
-reference them are marked accordingly.
+## Verify the install
+
+```bash
+# Demo mode — real UI + server on the fake engine, no API keys:
+pnpm demo                                   # → http://127.0.0.1:7878
+
+# Read-path + full-run integration smoke against a real ppd:
+pnpm -F @pp/server build
+PP_INTEGRATION=1 pnpm -F @pp/ui test:integration
+```
+
+## Live golden run
+
+Once at least one provider key is set (Providers UI), you can do a real
+(non-fake) run:
+
+```bash
+# Point the engine at real models. Keep it cheap: single mode, a scratch
+# project, and a tight day cap so a stray loop can't run up a bill.
+PP_LIVE=1 node packages/pilot/dist/bin/ppp.js run \
+  --project /path/to/scratch-project \
+  --mode single \
+  --request "Add a greeting helper."
+```
+
+- Use a throwaway git project (a clean tree with one commit), not a real repo.
+- Set a small **day cap** in the Budgets screen first; the run downgrades the
+  model tier at 80% and blocks at 100%.
+- Prefer cheap tiers (haiku/sonnet) via the tier cap in the launch wizard.
+- With fewer than two provider keys, cross-vendor gates surface the run for
+  review rather than self-certifying (see [Provider keys](#provider-keys)).

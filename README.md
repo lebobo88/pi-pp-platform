@@ -8,9 +8,10 @@ CLIs**. Generation and cross-vendor judging happen through the pi model APIs
 (OpenAI, Google, Anthropic) instead of shelling out to vendor CLIs, and the whole
 platform is driven from a web UI plus a small set of local binaries.
 
-> Status: pre-1.0, under active milestone development. See the
-> [milestone status](#milestone-status) table — sections that depend on
-> in-flight work are marked `TODO(M5d/M7/M8)` throughout these docs.
+> Status: pre-1.0. Milestones M1–M7 are complete (harness port, pi engine,
+> pilot lifecycle, best-of/teams/forums, live server run-control, the full UI,
+> and the 29-hook parity layer); M8 is the closing parity-audit + docs pass. See
+> the [milestone status](#milestone-status) table.
 
 ## What it is
 
@@ -76,30 +77,33 @@ pnpm install
 # 2. Build everything
 pnpm -r build
 
-# 3a. Demo the UI with no server or API keys — the in-browser mock daemon
-#     serves fixtures and replays a scripted, animated run:
+# 3a. Demo mode — real UI + real server driven by the fake engine (no API keys):
+#     builds ui + server and boots ppd with PP_LLM=fake so you can launch a run
+#     end to end offline.
+pnpm demo            # → http://127.0.0.1:7878
+
+# 3b. UI-only mock mode — the in-browser mock daemon serves fixtures and replays
+#     a scripted, animated run (no server):
 VITE_MOCK=1 pnpm -F @pp/ui dev      # → http://localhost:5273
 
-# 3b. Or run the real control-plane server (serves the built UI when PP_UI_DIST
-#     points at ui/dist):
-node packages/server/dist/bin/ppd.js         # → http://127.0.0.1:7878
-#     (installed as the `ppd` binary once packages are linked)
+# 3c. Full server (serves the built UI when PP_UI_DIST points at ui/dist):
+pnpm start           # builds, then boots ppd on http://127.0.0.1:7878
 ```
 
 Provider API keys can be set from the UI (**Providers & Models → Set key**,
 write-only) or through the engine's credential store. Full cross-vendor judging
 needs keys for all three vendors (OpenAI, Google, Anthropic); with fewer, the
-harness degrades gracefully (see [INSTALL.md](docs/INSTALL.md#provider-keys)).
+harness degrades gracefully, and with none it still runs in demo/mock mode
+(see [INSTALL.md](docs/INSTALL.md#provider-keys)).
 
 The `ppp` binary (`@pp/pilot`) drives a run from the command line; `ppd`
 (`@pp/server`) hosts the API + UI. See [docs/INSTALL.md](docs/INSTALL.md) for the
 full setup and [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for a screen-by-screen
 tour and the run-lifecycle explainer.
 
-> `TODO(M5d)`: run **control** (launch / abort / retry / gate) over REST is not
-> wired to the pilot yet — the server returns `501` for those routes until M5d.
-> Read-only views, library, budgets, and provider key management are live. The
-> UI is fully functional today against `VITE_MOCK=1`.
+Run **control** (launch / abort / retry / gate) is live over REST via the
+in-process `RunSupervisor` (concurrency cap, FIFO queue, budget tripwires), and
+the pilot's event bus is bridged to SSE so the run view animates in real time.
 
 ## Milestone status
 
@@ -108,20 +112,21 @@ tour and the run-lifecycle explainer.
 | M1 | Scaffold workspace; port daemon as `@pp/core` | `4d58719` | ✅ done |
 | M2 | `@pp/engine` — pi generate/critique/doctor + fakes | `11a3059` | ✅ done |
 | M3 | `@pp/pilot` — RunPilot 9-phase lifecycle + `ppp` | `4f55439` | ✅ done |
-| M5a | UI foundation — contract, tokens, primitives, SSE/query layer, mock API | `b467fe2` | ✅ done |
-| M5b | UI read-only feature screens + animated run view | `59cf230` | ✅ done |
+| M4 | Best-of-N + teams (26) + forums (10) + TDD/validator gates | `9699abb` | ✅ done |
+| M5a–b | UI foundation + read-only feature screens + animated run view | `b467fe2` / `59cf230` | ✅ done |
 | M5c | `@pp/server` — REST/SSE foundation, schema v8, key mgmt | `10974b9` | ✅ done |
+| M5d | Run-control live — `RunSupervisor` (concurrency/abort/budget), retry/gate, SSE bridge | `4fdf549` | ✅ done |
+| M5e–g | UI↔server contract reconciliation; live-daemon smoke; demo/start + maxParamLength | `302bb7f` / `01cdafb` / `18ceaac` | ✅ done |
+| M5i | Full-run UI E2E against the live daemon (wizard→run→SSE→abort) | `9618604` | ✅ done |
 | M6 / M6.1 | UI control plane — wizard, run actions, keys, evolution, caps | `2a1d2a7` / `ffb0ec0` | ✅ done |
+| M7 | Hooks parity (29), autogenesis wiring, visual/browser, prompt port (75) | `e192fb2` / `f52fca9` | ✅ done |
 | M7a | `@pp/mcp-adapter` — pp_harness MCP server | `6594efc` | ✅ done |
-| M8a | Parity matrix + audit scaffold; ecosystem guard (default off) | `1efc912` | ✅ done |
-| M4 | Best-of-N + teams + forums + TDD/validators end-to-end | — | 🚧 `TODO(M4)` |
-| M5d | Pilot ↔ server run-control wiring (launch/abort/retry/gate) | — | 🚧 `TODO(M5d)` |
-| M7 | Hooks parity (29), ecosystem, evolution LLM, visual/browser | — | 🚧 `TODO(M7)` |
-| M8 | Parity audit close-out, prompt port (75), docs | — | 🚧 `TODO(M8)` |
+| M8a–b | Parity matrix + audit scaffold; ecosystem guard; docs | `1efc912` / `da85f68` | ✅ done |
+| M8 | Parity audit close-out + final docs sweep | — | 🚧 in progress |
 
-(Commit refs are from `git log`; the table is a snapshot and the final M8 pass
-will refresh it.)
+(Commit refs are from `git log`. M1–M7 are complete; M8 is the closing parity +
+docs pass.)
 
 ## License
 
-TODO(M8): license not yet declared.
+License: TBD by owner.

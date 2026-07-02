@@ -3,11 +3,12 @@
 A screen-by-screen tour of the web UI, followed by a plain-language explainer of
 what actually happens when you launch a run.
 
-> The UI is fully usable today in **mock mode** (`VITE_MOCK=1 pnpm -F @pp/ui dev`),
-> which serves fixtures and replays a scripted, animated run so you can explore
-> every screen without a server or API keys. Against the real server, launch/abort/
-> retry/gate are `TODO(M5d)`; everything read-only plus provider key management is
-> live now.
+> Two ways to explore without API keys: **demo mode** (`pnpm demo`) boots the real
+> UI + real server driven by the fake engine, so you can launch a run end to end
+> and watch the pipeline animate from real SSE events; **mock mode**
+> (`VITE_MOCK=1 pnpm -F @pp/ui dev`) serves fixtures and a scripted animated run in
+> the browser with no server. Run control (launch / abort / retry / gate) is live
+> against the real server.
 
 ## The app shell
 
@@ -142,8 +143,10 @@ that mutates a regulated-standard rubric (OWASP, WCAG, SLSA, NIST) requires typi
 an exact confirmation phrase (e.g. `APPROVE OWASP`) — a fat-fingered approval of a
 security/accessibility/supply-chain rubric is impossible.
 
-> `TODO(M7)`: proposals are surfaced from the harness; the LLM-driven autogenesis
-> analyzer that generates them is wired in M7.
+> The autogenesis analyzer (heuristic pattern-mining over recurring rubric
+> false-positives / drift) generates these proposals. Approve/reject resolve
+> locally; **commit/rollback** dispatch to TheEights and require the ecosystem
+> bridge (`PP_ECOSYSTEM=1`), so those buttons are disabled until it is enabled.
 
 ## Library
 
@@ -206,3 +209,37 @@ Two invariants worth knowing as a user:
   provider, security-class gates can't get an independent judge and the run
   surfaces rather than self-certifying — see
   [INSTALL.md](INSTALL.md#provider-keys) for what degrades with fewer keys.
+
+## The live event stream
+
+Every screen that reflects a run is driven by the daemon's SSE streams. Opening a
+run detail replays the run's whole event history from the server ring buffer, then
+follows live, so the pipeline is always current even if you open it after the run
+started. The events the UI surfaces:
+
+- `run.queued` — the run is waiting behind the concurrency cap
+  (`PP_MAX_CONCURRENT_RUNS`, default 2). The UI shows a **"Run queued"** toast; the
+  run starts and streams normally once a slot frees.
+- `run.started` → the run enters the **running** state (pulsing status).
+- `stage.started` / `stage.finalized` / `stage.surfaced` — animate the pipeline
+  rail node by node (pending → running → passed / surfaced / failed).
+- `attempt.started` / `attempt.completed` / `attempt.output` — attempt cards and
+  the streaming log pane.
+- `verdict.recorded` / `reflexion.retry` / `borda.updated` — verdict cards, the
+  reflexion thread, and the best-of Borda board.
+- `budget.tick` — updates the run budget meter live; `budget.tripwire` raises a
+  toast at 80% (downgrade) / 100% (block).
+- `run.finalized` — the run closes as `complete` or `surfaced` and a toast fires.
+
+## Modes and tooling
+
+- **Demo mode** — `pnpm demo` builds the UI + server and boots `ppd` with the fake
+  engine (`PP_LLM=fake`). You get the real UI against the real server with no API
+  keys: launch a run from the wizard and watch it animate to `run.finalized`. Great
+  for a walkthrough or a screenshot.
+- **Mock mode** — `VITE_MOCK=1 pnpm -F @pp/ui dev` runs the SPA against an
+  in-browser mock daemon (fixtures + a scripted animated run), no server at all.
+- **Integration suite** — `PP_INTEGRATION=1 pnpm -F @pp/ui test:integration` boots
+  a real `ppd` and drives the read paths, the full wizard→run→SSE→finalize flow,
+  and the abort round-trip against it (build the server first with
+  `pnpm -F @pp/server build`).
