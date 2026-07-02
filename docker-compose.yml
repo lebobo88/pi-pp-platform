@@ -1,0 +1,36 @@
+# Production-ish container run. `docker compose up --build`.
+# Requires PP_API_TOKEN (server refuses a non-loopback bind without it).
+# Put secrets in a local .env file (git-ignored) — see .env.example.
+services:
+  ppd:
+    build: .
+    image: pi-pp-platform:latest
+    ports:
+      - "${PP_PORT:-7878}:7878"
+    environment:
+      PP_HOST: "0.0.0.0"
+      PP_PORT: "7878"
+      # Bearer token — REQUIRED for the non-loopback bind. Fails fast if unset.
+      PP_API_TOKEN: "${PP_API_TOKEN:?set PP_API_TOKEN (e.g. in .env) before starting}"
+      # Provider keys pi reads from the environment (all optional; configure the
+      # ones you use, or set them later via the Providers UI which persists them
+      # to the mounted ~/.pi-pp-platform volume).
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      # Optional: enable the Hydra/TheEights ecosystem writes.
+      PP_ECOSYSTEM: "${PP_ECOSYSTEM:-}"
+    volumes:
+      # Persist runs/state and stored provider keys + catalog across restarts.
+      - pp-state:/home/ppuser/.pair-programmer
+      - pp-platform:/home/ppuser/.pi-pp-platform
+    restart: unless-stopped
+
+volumes:
+  pp-state:
+  pp-platform:

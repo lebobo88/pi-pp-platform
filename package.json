@@ -10,8 +10,10 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "parity": "node parity/audit.mjs",
+    "dev": "node scripts/dev.mjs",
     "demo": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/demo.mjs",
     "start": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/start.mjs",
+    "serve": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/serve.mjs",
     "validate:live": "pnpm -F @pp/engine build && node scripts/validate-live.mjs"
   },
   "devDependencies": {

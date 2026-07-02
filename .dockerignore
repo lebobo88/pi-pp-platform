@@ -1,0 +1,18 @@
+# Reinstalled/rebuilt inside the image (native binaries must target linux).
+node_modules
+**/node_modules
+dist
+**/dist
+ui/dist
+**/*.tsbuildinfo
+
+# VCS + local state
+.git
+.harness
+.hydra
+**/*.log
+scratchpad
+
+# Local env / secrets — never bake into the image
+.env
+.env.*
