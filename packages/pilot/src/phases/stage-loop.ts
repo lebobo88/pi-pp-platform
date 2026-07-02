@@ -209,9 +209,9 @@ async function generate(
 
 // ── judging ────────────────────────────────────────────────────────────────
 
-type JudgeOut = { outcome: VerdictOutcome; critique_md: string } | "abort";
+export type JudgeOut = { outcome: VerdictOutcome; critique_md: string } | "abort";
 
-async function judge(
+export async function judge(
   ctx: RunContext,
   stage: StageSpec,
   stage_id: string,
@@ -293,12 +293,12 @@ async function judge(
 
 // ── readiness / finalize ─────────────────────────────────────────────────────
 
-type ReadinessSettled =
+export type ReadinessSettled =
   | { action: "finalize" }
   | { action: "retry"; critique: string }
   | { action: "surface"; reason: string };
 
-async function driveReadiness(
+export async function driveReadiness(
   ctx: RunContext,
   stage: StageSpec,
   stage_id: string,
@@ -337,7 +337,7 @@ async function driveReadiness(
   return { action: "surface", reason: "finalize readiness did not converge after running required gates" };
 }
 
-async function finalizePassed(
+export async function finalizePassed(
   ctx: RunContext,
   stage: StageSpec,
   stage_id: string,
@@ -368,7 +368,7 @@ async function finalizePassed(
   return "passed";
 }
 
-async function surface(ctx: RunContext, stage_id: string, reason: string): Promise<StageOutcome> {
+export async function surface(ctx: RunContext, stage_id: string, reason: string): Promise<StageOutcome> {
   await finalizeStage({ stage_id, status: "surfaced" });
   emit(ctx, "stage.surfaced", { reason }, { stage_id });
   return "surfaced";
@@ -383,7 +383,7 @@ async function abortStage(ctx: RunContext, stage_id: string, reason: string): Pr
 
 // ── Reflexion ×1 ──────────────────────────────────────────────────────────────
 
-async function reflexion(
+export async function reflexion(
   ctx: RunContext,
   stage: StageSpec,
   stage_id: string,

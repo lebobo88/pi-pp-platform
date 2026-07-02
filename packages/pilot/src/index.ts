@@ -8,6 +8,7 @@
  */
 
 export { RunPilot, type RunResult } from "./run-pilot.js";
+export { regateStage, retryStage, type PostHocOptions, type PostHocResult } from "./post-hoc.js";
 export { EventBus, type PilotEvent, type PilotEventType, type PilotEventListener, type EmitInput } from "./events.js";
 export { JudgeUnavailableError, TierResolutionError, PilotInternalError } from "./errors.js";
 
