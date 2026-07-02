@@ -3,11 +3,12 @@
  * port, waits for /healthz, and installs a fetch base-URL shim so the UI's
  * relative `/api/...` calls resolve to the live server inside jsdom.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import * as nodeHttp from "node:http";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +49,7 @@ async function waitForHealth(base: string, timeoutMs = 25_000): Promise<void> {
 }
 
 /** Boot ppd. Throws a clear error if the server dist is missing (build first). */
-export async function startServer(): Promise<LiveServer> {
+export async function startServer(extraEnv: Record<string, string> = {}): Promise<LiveServer> {
   if (!existsSync(PPD_BIN)) {
     throw new Error(`ppd not built at ${PPD_BIN} — run \`pnpm -F @pp/server build\` first`);
   }
@@ -65,6 +66,8 @@ export async function startServer(): Promise<LiveServer> {
       PP_PORT: String(port),
       PP_UI_DIST: "", // do not serve the SPA in the test
       PP_ECOSYSTEM: "", // keep the ecosystem guard off
+      PP_SKIP_CLI_VERSIONS: "1",
+      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -102,6 +105,94 @@ export async function startServer(): Promise<LiveServer> {
     });
 
   return { base, port, stop };
+}
+
+/**
+ * Minimal Node EventSource polyfill for jsdom integration tests. Connects to
+ * the live server (relative `/api` URLs are prefixed with `base`), parses the
+ * text/event-stream, and dispatches named events the way the UI's SseManager
+ * expects (addEventListener(type) + onmessage).
+ */
+export function installEventSource(base: string): () => void {
+  const prev = (globalThis as { EventSource?: unknown }).EventSource;
+  class NodeEventSource {
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    static readonly CLOSED = 2;
+    url: string;
+    readyState = 0;
+    onopen: (() => void) | null = null;
+    onmessage: ((e: { data: string; lastEventId: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    private listeners = new Map<string, Set<(e: { data: string; lastEventId: string }) => void>>();
+    private req: nodeHttp.ClientRequest | null = null;
+    private closed = false;
+
+    constructor(url: string) {
+      this.url = url.startsWith("http") ? url : base + url;
+      this.req = nodeHttp.get(this.url, (res: nodeHttp.IncomingMessage) => {
+        this.readyState = 1;
+        this.onopen?.();
+        let buf = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          buf += chunk;
+          let idx: number;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            this.dispatchBlock(block);
+          }
+        });
+        res.on("end", () => { if (!this.closed) this.onerror?.(); });
+      });
+      this.req.on("error", () => { if (!this.closed) this.onerror?.(); });
+    }
+
+    private dispatchBlock(block: string): void {
+      let type = "message";
+      let data = "";
+      let id = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) type = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trim();
+        else if (line.startsWith("id:")) id = line.slice(3).trim();
+      }
+      if (!data) return; // heartbeat comment
+      const ev = { data, lastEventId: id, type } as { data: string; lastEventId: string };
+      this.listeners.get(type)?.forEach((fn) => fn(ev));
+      if (type === "message") this.onmessage?.(ev);
+    }
+
+    addEventListener(type: string, fn: (e: { data: string; lastEventId: string }) => void): void {
+      let set = this.listeners.get(type);
+      if (!set) { set = new Set(); this.listeners.set(type, set); }
+      set.add(fn);
+    }
+    removeEventListener(type: string, fn: (e: { data: string; lastEventId: string }) => void): void {
+      this.listeners.get(type)?.delete(fn);
+    }
+    close(): void {
+      this.closed = true;
+      this.readyState = 2;
+      this.req?.destroy();
+    }
+  }
+  (globalThis as { EventSource?: unknown }).EventSource = NodeEventSource as unknown;
+  return () => { (globalThis as { EventSource?: unknown }).EventSource = prev; };
+}
+
+/** Create a throwaway git project (init + one commit) for run-control tests. */
+export function makeTempGitProject(): string {
+  const dir = mkdtempSync(join(tmpdir(), "pp-e2e-proj-"));
+  const git = (args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@pp.local", "-c", "user.name=pp-test", ...args], { cwd: dir, stdio: "ignore" });
+  git(["init", "-q"]);
+  writeFileSync(join(dir, "README.md"), "# temp\n", "utf8");
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", "init"]);
+  // Forward slashes so the path round-trips through the wire + URL encoding.
+  return dir.replace(/\\/g, "/");
 }
 
 /** Reliable process-tree kill (Windows taskkill /T, POSIX SIGKILL). */

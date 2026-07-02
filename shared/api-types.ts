@@ -515,10 +515,14 @@ export interface StartRunRequest {
   /** Claude tier ceiling / floor overrides. */
   tier_cap?: ClaudeTier | null;
   tier_floor?: ClaudeTier | null;
+  /** Triage scope override; omit for "auto". */
+  scope_override?: "trivial" | "standard" | "major";
 }
 
 export interface StartRunResponse {
   run_id: string;
+  /** True when the run was queued behind the concurrency cap before starting. */
+  queued?: boolean;
 }
 
 export interface AbortRunResponse {
@@ -709,6 +713,11 @@ export type JanitorResultEvent = SseEnvelope<
   "janitor.result",
   { swept: number; reclaimed_bytes: number; details?: unknown }
 >;
+/** Emitted (before a run_id exists) when a run waits behind the concurrency cap. */
+export type RunQueuedEvent = SseEnvelope<
+  "run.queued",
+  { project_path: string; request_text: string; mode: string }
+>;
 
 export type GlobalSseEvent =
   | RunCreatedEvent
@@ -718,55 +727,81 @@ export type GlobalSseEvent =
   | ProviderStatusEvent
   | DoctorResultEvent
   | EvolutionProposalCreatedEvent
-  | JanitorResultEvent;
+  | JanitorResultEvent
+  | RunQueuedEvent;
 
-/* ── Per-run stream events ────────────────────────────────────────────── */
+/* ── Per-run stream events ─────────────────────────────────────────────────
+ * Data shapes mirror @pp/pilot events.ts exactly (verified against live SSE
+ * frames): ids live inside `data` as data.stage_id / data.attempt_id, and the
+ * start frames carry NO status field.
+ * ────────────────────────────────────────────────────────────────────────── */
 
-export type StageStartedEvent = SseEnvelope<"stage.started", StageRow>;
+export type RunStartedEvent = SseEnvelope<
+  "run.started",
+  { mode: string; scope?: string; project_path: string; request: string }
+>;
+export type RunContextEvent = SseEnvelope<
+  "run.context",
+  { phase: string; [k: string]: unknown }
+>;
+export type StageStartedEvent = SseEnvelope<
+  "stage.started",
+  { stage_id: string; kind: string; gate_type: string; agent?: string }
+>;
 export type StageFinalizedEvent = SseEnvelope<
   "stage.finalized",
   { stage_id: string; status: StageStatus; winner_attempt_id: string | null }
 >;
-export type AttemptStartedEvent = SseEnvelope<"attempt.started", AttemptRow>;
+export type StageSurfacedEvent = SseEnvelope<
+  "stage.surfaced",
+  { stage_id: string; reason: string; aborting_run?: boolean }
+>;
+export type AttemptStartedEvent = SseEnvelope<
+  "attempt.started",
+  { stage_id: string; agent?: string; model?: string; tier?: string | null; retry_index?: number }
+>;
 export type AttemptOutputEvent = SseEnvelope<
   "attempt.output",
-  { attempt_id: string; stage_id: string; chunk: string }
+  { attempt_id: string; stage_id?: string; chunk: string }
 >;
-export type AttemptCompletedEvent = SseEnvelope<"attempt.completed", AttemptRow>;
-export type VerdictRecordedEvent = SseEnvelope<"verdict.recorded", VerdictRow>;
+export type AttemptCompletedEvent = SseEnvelope<
+  "attempt.completed",
+  { stage_id: string; attempt_id: string; model?: string; tokens_in?: number | null; tokens_out?: number | null; cost_usd?: number | null }
+>;
+export type VerdictRecordedEvent = SseEnvelope<
+  "verdict.recorded",
+  { attempt_id: string; outcome: VerdictOutcome; stage_id?: string; judge_producer?: string; judge_model?: string; cross_vendor?: boolean; rubric_id?: string | null }
+>;
 export type VerdictRetractedEvent = SseEnvelope<
   "verdict.retracted",
-  { verdict_id: string; attempt_id: string; retracted_at: string }
+  { attempt_id: string; stage_id?: string }
 >;
 export type ReflexionRetryEvent = SseEnvelope<
   "reflexion.retry",
-  { stage_id: string; parent_attempt_id: string; retry_index: number; critique_md: string | null }
+  { stage_id: string; initial_tier?: string; retry_tier?: string; critique_excerpt?: string }
 >;
 export type BordaUpdatedEvent = SseEnvelope<
   "borda.updated",
   {
     stage_id: string;
-    ranking: Array<{ attempt_id: string; points: number; rank: number }>;
-    leader_attempt_id: string | null;
+    phase?: string;
+    /** Present on the winner frame; the informational frames carry scores. */
+    ranking?: Array<{ attempt_id: string; points: number; rank: number }>;
+    leader_attempt_id?: string | null;
+    scores?: unknown;
   }
 >;
 export type SmokeStatusEvent = SseEnvelope<
   "smoke.status",
-  { attempt_id: string; stage_id: string; status: "pass" | "fail" | "skipped"; route?: string; detail?: string }
+  { stage_id?: string; attempt_id?: string; status: "pass" | "fail" | "skipped"; route?: string; detail?: string }
 >;
 export type ValidationResultEvent = SseEnvelope<
   "validation.result",
-  {
-    stage_id: string;
-    artifact_id: string | null;
-    validator_kind: string;
-    status: "verified" | "violation" | "execution_error" | "skipped";
-    reason?: string;
-  }
+  { stage_id?: string; validator_kind?: string; status: string; reason?: string }
 >;
 export type MissabilityResultEvent = SseEnvelope<
   "missability.result",
-  { check_id: string; status: "pass" | "fail" | "skipped"; evidence_path: string | null }
+  { check_id: string; status: string; evidence_path?: string | null }
 >;
 export type BudgetTickEvent = SseEnvelope<
   "budget.tick",
@@ -774,12 +809,15 @@ export type BudgetTickEvent = SseEnvelope<
 >;
 export type RunFinalizedEvent = SseEnvelope<
   "run.finalized",
-  { run_id: string; status: RunStatus; finished_at: string }
+  { run_id: string; status: RunStatus; finished_at: string; abort_reason?: string }
 >;
 
 export type RunSseEvent =
+  | RunStartedEvent
+  | RunContextEvent
   | StageStartedEvent
   | StageFinalizedEvent
+  | StageSurfacedEvent
   | AttemptStartedEvent
   | AttemptOutputEvent
   | AttemptCompletedEvent
@@ -811,11 +849,15 @@ export const GLOBAL_SSE_EVENT_TYPES: readonly GlobalSseEvent["type"][] = [
   "doctor.result",
   "evolution.proposal.created",
   "janitor.result",
+  "run.queued",
 ];
 
 export const RUN_SSE_EVENT_TYPES: readonly RunSseEvent["type"][] = [
+  "run.started",
+  "run.context",
   "stage.started",
   "stage.finalized",
+  "stage.surfaced",
   "attempt.started",
   "attempt.output",
   "attempt.completed",

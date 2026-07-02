@@ -30,17 +30,17 @@ export function runStreamScript(runId: string): ScriptedFrame[] {
     frames.push({ delayMs, event: { ...event, run_id: runId, ts: nowIso(delayMs), seq: seq++ } as RunSseEvent });
   };
 
+  // stage.started data shape mirrors the real pilot frame: { stage_id, kind, gate_type }.
   const stageMeta = (id: string, kind: string, gate: string) => ({
-    id,
-    run_id: runId,
+    stage_id: id,
     kind,
     gate_type: gate,
-    status: "open" as const,
-    winner_attempt_id: null,
-    started_at: nowIso(0),
-    finished_at: null,
-    notes_json: null,
   });
+
+  push(200, {
+    type: "run.started",
+    data: { mode: "team", project_path: "C:/AiAppDeployments/acme-checkout", request: "coupon-code field" },
+  } as RunSseEvent);
 
   // Sequential single-attempt stages: spec → design → contracts.
   const linear: Array<[stage: string, kind: string, gate: string, attempt: string]> = [

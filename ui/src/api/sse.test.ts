@@ -60,17 +60,7 @@ const sample: SseEvent = {
   run_id: "run_1",
   ts: "2026-07-01T00:00:00.000Z",
   seq: 5,
-  data: {
-    id: "stg_1",
-    run_id: "run_1",
-    kind: "spec",
-    gate_type: "spec",
-    status: "open",
-    winner_attempt_id: null,
-    started_at: "2026-07-01T00:00:00.000Z",
-    finished_at: null,
-    notes_json: null,
-  },
+  data: { stage_id: "stg_1", kind: "spec", gate_type: "spec", agent: "spec-author" },
 } as SseEvent;
 
 beforeEach(() => {

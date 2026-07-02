@@ -58,13 +58,14 @@ describe("wizardReducer", () => {
   it("projects a StartRunRequest, nulling irrelevant fields", () => {
     const teamReq = toStartRequest(fill({ projectPath: "C:/x", requestText: "do a thing", mode: "team", team: "feature-team", tierCap: "opus" }));
     expect(teamReq.team).toBe("feature-team");
-    expect(teamReq.n).toBeNull();
-    expect(teamReq.forum).toBeNull();
+    expect(teamReq.n).toBeUndefined(); // omitted, not null (server rejects null)
+    expect(teamReq.forum).toBeUndefined();
     expect(teamReq.tier_cap).toBe("opus");
 
     const bestReq = toStartRequest(fill({ projectPath: "C:/x", requestText: "do a thing", mode: "best_of", n: 5, tierCap: "opus" }));
     expect(bestReq.n).toBe(5);
-    expect(bestReq.tier_cap).toBeNull(); // dropped in best-of
+    expect(bestReq.tier_cap).toBeUndefined(); // dropped in best-of
+    expect("tier_cap" in bestReq).toBe(false);
   });
 });
 

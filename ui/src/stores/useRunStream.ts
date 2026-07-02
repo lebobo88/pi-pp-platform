@@ -16,6 +16,9 @@ export function useRunStream(runId: string | undefined, enabled = true): SseStat
     const mgr = new SseManager({
       url: apiPaths.runEvents(runId),
       onStatus: setStatus,
+      // Replay the whole run from the server ring buffer, then follow live —
+      // so opening a run detail (even after events fired) rebuilds the overlay.
+      initialLastEventId: "0",
     });
     const runEventTypes = new Set<string>(RUN_SSE_EVENT_TYPES);
     mgr.onAny((ev) => {

@@ -103,18 +103,24 @@ export function canLaunch(state: WizardState): boolean {
   return ([1, 2, 3] as WizardStep[]).every((s) => stepValid(state, s));
 }
 
-/** Project the wizard state into the POST /runs request body. */
+/**
+ * Project the wizard state into the POST /runs request body. Fields are OMITTED
+ * (not set to null) when unused: the server's schema uses zod `.optional()`,
+ * which accepts `undefined` but rejects `null`. Sending nulls 422s the run.
+ */
 export function toStartRequest(state: WizardState): StartRunRequest {
   const bestOf = state.mode === "best_of";
-  return {
+  const req: StartRunRequest = {
     project_path: state.projectPath.trim(),
     request_text: state.requestText.trim(),
     mode: state.mode,
-    profile: state.profile || null,
-    team: state.mode === "team" ? state.team || null : null,
-    forum: state.mode === "review" ? state.forum || null : null,
-    n: bestOf ? state.n : null,
-    tier_cap: bestOf ? null : state.tierCap || null,
-    tier_floor: bestOf ? null : state.tierFloor || null,
   };
+  if (state.profile) req.profile = state.profile;
+  if (state.mode === "team" && state.team) req.team = state.team;
+  if (state.mode === "review" && state.forum) req.forum = state.forum;
+  if (bestOf) req.n = state.n;
+  if (!bestOf && state.tierCap) req.tier_cap = state.tierCap;
+  if (!bestOf && state.tierFloor) req.tier_floor = state.tierFloor;
+  if (state.scope !== "auto") req.scope_override = state.scope;
+  return req;
 }

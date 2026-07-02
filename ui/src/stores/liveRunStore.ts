@@ -164,28 +164,38 @@ class LiveRunStore {
     };
   }
 
-  /** Fold a run-scoped SSE event into the overlay + log buffers. */
+  /**
+   * Fold a run-scoped SSE event into the overlay + log buffers. Field names
+   * mirror the real @pp/pilot frames: ids live in data.stage_id / data.attempt_id
+   * and start frames carry no status.
+   */
   ingest(runId: string, ev: RunSseEvent): void {
+    // attempt.output is high-frequency and touches only the log buffer.
+    if (ev.type === "attempt.output") {
+      this.appendLog(ev.data.attempt_id, ev.data.chunk);
+      return;
+    }
+
     const base = this.overlays.get(runId) ?? freshOverlay(runId);
     const next: LiveRunOverlay = { ...base, version: base.version + 1 };
 
     switch (ev.type) {
+      case "run.started":
+        next.status = "running";
+        break;
       case "stage.started":
-        next.stageStatus = { ...next.stageStatus, [ev.data.id]: ev.data.status };
+        next.stageStatus = { ...next.stageStatus, [ev.data.stage_id]: "open" };
         break;
       case "stage.finalized":
         next.stageStatus = { ...next.stageStatus, [ev.data.stage_id]: ev.data.status };
         next.stageWinner = { ...next.stageWinner, [ev.data.stage_id]: ev.data.winner_attempt_id };
         break;
-      case "attempt.started":
-        next.attemptStatus = { ...next.attemptStatus, [ev.data.id]: ev.data.status };
+      case "stage.surfaced":
+        next.stageStatus = { ...next.stageStatus, [ev.data.stage_id]: "surfaced" };
         break;
       case "attempt.completed":
-        next.attemptStatus = { ...next.attemptStatus, [ev.data.id]: ev.data.status };
+        next.attemptStatus = { ...next.attemptStatus, [ev.data.attempt_id]: "ok" };
         break;
-      case "attempt.output":
-        this.appendLog(ev.data.attempt_id, ev.data.chunk);
-        return; // no overlay change
       case "verdict.recorded":
         next.verdicts = { ...next.verdicts, [ev.data.attempt_id]: ev.data.outcome };
         break;
@@ -196,7 +206,10 @@ class LiveRunStore {
         break;
       }
       case "borda.updated":
-        next.borda = { ...next.borda, [ev.data.stage_id]: ev.data.ranking };
+        // The real winner frame carries a ranking; informational frames don't.
+        if (ev.data.ranking) {
+          next.borda = { ...next.borda, [ev.data.stage_id]: ev.data.ranking };
+        }
         break;
       case "budget.tick":
         if (ev.data.scope === `run:${runId}`) {
@@ -208,11 +221,13 @@ class LiveRunStore {
       case "run.finalized":
         next.status = ev.data.status;
         break;
+      case "run.context":
+      case "attempt.started":
       case "reflexion.retry":
       case "smoke.status":
       case "validation.result":
       case "missability.result":
-        // Recorded via version bump so subscribers can refetch detail.
+        // Version bump only — subscribers may refetch detail.
         break;
     }
 

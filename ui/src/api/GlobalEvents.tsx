@@ -18,6 +18,9 @@ export function GlobalEvents() {
     const mgr = new SseManager({ url: apiPaths.events });
 
     mgr.on("run.created", () => qc.invalidateQueries({ queryKey: ["runs"] }));
+    mgr.on("run.queued", (ev) => {
+      toast({ tone: "info", title: "Run queued", message: `${ev.data.mode} · behind the concurrency cap` });
+    });
     mgr.on("run.status", (ev) => {
       liveRunStore.setStatus(ev.data.run_id, ev.data.status);
       qc.invalidateQueries({ queryKey: ["runs"] });

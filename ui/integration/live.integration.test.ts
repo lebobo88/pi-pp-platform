@@ -147,11 +147,12 @@ describe.skipIf(!RUN)("live ppd integration (M5f)", () => {
     expect(Array.isArray(detail.recent_runs)).toBe(true);
   });
 
-  it("KNOWN SERVER LIMITATION: long project paths 414 (Fastify maxParamLength)", async () => {
-    // Reported to the server team: the UI encodes the project path into the URL
-    // path, so paths longer than Fastify's default maxParamLength (~100) 414.
-    const longPath = "C:/AiAppDeployments/some/very/deeply/nested/example/project/that/exceeds/the/default/fastify/max/param/length/limit";
-    await expect(api.get(apiPaths.project(longPath))).rejects.toMatchObject({ status: 414 });
+  it("long encoded project paths no longer 414 (server maxParamLength raised in M5g)", async () => {
+    // Regression guard for the M5f finding: the UI encodes long Windows paths
+    // into the URL; the server raised Fastify maxParamLength, so an unregistered
+    // long path now returns a clean 404 (not a 414 max-param-length error).
+    const longPath = "C:/AiAppDeployments/some/very/deeply/nested/example/project/that/exceeds/the/default/fastify/max/param/length/limit/for/sure";
+    await expect(api.get(apiPaths.project(longPath))).rejects.toMatchObject({ status: 404 });
   });
 
   /* ── jsdom page renders against the live server ──────────────────────── */

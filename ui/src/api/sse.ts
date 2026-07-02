@@ -35,6 +35,12 @@ export interface SseManagerOptions {
   maxBackoffMs?: number;
   /** Base backoff. Default 500ms. */
   baseBackoffMs?: number;
+  /**
+   * Seed the Last-Event-ID for the FIRST connect (e.g. "0" to replay a run's
+   * whole event history from the server ring buffer, then follow live). Without
+   * it, the first connect only receives events emitted after it opened.
+   */
+  initialLastEventId?: string;
   eventSourceFactory?: EventSourceFactory;
 }
 
@@ -63,6 +69,7 @@ export class SseManager {
     this.maxBackoff = opts.maxBackoffMs ?? 15_000;
     this.baseBackoff = opts.baseBackoffMs ?? 500;
     this.onStatus = opts.onStatus;
+    this.lastEventId = opts.initialLastEventId ?? null;
     this.factory =
       opts.eventSourceFactory ??
       ((u: string) => new EventSource(u));
