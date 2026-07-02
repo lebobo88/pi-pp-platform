@@ -20,7 +20,7 @@ import {
   type BudgetCap,
   type RunSummary,
 } from "@shared/api-types";
-import { startServer, installFetchBase, type LiveServer } from "./harness";
+import { startServer, installFetchBase, makeTempGitProject, type LiveServer } from "./harness";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { ProjectsPage } from "@/features/projects/ProjectsPage";
 import { ProjectDetailPage } from "@/features/projects/ProjectDetailPage";
@@ -147,12 +147,17 @@ describe.skipIf(!RUN)("live ppd integration (M5f)", () => {
     expect(Array.isArray(detail.recent_runs)).toBe(true);
   });
 
-  it("long encoded project paths no longer 414 (server maxParamLength raised in M5g)", async () => {
-    // Regression guard for the M5f finding: the UI encodes long Windows paths
-    // into the URL; the server raised Fastify maxParamLength, so an unregistered
-    // long path now returns a clean 404 (not a 414 max-param-length error).
-    const longPath = "C:/AiAppDeployments/some/very/deeply/nested/example/project/that/exceeds/the/default/fastify/max/param/length/limit/for/sure";
-    await expect(api.get(apiPaths.project(longPath))).rejects.toMatchObject({ status: 404 });
+  it("deep encoded project paths resolve to 200 (server maxParamLength raised in M5g)", async () => {
+    // Positive regression guard for the M5f finding: register a deeply-nested
+    // project (long URL-encoded path) then GET its detail — the server raised
+    // Fastify maxParamLength (4096), so this is a clean 200, not a 414.
+    const deep = makeTempGitProject({ deep: true });
+    expect(encodeURIComponent(deep).length).toBeGreaterThan(100);
+    await api.post(apiPaths.projects, { path: deep });
+    const detail = await api.get<{ path: string }>(apiPaths.project(deep));
+    expect(detail.path).toBe(deep);
+    // The master-plan sibling route (also param-encoded) is reachable too.
+    await expect(api.get(apiPaths.projectMasterPlan(deep))).rejects.toMatchObject({ status: 404 });
   });
 
   /* ── jsdom page renders against the live server ──────────────────────── */

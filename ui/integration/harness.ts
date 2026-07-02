@@ -8,7 +8,7 @@ import * as nodeHttp from "node:http";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -182,9 +182,17 @@ export function installEventSource(base: string): () => void {
   return () => { (globalThis as { EventSource?: unknown }).EventSource = prev; };
 }
 
-/** Create a throwaway git project (init + one commit) for run-control tests. */
-export function makeTempGitProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "pp-e2e-proj-"));
+/**
+ * Create a throwaway git project (init + one commit) for run-control tests.
+ * `deep: true` nests the repo under many segments so the URL-encoded path is
+ * long (>100 chars) — exercises the server's raised Fastify maxParamLength.
+ */
+export function makeTempGitProject(opts: { deep?: boolean } = {}): string {
+  let dir = mkdtempSync(join(tmpdir(), "pp-e2e-proj-"));
+  if (opts.deep) {
+    dir = join(dir, "a", "very", "deeply", "nested", "example", "workspace", "packages", "app", "project-root");
+    mkdirSync(dir, { recursive: true });
+  }
   const git = (args: string[]) =>
     execFileSync("git", ["-c", "user.email=t@pp.local", "-c", "user.name=pp-test", ...args], { cwd: dir, stdio: "ignore" });
   git(["init", "-q"]);
