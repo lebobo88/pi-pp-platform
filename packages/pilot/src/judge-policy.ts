@@ -59,6 +59,13 @@ export type JudgeSelectInput = {
   retry?: boolean;
   /** Optional provider hint from a team stage's judge.model_pref. */
   preferredProvider?: GenProvider;
+  /**
+   * Force a cross-vendor judge regardless of the gate's base tier. Best-of-N
+   * uses this: every candidate is Claude, so the judge must be non-Claude both
+   * to satisfy the de-biasing contract and to avoid a same-vendor same-model
+   * collision when a candidate used the same Claude model the judge pool pins.
+   */
+  forceCrossVendor?: boolean;
 };
 
 export type JudgeSelection = {
@@ -99,7 +106,7 @@ export class JudgePolicy {
     });
 
     const genProvider = producerToProvider(input.generatorProducer);
-    const required = decision.required_cross_vendor;
+    const required = decision.required_cross_vendor || !!input.forceCrossVendor;
 
     // Base eligibility from the engine (drops kill-switched providers + the gen
     // vendor when cross-vendor is required). Additionally honor the global

@@ -11,6 +11,13 @@ import { join } from "node:path";
 import { createEngine, toGenProvider, type Engine, type GenResult } from "@pp/engine";
 import type { VerdictOutcome } from "@pp/core";
 
+function commit(cwd: string, message: string): void {
+  const git = (args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@pp.local", "-c", "user.name=pp-test", ...args], { cwd, stdio: "ignore" });
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", message]);
+}
+
 /** A fresh git repo with one commit so HEAD exists. */
 export function makeTempProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "pp-pilot-proj-"));
@@ -90,4 +97,75 @@ export function makeScriptedEngine(opts: {
       return genResult(o.judgeModel, JSON.stringify(verdict), verdict);
     },
   };
+}
+
+/**
+ * Best-of engine: real fake coding sessions (one committed FAKE_ARTIFACT per
+ * candidate worktree) + a critique that scores candidates in descending order
+ * of call, so candidate-1 deterministically wins the Borda count.
+ */
+export function makeBestOfEngine(): Engine {
+  const fake = createEngine({ mode: "fake" });
+  return {
+    ...fake,
+    critique: async (o) => {
+      // Score by the candidate index embedded in the fake artifact text
+      // (FAKE_ARTIFACT_engineer-<index>.md), so candidate-1 deterministically
+      // wins regardless of the judge's shuffled evaluation order.
+      const m = /engineer-(\d+)/.exec(o.artifactText);
+      const idx = m ? Number(m[1]) : 99;
+      const score = 1 / idx;
+      const verdict = { outcome: "pass", critique_md: `candidate ${idx} score ${score}`, score: { quality: score } };
+      return genResult(o.judgeModel, JSON.stringify(verdict), verdict);
+    },
+  };
+}
+
+const TDD_MANIFEST_YAML =
+  "tdd_mode: bug-fix\n" +
+  "test_runner: vitest\n" +
+  "test_command: node run-tests.js\n" +
+  "test_files:\n" +
+  "  - run-tests.js\n" +
+  "expected_pre_outcome: all_fail\n" +
+  "expected_post_outcome: all_pass\n" +
+  "cited_artifacts:\n" +
+  "  - kind: test\n" +
+  "    path: run-tests.js\n";
+
+/**
+ * TDD engine: the tests_pre completion returns a manifest whose test command
+ * (node run-tests.js) is red until an `impl.js` exists; the code coding session
+ * writes impl.js and commits, flipping the check green.
+ */
+export function makeTddEngine(): Engine {
+  const fake = createEngine({ mode: "fake" });
+  return {
+    ...fake,
+    runAuthoringCompletion: async (o) => genResult(o.model, TDD_MANIFEST_YAML),
+    runCodingSession: async (o) => {
+      writeFileSync(join(o.cwd, "impl.js"), "module.exports = () => 'green';\n", "utf8");
+      commit(o.cwd, "impl: make the failing test pass");
+      return genResult(o.model, "wrote impl.js");
+    },
+    critique: async (o) => {
+      const verdict = { outcome: "pass", critique_md: "ok", score: { correctness: 0.9 } };
+      return genResult(o.judgeModel, JSON.stringify(verdict), verdict);
+    },
+  };
+}
+
+/** A temp project seeded with a run-tests.js gate that is red until impl.js exists. */
+export function makeTddProject(): string {
+  const dir = makeTempProject();
+  writeFileSync(
+    join(dir, "run-tests.js"),
+    "const fs = require('fs');\n" +
+      "const ok = fs.existsSync('impl.js');\n" +
+      "console.log('Tests  ' + (ok ? '1 passed (1)' : '1 failed (1)'));\n" +
+      "process.exit(ok ? 0 : 1);\n",
+    "utf8",
+  );
+  commit(dir, "add failing test gate");
+  return dir;
 }

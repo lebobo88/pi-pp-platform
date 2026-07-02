@@ -35,7 +35,21 @@ export type RunPilotOptions = {
   bus: EventBus;
   clock?: Clock;
   signal?: AbortSignal;
+  /**
+   * Explicit stage set, bypassing scope/mode-derived planning. A test + server
+   * seam for driving a precise pipeline (e.g. a 2-stage TDD red→green or a
+   * single best-of code stage) without a full team yaml.
+   */
+  stagesOverride?: StageSpec[];
+  /**
+   * Injectable per-candidate runtime smoke outcome for best-of stages. In
+   * production the engineer records the real smoke result; this seam lets tests
+   * exercise the smoke post-filter / merge-refusal paths deterministically.
+   */
+  smokeDecision?: SmokeDecision;
 };
+
+export type SmokeDecision = (candidateIndex: number) => "pass" | "fail" | "infra_error" | "skipped";
 
 /** The specification of one stage in the pipeline. */
 export type StageSpec = {
@@ -51,6 +65,14 @@ export type StageSpec = {
   rubricHint?: string;
   /** team_yaml judge.model_pref hint. */
   judgeModelPref?: string;
+  /** When set (>=2), run this stage as a best-of-N candidate race. */
+  bestOf?: number;
+  /**
+   * Force a specific execution mode, overriding the role's default
+   * classification. Forums pin "completion" so advisory/readonly roles produce
+   * an artifact without mutating the project tree.
+   */
+  execution?: "session-coding" | "session-readonly" | "completion";
 };
 
 export type StageOutcome = "passed" | "surfaced" | "aborted";
@@ -80,6 +102,7 @@ export type RunContext = {
   judgePolicy: JudgePolicy;
   clock: Clock;
   signal?: AbortSignal;
+  smokeDecision?: SmokeDecision;
 
   // phase 1/4: triage + taxonomy
   scope: Scope;

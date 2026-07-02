@@ -130,11 +130,17 @@ async function generate(
 
   emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex }, { stage_id });
 
+  // A tests_pre stage must produce a `tdd_manifest` artifact (YAML), which the
+  // TDD gate loads to run the red/green check — always a completion, even
+  // though test-strategist is otherwise a coding role.
+  const isTddManifestStage = stage.kind === "tests_pre";
+  const execution = isTddManifestStage ? "completion" : stage.execution ?? role.execution;
+
   let artifactText: string;
   let artifactPath: string;
   let genResult;
 
-  if (role.execution === "session-coding" || role.execution === "session-readonly") {
+  if (execution === "session-coding" || execution === "session-readonly") {
     genResult = await ctx.engine.runCodingSession({
       cwd: ctx.projectPath,
       systemPrompt,
@@ -156,8 +162,11 @@ async function generate(
       signal: ctx.signal,
     });
     artifactText = genResult.text;
-    const kind = stage.artifact_kind ?? ARTIFACT_KIND_BY_KIND[stage.kind] ?? stage.kind;
-    const rel = `${stage.kind}/${stage.agent}${retryIndex > 0 ? `-retry${retryIndex}` : ""}.md`;
+    const kind = isTddManifestStage
+      ? "tdd_manifest"
+      : stage.artifact_kind ?? ARTIFACT_KIND_BY_KIND[stage.kind] ?? stage.kind;
+    const ext = isTddManifestStage ? "yaml" : "md";
+    const rel = `${stage.kind}/${stage.agent}${retryIndex > 0 ? `-retry${retryIndex}` : ""}.${ext}`;
     const res = archiveArtifact({
       run_id: ctx.run_id,
       // Tie completion artifacts to the stage so the run-level artifact

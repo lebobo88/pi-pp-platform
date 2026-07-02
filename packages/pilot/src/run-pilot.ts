@@ -18,6 +18,7 @@ import {
   startRun,
   forceUnlock,
   getTeam,
+  getForum,
   db,
   heuristicTriage,
   loadProjectProfile,
@@ -26,6 +27,7 @@ import {
   getBuiltinProfile,
   ensureAgentsAndClaudeMd,
   type TeamSpec,
+  type Forum,
   type Scope,
   type ClaudeTier,
 } from "@pp/core";
@@ -34,6 +36,7 @@ import { EventBus } from "./events.js";
 import { JudgePolicy } from "./judge-policy.js";
 import { emit, type RunContext, type RunPilotOptions, type StageSpec } from "./types.js";
 import { runStage, reArchiveTierDecisions } from "./phases/stage-loop.js";
+import { runBestOfStage } from "./phases/best-of.js";
 import { runMissabilityPhase } from "./phases/missability.js";
 import { runMasterPlanPhase } from "./phases/master-plan.js";
 import { runFinalizePhase, type StageReport } from "./phases/finalize.js";
@@ -57,6 +60,21 @@ export class RunPilot {
 
   async execute(): Promise<RunResult> {
     const o = this.opts;
+
+    // best-of-N uses a fixed Sonnet+Opus rotation per candidate; the tier-policy
+    // flags are intentionally not applied (ensemble diversity is the point).
+    // Reject rather than silently ignore (best-of.md preamble).
+    if (o.mode === "best_of" && (o.tierCap || o.tierFloor || o.noTierPolicy)) {
+      return {
+        run_id: "",
+        status: "aborted",
+        stages: [],
+        abort_reason:
+          "best-of-N uses a fixed Sonnet+Opus rotation per candidate slot; the " +
+          "--tier-cap/--tier-floor/--no-tier-policy flags are intentionally not applied. " +
+          "Re-run without the flag, or use mode=single/team for tier control.",
+      };
+    }
 
     // ── Phase 2 (early): profile bootstrap, before startRun snapshots it. ────
     // The heuristic scope + a written profile.yaml must exist before start_run
@@ -91,6 +109,7 @@ export class RunPilot {
       judgePolicy: new JudgePolicy(),
       clock: o.clock ?? (() => Date.now()),
       signal: o.signal,
+      smokeDecision: o.smokeDecision,
       scope,
       signals: heuristic.signals,
       sections: [],
@@ -126,7 +145,10 @@ export class RunPilot {
             ctx.abortReason = "aborted by signal";
             break;
           }
-          const outcome = await runStage(ctx, stage);
+          const outcome =
+            stage.bestOf && stage.bestOf >= 2
+              ? await runBestOfStage(ctx, stage, stage.bestOf)
+              : await runStage(ctx, stage);
           stages.push({ kind: stage.kind, outcome });
           if (outcome === "aborted") {
             ctx.finalStatus = "aborted";
@@ -206,6 +228,31 @@ export class RunPilot {
   private buildStagePlan(
     ctx: RunContext,
   ): { abort: false; stages: StageSpec[] } | { abort: true; reason: string } {
+    // Explicit override wins (test/server seam).
+    if (this.opts.stagesOverride && this.opts.stagesOverride.length > 0) {
+      return { abort: false, stages: this.opts.stagesOverride };
+    }
+
+    // best_of mode: a code request raced across N Claude candidates.
+    if (ctx.mode === "best_of") {
+      return {
+        abort: false,
+        stages: [{ kind: "code", gate_type: "code_style", agent: "engineer", bestOf: ctx.n ?? 3 }],
+      };
+    }
+
+    // review mode: drive one of the governance forums' stage sets generically.
+    if (ctx.mode === "review") {
+      if (!ctx.forum) return { abort: true, reason: "mode=review requires a forum name" };
+      const forum = getForum(ctx.forum);
+      if (!forum) return { abort: true, reason: `forum "${ctx.forum}" not found` };
+      if (forum.required_missability_checks?.length) {
+        ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...forum.required_missability_checks])];
+      }
+      emit(ctx, "run.context", { phase: "forum", forum: forum.id, produces: forum.produces });
+      return { abort: false, stages: forumStages(forum) };
+    }
+
     if (ctx.mode === "single") {
       if (ctx.scope === "trivial") {
         const docShaped = ctx.signals.includes("doc-only");
@@ -246,7 +293,7 @@ export class RunPilot {
       };
     }
 
-    // team / best_of / review → drive the team yaml's stage set generically.
+    // team mode → drive the team yaml's stage set generically.
     if (!ctx.teamName) {
       return { abort: true, reason: `mode=${ctx.mode} requires a team name` };
     }
@@ -255,12 +302,36 @@ export class RunPilot {
       return { abort: true, reason: `team "${ctx.teamName}" not found` };
     }
     ctx.team = found.team;
-    return { abort: false, stages: teamStages(found.team) };
+
+    // Profile-compatibility check: warn (don't block) when the active profile
+    // isn't in the team's profiles_compatible list.
+    const compat = found.team.profiles_compatible;
+    if (ctx.profileName && compat && compat.length > 0 && !compat.includes(ctx.profileName)) {
+      emit(ctx, "run.context", {
+        phase: "team-profile-warning",
+        team: found.team.name,
+        active_profile: ctx.profileName,
+        profiles_compatible: compat,
+        message: `profile "${ctx.profileName}" is not in ${found.team.name}.profiles_compatible — proceeding anyway`,
+      });
+    }
+
+    // Merge the team's declared taxonomy + missability requirements into the run.
+    if (found.team.missability_required?.length) {
+      ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...found.team.missability_required])];
+    }
+    emit(ctx, "run.context", { phase: "team", team: found.team.name, taxonomy_required: found.team.taxonomy_required ?? [] });
+
+    return { abort: false, stages: teamStages(found.team, ctx.scope) };
   }
 }
 
-/** Map a team yaml's stages onto the pilot's StageSpec (generators are Path-A Claude). */
-function teamStages(team: TeamSpec): StageSpec[] {
+/**
+ * Map a team yaml's stages onto the pilot's StageSpec (generators are Path-A
+ * Claude). A stage's `best_of_n_on_major_scope` promotes it to a best-of-N race
+ * when triage classified the request as major.
+ */
+function teamStages(team: TeamSpec, scope: string): StageSpec[] {
   return team.stages.map((s) => ({
     kind: s.kind,
     gate_type: s.gate_type,
@@ -269,6 +340,23 @@ function teamStages(team: TeamSpec): StageSpec[] {
     teamStageModelTier: s.generator.model_tier as ClaudeTier | undefined,
     rubricHint: s.judge?.rubric,
     judgeModelPref: s.judge?.model_pref,
+    bestOf: scope === "major" && s.best_of_n_on_major_scope ? s.best_of_n_on_major_scope : undefined,
+  }));
+}
+
+/**
+ * Map a governance forum's stage set onto the pilot's StageSpec. Forum roles
+ * are advisory/readonly and MUST NOT mutate the project tree, so every stage is
+ * pinned to completion execution (the artifact is written under .harness only).
+ */
+function forumStages(forum: Forum): StageSpec[] {
+  return forum.stages.map((s) => ({
+    kind: s.kind,
+    gate_type: s.gate_type,
+    agent: s.generator_agent,
+    artifact_kind: s.artifact_kind ?? s.kind,
+    rubricHint: s.rubric_id,
+    execution: "completion" as const,
   }));
 }
 

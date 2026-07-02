@@ -99,10 +99,42 @@ rows:
     subsystem: lifecycle
     capability: RunPilot single-mode lifecycle E2E (triage→stage loop→finalize)
     disposition: REBUILD
-    replacement_note: "@pp/pilot (M3, in progress)"
+    replacement_note: "@pp/pilot (M3) — RunPilot drives the 9-phase lifecycle"
     verify:
-      - {type: todo, note: "pilot orchestration lands in M3"}
-    status: pending
+      - {type: test, file: packages/pilot/test/e2e-single.test.ts, contains: "reflexion retry pass"}
+    status: done
+  - id: L12
+    subsystem: lifecycle
+    capability: RunPilot best-of-N (worktree fan-out → smoke → Borda → merge-back → teardown)
+    disposition: REBUILD
+    replacement_note: "@pp/pilot (M4) — best-of.ts drives core best-of-n.ts; Sonnet+Opus rotation, forced cross-vendor judge, smoke post-filter"
+    verify:
+      - {type: test, file: packages/pilot/test/e2e-best-of.test.ts, contains: "Borda winner"}
+    status: done
+  - id: L13
+    subsystem: lifecycle
+    capability: RunPilot team pipelines (26) incl. deep-reasoning fable pin
+    disposition: REBUILD
+    replacement_note: "@pp/pilot (M4) — team yaml stage sets driven generically; profiles_compatible warn; fable pin via team_yaml model_tier"
+    verify:
+      - {type: test, file: packages/pilot/test/e2e-teams.test.ts, contains: "fable"}
+    status: done
+  - id: L14
+    subsystem: lifecycle
+    capability: RunPilot governance forums (10) — advisory/completion, zero code mutation
+    disposition: REBUILD
+    replacement_note: "@pp/pilot (M4) — forum stage sets driven as completion; cross-vendor verdicts"
+    verify:
+      - {type: test, file: packages/pilot/test/e2e-forums.test.ts, contains: "zero code mutation"}
+    status: done
+  - id: L15
+    subsystem: lifecycle
+    capability: RunPilot TDD red→green gate + validator preflight in-loop
+    disposition: REBUILD
+    replacement_note: "@pp/pilot (M4) — tests_pre emits tdd_manifest; driveReadiness runs core tddPreCheck/tddPostCheck/artifactValidate on readiness blockers"
+    verify:
+      - {type: test, file: packages/pilot/test/e2e-tdd.test.ts, contains: "red → green"}
+    status: done
 
   # ── Generation (G1-G6) — @pp/engine over pi runtime ──
   - id: G1

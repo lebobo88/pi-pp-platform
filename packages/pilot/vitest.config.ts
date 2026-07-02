@@ -24,6 +24,10 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // @pp/core's db() is a process-wide singleton over one shared state.db
+    // file. Parallel test-file workers contend for the SQLite write lock, so
+    // run the pilot's DB-touching suites sequentially to keep them deterministic.
+    fileParallelism: false,
     env: {
       PP_HOME: process.env.PP_HOME,
     },
