@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run build && node test/ecosystem.unit.mjs && node test/tdd-parser.unit.mjs && node test/missability.unit.mjs && node --test test/finalize-gates-b.unit.mjs && node --test test/finalize-gates-c.unit.mjs && node --test test/fable-tier.unit.mjs"
+    "test": "pnpm run build && node test/ecosystem.unit.mjs && node test/ecosystem-guard.unit.mjs && node test/tdd-parser.unit.mjs && node test/missability.unit.mjs && node --test test/finalize-gates-b.unit.mjs && node --test test/finalize-gates-c.unit.mjs && node --test test/fable-tier.unit.mjs"
   },
   "engines": {
     "node": ">=22.19.0"

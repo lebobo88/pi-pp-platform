@@ -35,6 +35,7 @@ import {
   ECOSYSTEM_BREAKER_THRESHOLD,
   ECOSYSTEM_BREAKER_COOLDOWN_MS,
   ECOSYSTEM_CALL_TIMEOUT_MS,
+  ecosystemEnabled,
   type EightCell,
   type HydraRecordEnvelopeType,
 } from "../config.js";
@@ -307,6 +308,13 @@ function resolveDaemonEntry(): { command: string; args: string[] } | null {
 }
 
 async function probe(): Promise<boolean> {
+  // Master switch: never spawn a daemon / open a transport when the ecosystem
+  // is disabled. Defensive — ensureReady() already guards, but this makes probe
+  // safe to call directly.
+  if (!ecosystemEnabled()) {
+    state = { kind: "unavailable", reason: "PP_ECOSYSTEM disabled" };
+    return false;
+  }
   const entry = resolveDaemonEntry();
   if (!entry) {
     state = { kind: "unavailable", reason: "no eights-daemon entry resolved" };
@@ -353,6 +361,10 @@ async function probe(): Promise<boolean> {
 }
 
 async function ensureReady(): Promise<Client | null> {
+  // Master switch: short-circuit BEFORE any probe/spawn when the ecosystem is
+  // disabled (the default). Intentionally does NOT mutate `state`, so toggling
+  // PP_ECOSYSTEM back on within the process re-enables lazy connect.
+  if (!ecosystemEnabled()) return null;
   const s0 = currentState();
   if (s0.kind === "available") return s0.client;
   if (s0.kind === "unavailable") return null;
@@ -433,6 +445,11 @@ export async function shutdown(): Promise<void> {
     breakers[ns].consecutive_failures = 0;
     breakers[ns].tripped_until_ms = null;
   }
+}
+
+/** Test-only: the current connection-state discriminant ("uninit" until a probe runs). */
+export function _stateKindForTest(): ClientState["kind"] {
+  return state.kind;
 }
 
 /** Reset breaker state without dropping the connection (test hook). */

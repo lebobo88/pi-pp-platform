@@ -163,6 +163,22 @@ export function geminiEnabled(): boolean {
   return (process.env.PP_DISABLE_GEMINI ?? "0") !== "1";
 }
 
+/**
+ * Ecosystem (TheEights / Hydra) master switch. Default OFF — the ecosystem
+ * clients short-circuit BEFORE any subprocess spawn or network attempt unless
+ * PP_ECOSYSTEM=1. This keeps standalone installs (and stateless surfaces like
+ * the MCP adapter) from forking an `eights-daemon` child on best-effort calls
+ * such as finalize_run's DecisionRecord emit. When enabled, the existing
+ * best-effort + per-namespace circuit-breaker behavior applies unchanged.
+ *
+ * Implemented as a function (not a top-level const) so it reads process.env on
+ * every call: the daemon is long-running, but this keeps the guard
+ * unit-testable by toggling the env between calls.
+ */
+export function ecosystemEnabled(): boolean {
+  return process.env.PP_ECOSYSTEM === "1";
+}
+
 // ─── Ecosystem integration (Hydra / TheEights / Constitution) ───────────
 // Phase A spine. Every ecosystem call is best-effort: if the eights-daemon
 // MCP peer is unreachable, all wrappers short-circuit to null and pp

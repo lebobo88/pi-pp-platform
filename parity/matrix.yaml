@@ -1,0 +1,719 @@
+# pi-pp-platform parity matrix
+#
+# Machine-readable audit of pair-programmer → platform capability parity, grown
+# milestone by milestone. `node parity/audit.mjs` verifies every row and prints
+# a scoreboard; rows with status=done whose verify checks fail make the audit
+# exit nonzero. status=pending rows are reported but never fail the build.
+#
+# Row shape:
+#   id            unique id (subsystem-prefixed)
+#   subsystem     grouping key for the scoreboard
+#   capability    human description
+#   disposition   PORT | ADAPT | REBUILD | DROP_REPLACED
+#   replacement_note?  where it lives now / why dropped
+#   verify        list of checks (see parity/audit.mjs for the supported types)
+#   status        done | pending
+#
+# verify check types:
+#   {type: asset-count, dir, ext, expect}     count files *.ext under dir (recursive)
+#   {type: export, module, symbol, op, expect} op: defined | len | keys-len | call-len
+#   {type: test, file, contains?}             file exists (+ optional substring)
+#   {type: todo, note}                        pending marker (skipped)
+#   {type: endpoint, path, note}              server endpoint marker (skipped)
+
+rows:
+  # ── Lifecycle (L1-L11) — @pp/core, exposed over MCP by @pp/mcp-adapter ──
+  - id: L1
+    subsystem: lifecycle
+    capability: start_run — allocate run row + per-run artifact dir
+    disposition: PORT
+    replacement_note: "@pp/core orchestrator/runs.ts"
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: startRun, op: defined}
+    status: done
+  - id: L2
+    subsystem: lifecycle
+    capability: ensure_run — idempotent run-context bootstrap
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: ensureRun, op: defined}
+    status: done
+  - id: L3
+    subsystem: lifecycle
+    capability: start_stage — open a stage row under a run
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: startStage, op: defined}
+    status: done
+  - id: L4
+    subsystem: lifecycle
+    capability: record_attempt — log a generation attempt + budget tally
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: recordAttempt, op: defined}
+    status: done
+  - id: L5
+    subsystem: lifecycle
+    capability: record_verdict — log a judge verdict (anti-vacuous-pass guards)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: recordVerdict, op: defined}
+    status: done
+  - id: L6
+    subsystem: lifecycle
+    capability: retract_verdict — mark a prior verdict retracted
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: retractVerdict, op: defined}
+    status: done
+  - id: L7
+    subsystem: lifecycle
+    capability: finalize_stage — close a stage (validator gate enforced)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: finalizeStage, op: defined}
+    status: done
+  - id: L8
+    subsystem: lifecycle
+    capability: finalize_run — close a run (downgrade-on-surfaced semantics)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: finalizeRun, op: defined}
+    status: done
+  - id: L9
+    subsystem: lifecycle
+    capability: get_stage_finalize_readiness — TDD/validator preflight
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: getStageFinalizeReadiness, op: defined}
+    status: done
+  - id: L10
+    subsystem: lifecycle
+    capability: list_runs / get_run — read the run tree
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listRuns, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: getRun, op: defined}
+    status: done
+  - id: L11
+    subsystem: lifecycle
+    capability: RunPilot single-mode lifecycle E2E (triage→stage loop→finalize)
+    disposition: REBUILD
+    replacement_note: "@pp/pilot (M3, in progress)"
+    verify:
+      - {type: todo, note: "pilot orchestration lands in M3"}
+    status: pending
+
+  # ── Generation (G1-G6) — @pp/engine over pi runtime ──
+  - id: G1
+    subsystem: generation
+    capability: runAuthoringCompletion — single completion (pi completeSimple)
+    disposition: REBUILD
+    replacement_note: "@pp/engine replaces codex/gemini generate bridges"
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: runAuthoringCompletion, op: defined}
+    status: done
+  - id: G2
+    subsystem: generation
+    capability: runCodingSession — multi-turn agentic coding (createAgentSession)
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: runCodingSession, op: defined}
+    status: done
+  - id: G3
+    subsystem: generation
+    capability: critique — LLM judge (schema-validated verdict, retry+archive)
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: critique, op: defined}
+    status: done
+  - id: G4
+    subsystem: generation
+    capability: ModelCatalog — tier/judge resolution over pi builtin catalog
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: ModelCatalog, op: defined}
+      - {type: export, module: packages/engine/dist/index.js, symbol: TIER_MODELS, op: defined}
+    status: done
+  - id: G5
+    subsystem: generation
+    capability: platform AuthStorage — per-request key resolution, masked status
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: createPlatformAuthStorage, op: defined}
+    status: done
+  - id: G6
+    subsystem: generation
+    capability: FakeLlm / FakeCodegenSession + createEngine(mode)
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: createEngine, op: defined}
+    status: done
+
+  # ── Best-of-N ──
+  - id: BON1
+    subsystem: best-of-n
+    capability: diff_entropy — pairwise Jaccard similarity
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: diffEntropy, op: defined}
+    status: done
+  - id: BON2
+    subsystem: best-of-n
+    capability: borda_count — multi-ranking tournament
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: bordaCount, op: defined}
+    status: done
+  - id: BON3
+    subsystem: best-of-n
+    capability: record_smoke_status — per-candidate runtime smoke
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: recordSmokeStatus, op: defined}
+    status: done
+  - id: BON4
+    subsystem: best-of-n
+    capability: start_best_of_stage / archive_winner / teardown (worktree fan-out)
+    disposition: PORT
+    replacement_note: "core fns exist; pilot drives the worktree fan-out (M4). Adapter stubs these."
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: startBestOfStage, op: defined}
+    status: done
+
+  # ── Judges + rubrics (J1-J5) ──
+  - id: J1
+    subsystem: judges-rubrics
+    capability: gate_eligible_judges — cross-vendor routing policy
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: evaluateGate, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: listAllowedJudges, op: defined}
+    status: done
+  - id: J2
+    subsystem: judges-rubrics
+    capability: rubric registry — standard-aligned rubrics
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listRubrics, op: call-len, expect: 27}
+    status: done
+  - id: J3
+    subsystem: judges-rubrics
+    capability: get_rubric — rubric body + metadata
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: getRubric, op: defined}
+    status: done
+  - id: J4
+    subsystem: judges-rubrics
+    capability: rubric asset library on disk
+    disposition: PORT
+    verify:
+      - {type: asset-count, dir: assets/rubrics, ext: .md, expect: 27}
+    status: done
+  - id: J5
+    subsystem: judges-rubrics
+    capability: buildCritiqueOutputSchema + validateCritiqueResult (judge contract)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: validateCritiqueResult, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: buildCritiqueOutputSchema, op: defined}
+    status: done
+
+  # ── Teams / profiles / taxonomy / forums / templates ──
+  - id: TPF1
+    subsystem: teams-profiles-taxonomy
+    capability: team registry (resolve + list)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listTeams, op: defined}
+      - {type: asset-count, dir: assets/teams, ext: .yaml, expect: 26}
+    status: done
+  - id: TPF2
+    subsystem: teams-profiles-taxonomy
+    capability: built-in profiles
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listBuiltinProfiles, op: call-len, expect: 16}
+      - {type: asset-count, dir: assets/profiles, ext: .yaml, expect: 16}
+    status: done
+  - id: TPF3
+    subsystem: teams-profiles-taxonomy
+    capability: taxonomy sections (4.1..4.16) + completion checklist
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: TAXONOMY_SECTIONS, op: len, expect: 16}
+      - {type: export, module: packages/core/dist/index.js, symbol: COMPLETION_CHECKLIST, op: len, expect: 15}
+    status: done
+  - id: TPF4
+    subsystem: teams-profiles-taxonomy
+    capability: governance forums (Section 8)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: listForums, op: call-len, expect: 10}
+    status: done
+  - id: TPF5
+    subsystem: teams-profiles-taxonomy
+    capability: design templates
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: TEMPLATES_BY_KIND, op: keys-len, expect: 5}
+    status: done
+  - id: TPF6
+    subsystem: teams-profiles-taxonomy
+    capability: profile detection (framework/packaging sniff)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: detectProfile, op: defined}
+    status: done
+  - id: TPF7
+    subsystem: teams-profiles-taxonomy
+    capability: game-dev gotchas asset library
+    disposition: PORT
+    verify:
+      - {type: asset-count, dir: assets/gotchas, ext: .md, expect: 7}
+    status: done
+
+  # ── Missability / TDD / validators ──
+  - id: MTV1
+    subsystem: missability-tdd-validators
+    capability: missability check library
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: CHECK_DEFINITIONS, op: len, expect: 56}
+    status: done
+  - id: MTV2
+    subsystem: missability-tdd-validators
+    capability: run_missability_checks against archived artifacts
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: runMissabilityChecks, op: defined}
+    status: done
+  - id: MTV3
+    subsystem: missability-tdd-validators
+    capability: TDD execution gate (pre/post)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: runTddCheck, op: defined}
+    status: done
+  - id: MTV4
+    subsystem: missability-tdd-validators
+    capability: artifact validators (adr/contracts/tokens/mermaid/c4)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: runArtifactValidator, op: defined}
+      - {type: export, module: packages/core/dist/index.js, symbol: VALIDATOR_KINDS, op: defined}
+      - {type: test, file: packages/mcp-adapter/test/artifact-validate.test.ts, contains: adr_structure_lint}
+    status: done
+
+  # ── Budget / prices ──
+  - id: BP1
+    subsystem: budget-prices
+    capability: budget_status — per-scope budget rows
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: budgetStatus, op: defined}
+    status: done
+  - id: BP2
+    subsystem: budget-prices
+    capability: price table + computeCost fallback
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: computeCost, op: defined}
+    status: done
+
+  # ── Security ──
+  - id: SEC1
+    subsystem: security
+    capability: secret scanning (pre-write block)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: scanForSecrets, op: defined}
+      - {type: export, module: packages/engine/dist/index.js, symbol: assertNoSecrets, op: defined}
+    status: done
+  - id: SEC2
+    subsystem: security
+    capability: untrusted-content envelope for judge/generator inputs
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: wrapUntrusted, op: defined}
+    status: done
+  - id: SEC3
+    subsystem: security
+    capability: destructive-shell safety evaluator + engine bash guard
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: evaluateShellSafety, op: defined}
+      - {type: export, module: packages/engine/dist/index.js, symbol: assertBashAllowed, op: defined}
+      - {type: test, file: packages/engine/test/tool-guards.test.ts, contains: "rm -rf /"}
+    status: done
+
+  # ── Ecosystem ──
+  - id: ECO1
+    subsystem: ecosystem
+    capability: eights/hydra client graceful degradation (breakers)
+    disposition: ADAPT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: setCritiqueSmokeProviders, op: defined}
+    status: done
+  - id: ECO2
+    subsystem: ecosystem
+    capability: PP_ECOSYSTEM master switch (default OFF, no subprocess spawn)
+    disposition: ADAPT
+    replacement_note: "M8a — config.ecosystemEnabled() gates probe/spawn"
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: ecosystemEnabled, op: defined}
+      - {type: test, file: packages/core/test/ecosystem-guard.unit.mjs, contains: PP_ECOSYSTEM}
+    status: done
+  - id: ECO3
+    subsystem: ecosystem
+    capability: hydra envelope emit/query (outbound to TheEights)
+    disposition: ADAPT
+    replacement_note: "core degrades; adapter stubs; needs live peer"
+    verify:
+      - {type: todo, note: "wired to platform server/pilot in a later milestone"}
+    status: pending
+
+  # ── Constitution / AGENTS.md / master-plan ──
+  - id: GOV1
+    subsystem: governance-docs
+    capability: constitution scaffold + attest + forbidden patterns
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: ensureConstitution, op: defined}
+    status: done
+  - id: GOV2
+    subsystem: governance-docs
+    capability: AGENTS.md / CLAUDE.md cross-tool contract
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: ensureAgentsMd, op: defined}
+    status: done
+  - id: GOV3
+    subsystem: governance-docs
+    capability: PROJECT_MASTER.md (Section 9) patch + status
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: applyMasterPlanPatch, op: defined}
+    status: done
+
+  # ── Doctor / janitor / replay ──
+  - id: OPS1
+    subsystem: ops
+    capability: doctor health-check (critique smoke injectable)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: doctor, op: defined}
+    status: done
+  - id: OPS2
+    subsystem: ops
+    capability: janitor (crash sweep + worktree reap)
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: runJanitor, op: defined}
+    status: done
+  - id: OPS3
+    subsystem: ops
+    capability: replay bundle reconstruction
+    disposition: PORT
+    verify:
+      - {type: export, module: packages/core/dist/index.js, symbol: buildReplayBundle, op: defined}
+    status: done
+  - id: OPS4
+    subsystem: ops
+    capability: engine doctorProbe + attachToCore critique smokes
+    disposition: REBUILD
+    verify:
+      - {type: export, module: packages/engine/dist/index.js, symbol: doctorProbe, op: defined}
+      - {type: export, module: packages/engine/dist/index.js, symbol: attachToCore, op: defined}
+    status: done
+
+  # ── Autogenesis / evolution ──
+  - id: EVO1
+    subsystem: autogenesis
+    capability: autogenesis analyzer (recurring-drift proposals)
+    disposition: ADAPT
+    replacement_note: "core analyzer present; adapter stubs the evolution tools"
+    verify:
+      - {type: todo, note: "evolution UI + ecosystem commit path lands in M6/M7"}
+    status: pending
+
+  # ── Visual / browser ──
+  - id: VB1
+    subsystem: visual-browser
+    capability: visual regression + browser validation
+    disposition: ADAPT
+    replacement_note: "core fns present; platform validator agents drive them; adapter stubs"
+    verify:
+      - {type: todo, note: "wired in M7 (visual/browser validators)"}
+    status: pending
+
+  # ── HTTP control plane ──
+  - id: HTTP1
+    subsystem: http-plane
+    capability: REST + SSE server (@pp/server)
+    disposition: REBUILD
+    verify:
+      - {type: endpoint, path: /api/runs, note: "M5 in progress"}
+    status: pending
+
+  # ── MCP compat ──
+  - id: MCP1
+    subsystem: mcp-compat
+    capability: pp_harness-compatible MCP stdio server (75 tools)
+    disposition: ADAPT
+    replacement_note: "@pp/mcp-adapter (M7a) — 58 full / 17 stub"
+    verify:
+      - {type: export, module: packages/mcp-adapter/dist/index.js, symbol: TOOLS, op: len, expect: 75}
+      - {type: export, module: packages/mcp-adapter/dist/index.js, symbol: toolCoverage, op: defined}
+      - {type: test, file: packages/mcp-adapter/test/roundtrip.test.ts, contains: not_available_in_adapter}
+    status: done
+
+  # ── Commands (19 /pp:* → platform equivalents) ──
+  - id: CMD1
+    subsystem: commands
+    capability: 19 /pp:* slash commands → ppp CLI / platform equivalents
+    disposition: REBUILD
+    replacement_note: "ppp CLI (M3) + platform UI (M5/M6)"
+    verify:
+      - {type: todo, note: "command surface rebuilt across M3/M5/M6"}
+    status: pending
+
+  # ── Agents (prompts) ──
+  - id: AG1
+    subsystem: agents
+    capability: agent prompt source library on disk
+    disposition: PORT
+    replacement_note: "assets/agents-src holds 75 prompt sources (lead estimated 78)"
+    verify:
+      - {type: asset-count, dir: assets/agents-src, ext: .md, expect: 75}
+    status: done
+  - id: AG2
+    subsystem: agents
+    capability: agent prompts ported to platform dispatch
+    disposition: REBUILD
+    verify:
+      - {type: todo, note: "prompt port lands in M8"}
+    status: pending
+  - id: AG3
+    subsystem: agents
+    capability: game-dev prompt addenda
+    disposition: PORT
+    verify:
+      - {type: asset-count, dir: assets/prompt-addenda, ext: .md, expect: 4}
+    status: done
+
+  # ── Skills ──
+  - id: SK1
+    subsystem: skills
+    capability: 8 harness skills → platform skills
+    disposition: REBUILD
+    verify:
+      - {type: todo, note: "skills port lands in M8"}
+    status: pending
+
+  # ── Hooks (H1-H29) — 29 dispatcher behaviors, new-home disposition ──
+  # Source of truth: pair-programmer/daemon/src/hooks/dispatcher.ts
+  - id: H1
+    subsystem: hooks
+    capability: "SessionStart/daemon-up — daemon reachability preamble"
+    disposition: ADAPT
+    replacement_note: pilot-preamble
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H2
+    subsystem: hooks
+    capability: "SessionStart/vendor-matrix — vendor capability summary"
+    disposition: ADAPT
+    replacement_note: pilot-preamble (doctor)
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H3
+    subsystem: hooks
+    capability: "SessionStart/cli-version-pin — pin sub-CLI versions"
+    disposition: DROP_REPLACED
+    replacement_note: "no sub-CLIs; pi runtime replaces codex/gemini/copilot"
+    verify: [{type: todo, note: "dropped — pi engine"}]
+    status: pending
+  - id: H4
+    subsystem: hooks
+    capability: "SessionStart/master-plan-load — surface PROJECT_MASTER.md"
+    disposition: ADAPT
+    replacement_note: pilot-preamble
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H5
+    subsystem: hooks
+    capability: "SessionStart/surfaced-runs — remind about surfaced runs"
+    disposition: ADAPT
+    replacement_note: pilot-preamble / UI-surface
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H6
+    subsystem: hooks
+    capability: "SessionStart/eights-recall-project — episodic project recall"
+    disposition: ADAPT
+    replacement_note: ecosystem (PP_ECOSYSTEM-gated)
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H7
+    subsystem: hooks
+    capability: "PreToolUse/block-destructive-shell — rm -rf guard"
+    disposition: PORT
+    replacement_note: "tool-guard/engine — @pp/engine assertBashAllowed (DONE at engine layer; hook wiring pending)"
+    verify: [{type: todo, note: "engine guard done; hook-event wiring in M7"}]
+    status: pending
+  - id: H8
+    subsystem: hooks
+    capability: "PreToolUse/enforce-active-run — require an open run"
+    disposition: ADAPT
+    replacement_note: core-assertion / pilot
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H9
+    subsystem: hooks
+    capability: "PreToolUse/enforce-vendor-matrix — cross-vendor availability"
+    disposition: ADAPT
+    replacement_note: core-assertion
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H10
+    subsystem: hooks
+    capability: "PreToolUse/enforce-sandbox-policy — read-only vs workspace-write"
+    disposition: PORT
+    replacement_note: "tool-guard/engine — coding vs readonly tool policy"
+    verify: [{type: todo, note: "engine policy done; hook wiring in M7"}]
+    status: pending
+  - id: H11
+    subsystem: hooks
+    capability: "PreToolUse/enforce-no-secrets — block secret writes"
+    disposition: PORT
+    replacement_note: "tool-guard/engine — scanForSecrets (DONE at engine layer)"
+    verify: [{type: todo, note: "engine guard done; hook wiring in M7"}]
+    status: pending
+  - id: H12
+    subsystem: hooks
+    capability: "PreToolUse/enforce-validator-gate — block finalize without validation"
+    disposition: PORT
+    replacement_note: "finalize-blocker — core getStageFinalizeReadiness"
+    verify: [{type: todo, note: "core gate done; hook wiring in M7"}]
+    status: pending
+  - id: H13
+    subsystem: hooks
+    capability: "PreToolUse/enforce-rfc2119-language — normative spec language"
+    disposition: ADAPT
+    replacement_note: core-assertion / prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H14
+    subsystem: hooks
+    capability: "PreToolUse/eights-recall-stage — episodic stage recall"
+    disposition: ADAPT
+    replacement_note: ecosystem
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H15
+    subsystem: hooks
+    capability: "PostToolUse/cost-tally — accumulate token cost"
+    disposition: PORT
+    replacement_note: "core-assertion — recordAttempt tallies budget"
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H16
+    subsystem: hooks
+    capability: "PostToolUse/record-attempt — auto-record on tool result"
+    disposition: PORT
+    replacement_note: core-assertion
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H17
+    subsystem: hooks
+    capability: "PostToolUse/taxonomy-coverage-update — mark section coverage"
+    disposition: ADAPT
+    replacement_note: core-assertion
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H18
+    subsystem: hooks
+    capability: "PostToolUse/hash-artifact — content hash on archive"
+    disposition: PORT
+    replacement_note: "core-assertion — archive_artifact hashes"
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H19
+    subsystem: hooks
+    capability: "PostToolUse/loop-ceiling-tally — validator-call ceiling"
+    disposition: PORT
+    replacement_note: "core-assertion — loop_ceiling_status"
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H20
+    subsystem: hooks
+    capability: "PostToolUse/verdict-rubric-coverage — rubric dimensions covered"
+    disposition: ADAPT
+    replacement_note: core-assertion
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H21
+    subsystem: hooks
+    capability: "PostToolUse/update-master-plan — patch master plan on finalize"
+    disposition: ADAPT
+    replacement_note: finalize-blocker / pilot
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H22
+    subsystem: hooks
+    capability: "UserPromptSubmit/taxonomy-nudge — suggest taxonomy sections"
+    disposition: ADAPT
+    replacement_note: prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H23
+    subsystem: hooks
+    capability: "UserPromptSubmit/team-suggester — suggest a team"
+    disposition: ADAPT
+    replacement_note: prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H24
+    subsystem: hooks
+    capability: "UserPromptSubmit/risk-flag — flag risky requests"
+    disposition: ADAPT
+    replacement_note: prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H25
+    subsystem: hooks
+    capability: "UserPromptSubmit/surfaced-run-reminder — remind of open runs"
+    disposition: ADAPT
+    replacement_note: prompt-decorator / UI-surface
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H26
+    subsystem: hooks
+    capability: "UserPromptSubmit/profile-aware-nudge — profile-specific hints"
+    disposition: ADAPT
+    replacement_note: prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H27
+    subsystem: hooks
+    capability: "UserPromptSubmit/eights-recall-request — recall on prompt"
+    disposition: ADAPT
+    replacement_note: ecosystem / prompt-decorator
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H28
+    subsystem: hooks
+    capability: "Stop/decision-log-required — require decision log at stop"
+    disposition: ADAPT
+    replacement_note: finalize-blocker
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
+  - id: H29
+    subsystem: hooks
+    capability: "Stop/summary-format-check — validate run summary format"
+    disposition: ADAPT
+    replacement_note: finalize-blocker
+    verify: [{type: todo, note: "M7 hooks parity"}]
+    status: pending
