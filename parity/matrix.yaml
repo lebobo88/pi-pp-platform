@@ -465,10 +465,10 @@ rows:
     subsystem: autogenesis
     capability: autogenesis analyzer (recurring-drift proposals)
     disposition: ADAPT
-    replacement_note: "core analyzer present; adapter stubs the evolution tools"
+    replacement_note: "core analyzer wired into @pp/pilot finalize; ecosystem commit path stays optional"
     verify:
-      - {type: todo, note: "evolution UI + ecosystem commit path lands in M6/M7"}
-    status: pending
+      - {type: test, file: packages/pilot/test/evolution.test.ts, contains: analyzeAndPropose}
+    status: done
 
   # ── Visual / browser ──
   - id: VB1
@@ -575,201 +575,201 @@ rows:
     capability: "SessionStart/daemon-up — daemon reachability preamble"
     disposition: ADAPT
     replacement_note: pilot-preamble
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H1"'}]
+    status: done
   - id: H2
     subsystem: hooks
     capability: "SessionStart/vendor-matrix — vendor capability summary"
     disposition: ADAPT
     replacement_note: pilot-preamble (doctor)
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H2"'}]
+    status: done
   - id: H3
     subsystem: hooks
     capability: "SessionStart/cli-version-pin — pin sub-CLI versions"
     disposition: DROP_REPLACED
     replacement_note: "no sub-CLIs; pi runtime replaces codex/gemini/copilot"
-    verify: [{type: todo, note: "dropped — pi engine"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H3"'}]
+    status: done
   - id: H4
     subsystem: hooks
     capability: "SessionStart/master-plan-load — surface PROJECT_MASTER.md"
     disposition: ADAPT
     replacement_note: pilot-preamble
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H4"'}]
+    status: done
   - id: H5
     subsystem: hooks
     capability: "SessionStart/surfaced-runs — remind about surfaced runs"
     disposition: ADAPT
     replacement_note: pilot-preamble / UI-surface
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H5"'}]
+    status: done
   - id: H6
     subsystem: hooks
     capability: "SessionStart/eights-recall-project — episodic project recall"
     disposition: ADAPT
     replacement_note: ecosystem (PP_ECOSYSTEM-gated)
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H6"'}]
+    status: done
   - id: H7
     subsystem: hooks
     capability: "PreToolUse/block-destructive-shell — rm -rf guard"
     disposition: PORT
     replacement_note: "tool-guard/engine — @pp/engine assertBashAllowed (DONE at engine layer; hook wiring pending)"
-    verify: [{type: todo, note: "engine guard done; hook-event wiring in M7"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H7"'}]
+    status: done
   - id: H8
     subsystem: hooks
     capability: "PreToolUse/enforce-active-run — require an open run"
     disposition: ADAPT
     replacement_note: core-assertion / pilot
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H8"'}]
+    status: done
   - id: H9
     subsystem: hooks
     capability: "PreToolUse/enforce-vendor-matrix — cross-vendor availability"
     disposition: ADAPT
     replacement_note: core-assertion
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H9"'}]
+    status: done
   - id: H10
     subsystem: hooks
     capability: "PreToolUse/enforce-sandbox-policy — read-only vs workspace-write"
     disposition: PORT
     replacement_note: "tool-guard/engine — coding vs readonly tool policy"
-    verify: [{type: todo, note: "engine policy done; hook wiring in M7"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H10"'}]
+    status: done
   - id: H11
     subsystem: hooks
     capability: "PreToolUse/enforce-no-secrets — block secret writes"
     disposition: PORT
     replacement_note: "tool-guard/engine — scanForSecrets (DONE at engine layer)"
-    verify: [{type: todo, note: "engine guard done; hook wiring in M7"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H11"'}]
+    status: done
   - id: H12
     subsystem: hooks
     capability: "PreToolUse/enforce-validator-gate — block finalize without validation"
     disposition: PORT
     replacement_note: "finalize-blocker — core getStageFinalizeReadiness"
-    verify: [{type: todo, note: "core gate done; hook wiring in M7"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H12"'}]
+    status: done
   - id: H13
     subsystem: hooks
     capability: "PreToolUse/enforce-rfc2119-language — normative spec language"
     disposition: ADAPT
     replacement_note: core-assertion / prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H13"'}]
+    status: done
   - id: H14
     subsystem: hooks
     capability: "PreToolUse/eights-recall-stage — episodic stage recall"
     disposition: ADAPT
     replacement_note: ecosystem
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H14"'}]
+    status: done
   - id: H15
     subsystem: hooks
     capability: "PostToolUse/cost-tally — accumulate token cost"
     disposition: PORT
     replacement_note: "core-assertion — recordAttempt tallies budget"
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H15"'}]
+    status: done
   - id: H16
     subsystem: hooks
     capability: "PostToolUse/record-attempt — auto-record on tool result"
     disposition: PORT
     replacement_note: core-assertion
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H16"'}]
+    status: done
   - id: H17
     subsystem: hooks
     capability: "PostToolUse/taxonomy-coverage-update — mark section coverage"
     disposition: ADAPT
     replacement_note: core-assertion
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H17"'}]
+    status: done
   - id: H18
     subsystem: hooks
     capability: "PostToolUse/hash-artifact — content hash on archive"
     disposition: PORT
     replacement_note: "core-assertion — archive_artifact hashes"
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H18"'}]
+    status: done
   - id: H19
     subsystem: hooks
     capability: "PostToolUse/loop-ceiling-tally — validator-call ceiling"
     disposition: PORT
     replacement_note: "core-assertion — loop_ceiling_status"
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H19"'}]
+    status: done
   - id: H20
     subsystem: hooks
     capability: "PostToolUse/verdict-rubric-coverage — rubric dimensions covered"
     disposition: ADAPT
     replacement_note: core-assertion
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H20"'}]
+    status: done
   - id: H21
     subsystem: hooks
     capability: "PostToolUse/update-master-plan — patch master plan on finalize"
     disposition: ADAPT
     replacement_note: finalize-blocker / pilot
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H21"'}]
+    status: done
   - id: H22
     subsystem: hooks
     capability: "UserPromptSubmit/taxonomy-nudge — suggest taxonomy sections"
     disposition: ADAPT
     replacement_note: prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H22"'}]
+    status: done
   - id: H23
     subsystem: hooks
     capability: "UserPromptSubmit/team-suggester — suggest a team"
     disposition: ADAPT
     replacement_note: prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H23"'}]
+    status: done
   - id: H24
     subsystem: hooks
     capability: "UserPromptSubmit/risk-flag — flag risky requests"
     disposition: ADAPT
     replacement_note: prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H24"'}]
+    status: done
   - id: H25
     subsystem: hooks
     capability: "UserPromptSubmit/surfaced-run-reminder — remind of open runs"
     disposition: ADAPT
     replacement_note: prompt-decorator / UI-surface
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H25"'}]
+    status: done
   - id: H26
     subsystem: hooks
     capability: "UserPromptSubmit/profile-aware-nudge — profile-specific hints"
     disposition: ADAPT
     replacement_note: prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H26"'}]
+    status: done
   - id: H27
     subsystem: hooks
     capability: "UserPromptSubmit/eights-recall-request — recall on prompt"
     disposition: ADAPT
     replacement_note: ecosystem / prompt-decorator
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H27"'}]
+    status: done
   - id: H28
     subsystem: hooks
     capability: "Stop/decision-log-required — require decision log at stop"
     disposition: ADAPT
     replacement_note: finalize-blocker
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H28"'}]
+    status: done
   - id: H29
     subsystem: hooks
     capability: "Stop/summary-format-check — validate run summary format"
     disposition: ADAPT
     replacement_note: finalize-blocker
-    verify: [{type: todo, note: "M7 hooks parity"}]
-    status: pending
+    verify: [{type: test, file: packages/pilot/test/hooks-parity.test.ts, contains: '"H29"'}]
+    status: done

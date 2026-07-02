@@ -54,3 +54,16 @@ export type {
   StageOutcome,
   Clock,
 } from "./types.js";
+
+export {
+  HOOKS,
+  runHooks,
+  isBlocked,
+  getHook,
+  type Hook,
+  type HookInput,
+  type HookResult,
+  type HookState,
+  type HookPhase,
+  type HookDecision,
+} from "./hooks/index.js";
