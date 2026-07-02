@@ -1,0 +1,48 @@
+/*
+ * pi-pp-platform design tokens — "instrument panel".
+ * Dark-first developer instrument. Single warm accent ("harness copper").
+ * These raw custom properties are the source of truth; global.css maps them
+ * into Tailwind's @theme so they surface as utilities (bg-bg-0, text-ink-2,
+ * border-line-1, text-accent, …).
+ */
+:root {
+  /* Surfaces — deepest to raised */
+  --bg-0: #0a0c10;
+  --bg-1: #10141b;
+  --bg-2: #171c25;
+  --bg-3: #1f2632;
+
+  /* Borders / hairlines */
+  --line-1: #232a36;
+  --line-2: #303948;
+
+  /* Ink — primary to faint */
+  --ink-1: #e8ecf2;
+  --ink-2: #9aa5b5;
+  --ink-3: #5c6779;
+
+  /* Accent — single, warm copper */
+  --accent: #e8a33d;
+  --accent-ink: #14100a;
+  --accent-dim: #8a6526;
+
+  /* Status palette */
+  --run: #4da3ff;
+  --pass: #3fcf8e;
+  --fail: #f0564a;
+  --warn: #e5b84b;
+  --judge: #b48cff;
+  --dim: #5c6779;
+
+  /* Typography */
+  --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* Base sizes */
+  --text-ui: 13px;
+  --text-mono: 12px;
+}

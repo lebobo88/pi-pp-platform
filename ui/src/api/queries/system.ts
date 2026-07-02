@@ -1,0 +1,31 @@
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import { qk } from "@/api/queryKeys";
+import {
+  apiPaths,
+  type DoctorReport,
+  type EvolutionProposal,
+} from "@shared/api-types";
+
+export function useHealth() {
+  return useQuery({
+    queryKey: qk.health,
+    queryFn: ({ signal }) => api.get<{ ok: boolean; version?: string }>(apiPaths.health, { signal }),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+}
+
+export function useDoctor() {
+  return useQuery({
+    queryKey: qk.doctor,
+    queryFn: ({ signal }) => api.get<DoctorReport>(apiPaths.doctor, { signal }),
+  });
+}
+
+export function useEvolutionProposals() {
+  return useQuery({
+    queryKey: qk.evolution,
+    queryFn: ({ signal }) => api.get<EvolutionProposal[]>(apiPaths.evolution, { signal }),
+  });
+}
