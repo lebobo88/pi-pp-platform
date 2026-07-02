@@ -78,7 +78,9 @@ export function NewRunPage() {
   };
 
   const selectedTeam = teams?.find((t) => t.name === state.team) ?? null;
-  const stageCount = state.mode === "team" && selectedTeam ? selectedTeam.stages.length : defaultStageCount(state.mode);
+  // The teams list omits stages; fall back to the default when unknown.
+  const teamStageCount = selectedTeam?.stages?.length;
+  const stageCount = state.mode === "team" && teamStageCount ? teamStageCount : defaultStageCount(state.mode);
   const dearTier: ClaudeTier = state.tierCap || "opus";
   const estimate = useMemo(
     () =>
@@ -419,8 +421,11 @@ function TeamPicker({
               </div>
               <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-3">{t.description}</p>
               <div className="mt-1 flex flex-wrap gap-1">
-                {t.stages.slice(0, 5).map((s, i) => (
+                {(t.stages ?? []).slice(0, 5).map((s, i) => (
                   <Pill key={i}>{s.kind}</Pill>
+                ))}
+                {!t.stages && (t.taxonomy_required ?? []).slice(0, 4).map((tx) => (
+                  <Pill key={tx} tone="accent">{tx}</Pill>
                 ))}
               </div>
             </button>

@@ -276,7 +276,12 @@ export interface TeamSpec {
   description: string;
   origin?: "project" | "user" | "builtin";
   profiles_compatible?: string[];
-  stages: TeamStage[];
+  /**
+   * Present on the DETAIL fetch (`GET /teams/:name`). The LIST endpoint
+   * (`GET /teams`) returns a summary WITHOUT stages, so treat as optional and
+   * fetch the full team when you need the pipeline.
+   */
+  stages?: TeamStage[];
   taxonomy_required?: string[];
   missability_required?: string[];
 }

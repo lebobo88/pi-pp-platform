@@ -7,7 +7,7 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusChip } from "@/components/StatusChip";
 import { Pill } from "@/features/common/chips";
-import { useTeams } from "@/api/queries/library";
+import { useTeams, useTeam } from "@/api/queries/library";
 import { LibraryTabs } from "./LibraryTabs";
 
 export function TeamsPage() {
@@ -30,8 +30,12 @@ export function TeamsPage() {
               >
                 <p className="line-clamp-2 text-[12px] text-ink-3">{team.description}</p>
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {team.stages.map((s, i) => (
+                  {/* The list endpoint omits stages — show taxonomy tags instead. */}
+                  {(team.stages ?? []).map((s, i) => (
                     <Pill key={i} title={`${s.gate_type} · ${s.judge.tier}`}>{s.kind}</Pill>
+                  ))}
+                  {!team.stages && (team.taxonomy_required ?? []).map((t) => (
+                    <Pill key={t} tone="accent">{t}</Pill>
                   ))}
                 </div>
               </Card>
@@ -51,6 +55,9 @@ function OriginBadge({ origin }: { origin: "project" | "user" | "builtin" }) {
 }
 
 function TeamDetailDrawer({ team, onClose }: { team: TeamSpec | null; onClose: () => void }) {
+  // The list item lacks stages; fetch the full team for the pipeline.
+  const { data: full } = useTeam(team?.name);
+  const detail = full ?? team;
   return (
     <Drawer
       open={!!team}
@@ -59,20 +66,21 @@ function TeamDetailDrawer({ team, onClose }: { team: TeamSpec | null; onClose: (
       title={team ? <span className="flex items-center gap-2">{team.name} {team.origin && <OriginBadge origin={team.origin} />}</span> : ""}
       footer={<Button variant="primary" onClick={onClose}>Close</Button>}
     >
-      {team && (
+      {detail && (
         <>
-          <p className="text-[13px] text-ink-2">{team.description}</p>
-          {team.taxonomy_required && team.taxonomy_required.length > 0 && (
+          <p className="text-[13px] text-ink-2">{detail.description}</p>
+          {detail.taxonomy_required && detail.taxonomy_required.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-1">
               <span className="text-[11px] text-ink-3">taxonomy:</span>
-              {team.taxonomy_required.map((t) => (
+              {detail.taxonomy_required.map((t) => (
                 <Pill key={t} tone="accent">{t}</Pill>
               ))}
             </div>
           )}
 
+          {!detail.stages && <p className="mt-4 text-[12px] text-ink-3">Loading pipeline…</p>}
           <div className="mt-4 space-y-2">
-            {team.stages.map((s, i) => (
+            {(detail.stages ?? []).map((s, i) => (
               <div key={i} className="rounded-md border border-line-1 bg-bg-1 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex items-center gap-2">

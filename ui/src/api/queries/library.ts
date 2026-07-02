@@ -20,7 +20,11 @@ export function useTeams() {
 export function useTeam(name: string | undefined) {
   return useQuery({
     queryKey: qk.team(name ?? ""),
-    queryFn: ({ signal }) => api.get<TeamSpec>(apiPaths.team(name!), { signal }),
+    // The server wraps the spec: GET /teams/:name → { team, origin }. Unwrap
+    // to a flat TeamSpec (origin merged) so callers get stages directly.
+    queryFn: ({ signal }) =>
+      api.get<{ team: TeamSpec; origin?: TeamSpec["origin"] }>(apiPaths.team(name!), { signal }),
+    select: (raw) => ({ ...raw.team, origin: raw.origin ?? raw.team.origin }) as TeamSpec,
     enabled: !!name,
   });
 }

@@ -309,12 +309,16 @@ function route(method: string, url: URL, body: unknown): Response | null {
     return f ? json(f) : errorResponse(404, `forum ${id} not found`);
   }
 
-  if (p === apiPaths.teams) return json(mockTeams);
+  // Faithful to the server: the list is a SUMMARY without stages.
+  if (p === apiPaths.teams) {
+    return json(mockTeams.map(({ stages: _stages, missability_required: _m, ...summary }) => summary));
+  }
   const teamMatch = p.match(/^\/api\/v1\/teams\/([^/]+)$/);
   if (teamMatch) {
     const name = decode(teamMatch[1]!);
     const t = mockTeams.find((x) => x.name === name);
-    return t ? json(t) : errorResponse(404, `team ${name} not found`);
+    // Faithful to the server: detail is wrapped as { team, origin }.
+    return t ? json({ team: t, origin: t.origin ?? "builtin" }) : errorResponse(404, `team ${name} not found`);
   }
 
   if (p === apiPaths.profiles) return json(mockProfiles);
