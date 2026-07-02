@@ -40,6 +40,8 @@ export type { DetectedProposal } from "./orchestrator/autogenesis-analyzer.js";
 // Pilot seam (M7): visual regression + browser validation stage drivers.
 export * from "./orchestrator/browser-validation.js";
 export * from "./orchestrator/visual-regression.js";
+// Pilot seam (M7.5): agent_sessions recording + replay session-hash records.
+export * from "./orchestrator/agent-sessions.js";
 // Server seam (M5c / v8): project registry + platform settings kv.
 export * from "./orchestrator/projects.js";
 export * from "./orchestrator/settings.js";

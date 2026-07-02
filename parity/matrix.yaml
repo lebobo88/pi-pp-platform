@@ -401,10 +401,11 @@ rows:
     subsystem: ecosystem
     capability: hydra envelope emit/query (outbound to TheEights)
     disposition: ADAPT
-    replacement_note: "core degrades; adapter stubs; needs live peer"
+    replacement_note: "core emitDecisionRecord path ported + PP_ECOSYSTEM=1-gated; degrades identically to upstream when the peer is offline (offline IS normal operation). Live envelope round-trip verified via eights_hydra_envelope_record on 2026-07-02. Degraded-path is the parity bar."
     verify:
-      - {type: todo, note: "wired to platform server/pilot in a later milestone"}
-    status: pending
+      - {type: test, file: packages/core/test/ecosystem-guard.unit.mjs, contains: PP_ECOSYSTEM}
+      - {type: test, file: packages/core/test/ecosystem.unit.mjs, contains: envelope}
+    status: done
 
   # ── Constitution / AGENTS.md / master-plan ──
   - id: GOV1

@@ -15,6 +15,7 @@ import { mkdirSync } from "node:fs";
 import {
   startStage,
   recordAttempt,
+  recordAgentSession,
   recordVerdict,
   getStageFinalizeReadiness,
   finalizeStage,
@@ -196,6 +197,19 @@ async function generate(
     attempted_tier: tier,
     agent_type: stage.agent,
   });
+
+  // Record the engine session (transcript file) for replay/audit when one exists
+  // (coding/readonly sessions; single completions have no session file).
+  if (genResult.session_file) {
+    recordAgentSession({
+      run_id: ctx.run_id,
+      attempt_id: attempt.attempt_id,
+      role: stage.agent,
+      provider: genResult.provider,
+      model_id: modelId,
+      session_file: genResult.session_file,
+    });
+  }
 
   emit(
     ctx,

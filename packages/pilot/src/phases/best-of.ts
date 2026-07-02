@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import {
   startBestOfStage,
   recordAttempt,
+  recordAgentSession,
   recordVerdict,
   recordSmokeStatus,
   diffEntropy,
@@ -151,6 +152,17 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       attempt_slot_id: c.attempt_slot_id,
       notes: { candidate_index: c.candidate_index },
     });
+
+    if (gen.session_file) {
+      recordAgentSession({
+        run_id: ctx.run_id,
+        attempt_id: attempt.attempt_id,
+        role: stage.agent,
+        provider: gen.provider,
+        model_id: rot.model_id,
+        session_file: gen.session_file,
+      });
+    }
 
     // Runtime smoke: injectable for tests; a real engineer records the true
     // result. VG-5 needs the WINNER's candidate smoke to be 'pass'.

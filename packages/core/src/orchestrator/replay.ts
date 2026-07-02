@@ -15,6 +15,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { db } from "../db/database.js";
 import { projectArtifactDir } from "../util/paths.js";
+import { agentSessionReplayRecords } from "./agent-sessions.js";
 
 export type ReplayBundle = {
   run_id: string;
@@ -57,6 +58,12 @@ export type ReplayBundle = {
     }>;
   }>;
   artifacts: Array<{ kind: string | null; path: string; sha256: string }>;
+  /**
+   * Every recorded engine session (role/provider/model + transcript path) with
+   * a sha256 of the on-disk `.jsonl` so a replay can prove the sessions were
+   * not altered. Empty for runs that recorded no sessions.
+   */
+  agent_sessions: Array<{ role: string; provider: string; model_id: string; session_file: string; sha256: string | null }>;
   /**
    * Parsed contents of `<run_id>/tier_decisions.json` if the driver
    * archived one. Captures the per-stage resolver trace + cli_flags +
@@ -149,6 +156,7 @@ export function buildReplayBundle(run_id: string): ReplayBundle | null {
     finished_at: run.finished_at,
     stages: stageBundles,
     artifacts,
+    agent_sessions: agentSessionReplayRecords(run.id),
     tier_resolution: tierResolution,
     cli_flags: cliFlags,
     reproduction_notes:
