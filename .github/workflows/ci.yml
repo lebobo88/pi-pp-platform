@@ -18,8 +18,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
+      # Build first so cross-package type declarations (dist/*.d.ts) exist for
+      # the recursive typecheck — a clean checkout has nothing built yet.
       - run: pnpm build
+      - run: pnpm typecheck
       - run: pnpm test
 
   validate-live:
