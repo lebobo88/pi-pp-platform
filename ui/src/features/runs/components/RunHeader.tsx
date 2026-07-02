@@ -7,6 +7,7 @@ import { Meter } from "@/components/Meter";
 import { CopyButton } from "@/components/CopyButton";
 import { KeyValue } from "@/components/KeyValue";
 import { RunStatusChip, ModeChip } from "@/features/common/chips";
+import { AbortRunButton } from "./RunControls";
 import { formatUsd, formatDuration, formatTokens, basename, shortId } from "@/lib/format";
 import { runTotals, runElapsedMs } from "@/lib/runModel";
 
@@ -63,6 +64,9 @@ export function RunHeader({
         </div>
 
         <div className="w-64 shrink-0 space-y-3">
+          <div className="flex justify-end">
+            <AbortRunButton runId={run.id} status={status} />
+          </div>
           <Meter
             value={cost}
             max={RUN_CAP_USD}

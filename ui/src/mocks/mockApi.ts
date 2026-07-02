@@ -70,9 +70,91 @@ function decode(seg: string): string {
   }
 }
 
-/** Route a REST request to a fixture. Returns null when unmatched. */
-function route(method: string, url: URL): Response | null {
+/** Mask an API key for display: keep a short suffix, never the raw value. */
+function maskKey(vendor: string, raw: string): string {
+  const prefix = vendor === "anthropic" ? "sk-ant-" : vendor === "openai" ? "sk-" : "";
+  const tail = raw.replace(/\s/g, "").slice(-4);
+  return `${prefix}…${tail}`;
+}
+
+/** Handle a control-plane mutation. Returns null when unmatched. */
+function routeMutation(method: string, url: URL, body: unknown): Response | null {
   const p = url.pathname;
+
+  // Start run → return the animated demo run so navigation shows it live.
+  if (method === "POST" && p === apiPaths.runs) {
+    return json({ run_id: MOCK_RUN_ID });
+  }
+
+  const abort = p.match(/^\/api\/v1\/runs\/([^/]+)\/abort$/);
+  if (method === "POST" && abort) {
+    return json({ run_id: decode(abort[1]!), status: "aborted" });
+  }
+  const retry = p.match(/^\/api\/v1\/runs\/([^/]+)\/stages\/([^/]+)\/retry$/);
+  if (method === "POST" && retry) {
+    return json({ run_id: decode(retry[1]!), stage_id: decode(retry[2]!), action: "retry", ok: true });
+  }
+  const gate = p.match(/^\/api\/v1\/runs\/([^/]+)\/stages\/([^/]+)\/gate$/);
+  if (method === "POST" && gate) {
+    return json({ run_id: decode(gate[1]!), stage_id: decode(gate[2]!), action: "gate", ok: true });
+  }
+
+  // Provider key: WRITE-ONLY. Never echo the raw key — respond with the masked
+  // ProviderStatus only. This is the masked-key contract the gate enforces.
+  const keyMatch = p.match(/^\/api\/v1\/providers\/([^/]+)\/key$/);
+  if ((method === "PUT" || method === "POST") && keyMatch) {
+    const vendor = decode(keyMatch[1]!);
+    const raw = (body as { api_key?: string } | null)?.api_key ?? "";
+    if (!raw || raw.length < 8) {
+      return errorResponse(422, "validation failed", { api_key: "key looks too short" });
+    }
+    const existing = mockProviders.find((x) => x.vendor === vendor);
+    const updated = {
+      ...(existing ?? { vendor, cli_installed: true, cli_version: null, logged_in: false, degraded: false }),
+      vendor,
+      configured: true,
+      has_api_key: true,
+      masked_key: maskKey(vendor, raw),
+    };
+    return json(updated);
+  }
+  const testMatch = p.match(/^\/api\/v1\/providers\/([^/]+)\/test$/);
+  if (method === "POST" && testMatch) {
+    const vendor = decode(testMatch[1]!);
+    return json({ vendor, ok: true, status: "ok", model: `${vendor}-probe`, wall_ms: 1800, detail: "model resolved" });
+  }
+
+  if (method === "POST" && p === apiPaths.profileBootstrap) {
+    const b = (body as { project_path?: string; profile?: string } | null) ?? {};
+    return json({ ok: true, project_path: b.project_path, profile: b.profile });
+  }
+
+  const review = p.match(/^\/api\/v1\/evolution\/proposals\/([^/]+)\/review$/);
+  if (method === "POST" && review) {
+    const id = decode(review[1]!);
+    const decision = (body as { decision?: string } | null)?.decision ?? "approve";
+    const statusMap: Record<string, string> = { approve: "approved", reject: "rejected", commit: "committed", rollback: "rolled_back" };
+    const existing = mockEvolutionProposals.find((x) => x.id === id);
+    if (!existing) return errorResponse(404, `proposal ${id} not found`);
+    return json({ ...existing, status: statusMap[decision] ?? existing.status });
+  }
+
+  if (method === "PUT" && p === apiPaths.budgetCaps) {
+    const b = (body as { caps?: unknown } | null)?.caps;
+    return json(Array.isArray(b) ? b : mockCaps);
+  }
+
+  return null;
+}
+
+/** Route a REST request to a fixture. Returns null when unmatched. */
+function route(method: string, url: URL, body: unknown): Response | null {
+  const p = url.pathname;
+
+  if (method !== "GET") {
+    const mut = routeMutation(method, url, body);
+    if (mut) return mut;
+  }
 
   if (p === apiPaths.health) return json({ ok: true, version: "mock-0.1.0" });
   if (p === apiPaths.doctor) return json(mockDoctor);
@@ -150,7 +232,7 @@ function route(method: string, url: URL): Response | null {
     return json(mockContentFor(path));
   }
 
-  // Mutations: accept and echo. Later agents replace these with real behavior.
+  // Unmatched non-GET under the API base: accept and echo.
   if (method !== "GET" && p.startsWith(apiPaths.base)) {
     return json({ ok: true, mock: true });
   }
@@ -178,7 +260,15 @@ export function installMockApi(): void {
     }
 
     if (url.pathname.startsWith(apiPaths.base) || url.pathname === apiPaths.health) {
-      const res = route(method, url);
+      let body: unknown = undefined;
+      if (init?.body && typeof init.body === "string") {
+        try {
+          body = JSON.parse(init.body);
+        } catch {
+          body = undefined;
+        }
+      }
+      const res = route(method, url, body);
       if (res) {
         await new Promise((r) => setTimeout(r, LATENCY_MS));
         return res;

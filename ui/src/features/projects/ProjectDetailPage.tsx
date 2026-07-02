@@ -17,7 +17,10 @@ import {
   useAgentsMd,
   useConstitution,
 } from "@/api/queries/projects";
-import { useProfile } from "@/api/queries/library";
+import { useProfile, useProfiles } from "@/api/queries/library";
+import { useBootstrapProfile } from "@/api/mutations/misc";
+import { Button } from "@/components/Button";
+import { toast } from "@/stores/uiStore";
 import { formatRelative, shortId } from "@/lib/format";
 import type { RunSummary } from "@shared/api-types";
 
@@ -70,6 +73,7 @@ export function ProjectDetailPage() {
                 <DocRow label="PROJECT_MASTER.md" status={project.master_plan} />
               </div>
             </Card>
+            <ProfileBootstrap projectPath={project.path} current={project.active_profile} />
           </div>
           <Card title="Recent runs" flush>
             <RecentRunsTable runs={project.recent_runs} onOpen={(id) => navigate(`/runs/${id}`)} />
@@ -82,6 +86,49 @@ export function ProjectDetailPage() {
       {tab === "agents-md" && <AgentsMdPanel path={path!} />}
       {tab === "constitution" && <ConstitutionPanel path={path!} />}
     </Page>
+  );
+}
+
+/** Apply a built-in profile to the project (bootstrap). */
+function ProfileBootstrap({ projectPath, current }: { projectPath: string; current: string | null }) {
+  const { data: profiles } = useProfiles();
+  const bootstrap = useBootstrapProfile();
+  const [choice, setChoice] = useState(current ?? "");
+
+  return (
+    <Card title="Bootstrap profile">
+      <p className="mb-2 text-[11px] text-ink-3">
+        Apply a built-in profile to seed <span className="mono">.harness/profile.yaml</span> and the gate policy.
+      </p>
+      <div className="flex items-center gap-2">
+        <select
+          value={choice}
+          onChange={(e) => setChoice(e.target.value)}
+          className="flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1.5 text-[12px] text-ink-1 outline-none focus:border-accent"
+        >
+          <option value="">Select a profile…</option>
+          {(profiles ?? []).map((p) => (
+            <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!choice || bootstrap.isPending}
+          onClick={() =>
+            bootstrap.mutate(
+              { project_path: projectPath, profile: choice },
+              {
+                onSuccess: () => toast({ tone: "success", title: "Profile applied", message: choice }),
+                onError: (e) => toast({ tone: "error", title: "Bootstrap failed", message: e instanceof Error ? e.message : "" }),
+              },
+            )
+          }
+        >
+          {bootstrap.isPending ? "Applying…" : "Apply"}
+        </Button>
+      </div>
+    </Card>
   );
 }
 

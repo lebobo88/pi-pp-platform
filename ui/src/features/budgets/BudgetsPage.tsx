@@ -1,12 +1,15 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BudgetEntry, BudgetCap } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 import { Meter } from "@/components/Meter";
 import { Sparkline } from "@/components/Sparkline";
 import { DataTable, type Column } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { useBudgets, useCaps } from "@/api/queries/budgets";
+import { useSetCaps } from "@/api/mutations/misc";
+import { toast } from "@/stores/uiStore";
 import { formatUsd, formatTokens, formatRelative } from "@/lib/format";
 
 function prefixOf(scope: string): string {
@@ -39,6 +42,8 @@ export function BudgetsPage() {
 
   return (
     <Page title="Budgets" description="Rolling token and cost totals by scope." className="space-y-4">
+      <CapsEditor caps={caps ?? []} />
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <CappedScopeCard title="Day" entries={day} cap={capFor("day")} />
         <CappedScopeCard title="Run" entries={run} cap={capFor("run")} />
@@ -49,6 +54,99 @@ export function BudgetsPage() {
         <BreakdownCard title="By tier" entries={tier} />
       </div>
     </Page>
+  );
+}
+
+/** Editable spend caps (limit + warn/block thresholds). */
+function CapsEditor({ caps }: { caps: BudgetCap[] }) {
+  const setCaps = useSetCaps();
+  const [draft, setDraft] = useState<BudgetCap[]>(caps);
+  useEffect(() => setDraft(caps), [caps]);
+
+  const update = (scope: string, patch: Partial<BudgetCap>) =>
+    setDraft((d) => d.map((c) => (c.scope === scope ? { ...c, ...patch } : c)));
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(caps);
+
+  if (caps.length === 0) return null;
+
+  return (
+    <Card
+      title="Spend caps"
+      actions={
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!dirty || setCaps.isPending}
+          onClick={() =>
+            setCaps.mutate(draft, {
+              onSuccess: () => toast({ tone: "success", title: "Caps saved" }),
+              onError: (e) => toast({ tone: "error", title: "Save failed", message: e instanceof Error ? e.message : "" }),
+            })
+          }
+        >
+          {setCaps.isPending ? "Saving…" : "Save caps"}
+        </Button>
+      }
+    >
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr className="text-left text-ink-3">
+            <th className="py-1 font-medium">scope</th>
+            <th className="py-1 font-medium">limit (USD)</th>
+            <th className="py-1 font-medium">warn %</th>
+            <th className="py-1 font-medium">block %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {draft.map((c) => (
+            <tr key={c.scope}>
+              <td className="mono py-1 pr-3 text-ink-1">{c.scope}</td>
+              <td className="py-1 pr-3">
+                <NumberInput value={c.limit_usd} step={0.5} min={0} onChange={(v) => update(c.scope, { limit_usd: v })} />
+              </td>
+              <td className="py-1 pr-3">
+                <NumberInput value={Math.round(c.warn_pct * 100)} step={5} min={0} max={100} suffix="%" onChange={(v) => update(c.scope, { warn_pct: v / 100 })} />
+              </td>
+              <td className="py-1">
+                <NumberInput value={Math.round(c.block_pct * 100)} step={5} min={0} max={100} suffix="%" onChange={(v) => update(c.scope, { block_pct: v / 100 })} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function NumberInput({
+  value,
+  onChange,
+  step,
+  min,
+  max,
+  suffix,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  step?: number;
+  min?: number;
+  max?: number;
+  suffix?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input
+        type="number"
+        value={value}
+        step={step}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mono tnum w-20 rounded-sm border border-line-2 bg-bg-2 px-1.5 py-0.5 text-[12px] text-ink-1 outline-none focus:border-accent"
+      />
+      {suffix && <span className="text-[11px] text-ink-3">{suffix}</span>}
+    </span>
   );
 }
 

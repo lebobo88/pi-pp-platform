@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { StageStatusChip, Pill } from "@/features/common/chips";
 import { AttemptCard } from "./AttemptCard";
 import { VerdictCard } from "./VerdictCard";
+import { StageActions } from "./RunControls";
 import {
   stageAttempts,
   attemptVerdicts,
@@ -60,6 +61,7 @@ export function StageDetail({
                 best-of {candidateAttempts(attempts).length} →
               </button>
             )}
+            <StageActions runId={tree.run.id} stageId={stage.id} stageStatus={liveStatus} />
           </div>
         }
       >

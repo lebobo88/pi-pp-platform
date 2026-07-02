@@ -440,6 +440,83 @@ export interface ArtifactContent {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
+ * Control-plane mutations (M6)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** Launch-wizard payload. `mode` decides which of the optional fields apply. */
+export interface StartRunRequest {
+  project_path: string;
+  request_text: string;
+  mode: RunMode;
+  /** Profile override; omit to auto-detect. */
+  profile?: string | null;
+  /** Team name (mode="team"). */
+  team?: string | null;
+  /** Forum name (mode="review"). */
+  forum?: string | null;
+  /** Candidate fan-out (mode="best_of"); 2..7. */
+  n?: number | null;
+  /** Claude tier ceiling / floor overrides. */
+  tier_cap?: ClaudeTier | null;
+  tier_floor?: ClaudeTier | null;
+}
+
+export interface StartRunResponse {
+  run_id: string;
+}
+
+export interface AbortRunResponse {
+  run_id: string;
+  status: RunStatus;
+}
+
+/** Retry a surfaced stage (Reflexion ×1) or re-run only its judge (gate). */
+export interface StageActionResponse {
+  run_id: string;
+  stage_id: string;
+  action: "retry" | "gate";
+  ok: boolean;
+}
+
+/**
+ * Write-only provider key set. The raw key travels ONLY in this request body;
+ * it is never returned. The response is the masked ProviderStatus.
+ */
+export interface SetProviderKeyRequest {
+  api_key: string;
+}
+
+/** Result of a live credential/model-resolution probe for a vendor. */
+export interface ProviderTestResult {
+  vendor: Vendor;
+  ok: boolean;
+  status: "ok" | "fail" | "skipped";
+  model?: string;
+  wall_ms?: number;
+  detail?: string;
+}
+
+/** Apply a built-in profile (or write a profile.yaml) to a project. */
+export interface ProfileBootstrapRequest {
+  project_path: string;
+  profile: string;
+}
+
+/** Autogenesis review decision. */
+export type EvolutionDecision = "approve" | "reject" | "commit" | "rollback";
+
+export interface EvolutionReviewRequest {
+  decision: EvolutionDecision;
+  /** Optional reviewer note (stored, not required). */
+  note?: string;
+}
+
+/** Replace the set of budget caps. */
+export interface SetBudgetCapsRequest {
+  caps: BudgetCap[];
+}
+
+/* ────────────────────────────────────────────────────────────────────────
  * Error envelope
  * ──────────────────────────────────────────────────────────────────────── */
 
@@ -641,8 +718,15 @@ export const apiPaths = {
   runEvents: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
   runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
+  runAbort: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/abort`,
+  runStageRetry: (runId: string, stageId: string) =>
+    `${API_BASE}/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
+  runStageGate: (runId: string, stageId: string) =>
+    `${API_BASE}/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/gate`,
 
   providers: `${API_BASE}/providers`,
+  providerKey: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/key`,
+  providerTest: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/test`,
   models: `${API_BASE}/models`,
 
   budgets: `${API_BASE}/budgets`,
@@ -654,12 +738,14 @@ export const apiPaths = {
 
   profiles: `${API_BASE}/profiles`,
   profile: (name: string) => `${API_BASE}/profiles/${encodeURIComponent(name)}`,
+  profileBootstrap: `${API_BASE}/profiles/bootstrap`,
 
   rubrics: `${API_BASE}/rubrics`,
   rubric: (id: string) => `${API_BASE}/rubrics/${encodeURIComponent(id)}`,
 
   evolution: `${API_BASE}/evolution/proposals`,
   evolutionProposal: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}`,
+  evolutionReview: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}/review`,
 
   janitor: `${API_BASE}/system/janitor`,
 
