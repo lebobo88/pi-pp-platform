@@ -9,6 +9,8 @@ export interface ServerDeps {
   engine: Engine;
   /** Live-run lifecycle owner (concurrency, abort, budget, pilot→SSE bridge). */
   supervisor: RunSupervisor;
+  /** Per-op engine factory (same mode as runs: fake when PP_LLM=fake, else pi). Used by post-hoc retry/gate. */
+  makeEngine: () => Engine;
   /** Absolute path to the built UI (ui/dist) for static serving; omitted → no static. */
   uiDistPath?: string;
 }

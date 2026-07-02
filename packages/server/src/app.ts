@@ -62,6 +62,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     // platform auth storage, independent of the per-run engine mode).
     engine: createEngine({ mode: "pi" }),
     supervisor: new RunSupervisor(bus, makeEngine),
+    makeEngine,
     uiDistPath: opts.uiDistPath,
   };
 
@@ -76,6 +77,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   registerEventRoutes(app, deps);
 
   if (opts.uiDistPath) await registerStatic(app, opts.uiDistPath);
+
+  // Expose the supervisor for tests (drain in-flight runs) and future in-proc use.
+  app.decorate("ppSupervisor", deps.supervisor);
 
   await app.ready();
   return app;

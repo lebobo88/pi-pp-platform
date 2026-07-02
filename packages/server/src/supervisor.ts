@@ -51,6 +51,7 @@ const DAY = () => new Date().toISOString().slice(0, 10);
 export class RunSupervisor {
   private readonly active = new Map<string, RunEntry>();
   private readonly waiters: Array<() => void> = [];
+  private readonly inflight = new Set<Promise<void>>();
   private running = 0;
   private readonly max: number;
 
@@ -130,7 +131,7 @@ export class RunSupervisor {
 
     const done = pilot.execute();
 
-    done
+    const settled = done
       .then((res) => {
         if (res.run_id) this.active.delete(res.run_id);
         try {
@@ -153,6 +154,8 @@ export class RunSupervisor {
         /* start failure surfaces via the race below */
       })
       .finally(() => this.release());
+    this.inflight.add(settled);
+    void settled.finally(() => this.inflight.delete(settled));
 
     // Resolve the run_id: whichever of run.started / execute-resolution comes first.
     const run_id = await Promise.race([
@@ -169,6 +172,11 @@ export class RunSupervisor {
       });
     }
     return { run_id, queued: wasQueued };
+  }
+
+  /** Await all in-flight runs to fully settle (their finalize handlers included). */
+  async drain(): Promise<void> {
+    await Promise.allSettled([...this.inflight]);
   }
 
   /** Abort a live run. Returns false if the run isn't active. */

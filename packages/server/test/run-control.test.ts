@@ -72,6 +72,13 @@ async function makeServer(makeEngineFn: () => Engine, maxConcurrent?: number): P
 afterEach(async () => {
   while (servers.length) {
     const s = servers.pop()!;
+    // Drain in-flight detached runs so none outlives its server and races the
+    // global core DB singleton across tests.
+    try {
+      await (s.app as unknown as { ppSupervisor?: { drain(): Promise<void> } }).ppSupervisor?.drain();
+    } catch {
+      /* ignore */
+    }
     await s.app.close();
   }
 });
@@ -180,6 +187,39 @@ describe("run-control — concurrency + budget", () => {
     // Exactly one was queued (the third to acquire a slot).
     expect([a.json.queued, b.json.queued, c.json.queued].filter(Boolean).length).toBeGreaterThanOrEqual(1);
     for (const id of ids) expect(await waitForStatus(s.base, id, 12000)).not.toBe("timeout");
+  });
+
+  it("gate re-judges a stage; retry re-drives it; a second retry is 409 exhausted", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Add a helper.", mode: "single" });
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    const tree = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}`);
+    const stage = tree.json.stages[0] as { id: string };
+    const stagePath = `/api/v1/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stage.id)}`;
+
+    // Re-judge only (regateStage): re-runs the judge on the latest attempt.
+    const gate = await post(s.base, `${stagePath}/gate`);
+    expect(gate.status).toBe(200);
+    expect(gate.json.ok).toBe(true);
+    expect(gate.json.outcome).toBeTruthy();
+
+    // First manual retry actually re-drives the stage (regenerate + re-judge).
+    const retry1 = await post(s.base, `${stagePath}/retry`);
+    expect(retry1.status).toBe(202);
+    expect(retry1.json.ok).toBe(true);
+    expect(retry1.json.outcome).toBeTruthy();
+
+    // Second retry is refused — the Reflexion ×1 budget is spent.
+    const retry2 = await post(s.base, `${stagePath}/retry`);
+    expect(retry2.status).toBe(409);
+    expect(retry2.json.error).toBe("retry_exhausted");
+
+    // Unknown stage → 404.
+    const bad = await post(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/stages/stage_missing/retry`);
+    expect(bad.status).toBe(404);
   });
 
   it("budget tripwire fires on a tiny day cap", async () => {

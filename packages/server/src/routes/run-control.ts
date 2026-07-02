@@ -6,15 +6,9 @@
  *   POST /runs/:id/stages/:sid/gate    — re-judge only (engine critique → recordVerdict)
  */
 import type { FastifyInstance } from "fastify";
-import { existsSync, readFileSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
 import { z } from "zod";
-import {
-  registerProject, ProjectDirNotFoundError,
-  checkRetryEligible, recordVerdict, getRun, db,
-} from "@pp/core";
-import { providerToProducer } from "@pp/pilot";
-import { toGenProvider } from "@pp/engine";
+import { registerProject, ProjectDirNotFoundError, checkRetryEligible, db } from "@pp/core";
+import { retryStage, regateStage, EventBus, type PilotEvent } from "@pp/pilot";
 import { V1, type ServerDeps } from "../deps.js";
 
 const TIER = z.enum(["haiku", "sonnet", "opus", "fable"]);
@@ -32,17 +26,22 @@ const StartBody = z.object({
   no_tier_policy: z.boolean().optional(),
 });
 
-function producerToProviderStr(producer: string): "anthropic" | "openai" | "google" {
-  if (producer === "codex") return "openai";
-  if (producer === "gemini") return "google";
-  return "anthropic";
+/** A fresh pilot EventBus whose events are forwarded to the server SSE bus. */
+function bridgeBus(deps: ServerDeps): EventBus {
+  const eb = new EventBus();
+  eb.subscribe((ev: PilotEvent) =>
+    deps.bus.publish({
+      type: ev.type,
+      run_id: ev.run_id,
+      data: { ...ev.data, stage_id: ev.stage_id, attempt_id: ev.attempt_id, pilot_seq: ev.seq },
+    }),
+  );
+  return eb;
 }
 
-function readArtifact(path: string, projectPath: string): string {
-  const abs = isAbsolute(path) ? path : join(projectPath, path);
-  if (existsSync(abs)) return readFileSync(abs, "utf8");
-  if (existsSync(path)) return readFileSync(path, "utf8");
-  return "";
+function runIdForStage(stageId: string): string | null {
+  const row = db().prepare("SELECT run_id FROM stages WHERE id = ?").get(stageId) as { run_id: string } | undefined;
+  return row?.run_id ?? null;
 }
 
 export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps): void {
@@ -106,70 +105,34 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
     return reply.code(202).send({ run_id: id, status: "aborted" });
   });
 
-  // ── Manual retry (Reflexion ×1) — eligibility via core ──
+  // ── Manual retry (Reflexion ×1) — drives the pilot's retryStage helper ──
   app.post(`${V1}/runs/:id/stages/:stageId/retry`, async (req, reply) => {
     const { id, stageId } = req.params as { id: string; stageId: string };
+    if (!runIdForStage(stageId)) return reply.code(404).send({ error: "stage not found", stage_id: stageId });
+
+    // Preserve the 409-when-exhausted HTTP semantic: the ×1 invariant is
+    // enforced in core; a stage whose latest attempt already retried can't retry.
     const att = db()
       .prepare("SELECT id FROM attempts WHERE stage_id = ? ORDER BY created_at DESC LIMIT 1")
       .get(stageId) as { id: string } | undefined;
     if (!att) return reply.code(404).send({ error: "stage has no attempt to retry", stage_id: stageId });
-
     const elig = checkRetryEligible({ attempt_id: att.id });
     if (!elig.ok) return reply.code(409).send({ error: "retry_exhausted", reason: elig.reason });
-    return reply.code(202).send({
-      run_id: id,
-      stage_id: stageId,
-      action: "retry",
-      ok: true,
-      parent_attempt_id: elig.parent_attempt_id,
-      note: "eligible; live regeneration is driven by a pilot re-entry helper (M5d follow-up)",
-    });
+
+    // Eligible → actually re-drive the stage (critique fed back, tier +1,
+    // regenerate, re-judge) via the pilot helper.
+    const res = await retryStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps) });
+    if (!res.ok) return reply.code(409).send({ error: "retry_unavailable", reason: res.reason });
+    return reply.code(202).send({ run_id: id, stage_id: stageId, action: "retry", ok: true, outcome: res.outcome });
   });
 
-  // ── Re-judge only (the /pp:gate equivalent) ──
-  // NOTE: candidate to move into @pp/pilot as a first-class helper. Implemented
-  // here with core gate state + engine critique.
+  // ── Re-judge only (the /pp:gate equivalent) — pilot's regateStage helper ──
   app.post(`${V1}/runs/:id/stages/:stageId/gate`, async (req, reply) => {
     const { id, stageId } = req.params as { id: string; stageId: string };
-    const tree = getRun(id) as { run?: { project_path: string } } | null;
-    if (!tree?.run) return reply.code(404).send({ error: `run ${id} not found` });
+    if (!runIdForStage(stageId)) return reply.code(404).send({ error: "stage not found", stage_id: stageId });
 
-    const att = db()
-      .prepare("SELECT id, producer, model_id FROM attempts WHERE stage_id = ? ORDER BY created_at DESC LIMIT 1")
-      .get(stageId) as { id: string; producer: string; model_id: string } | undefined;
-    const artifact = db()
-      .prepare("SELECT path FROM artifacts WHERE stage_id = ? ORDER BY created_at DESC LIMIT 1")
-      .get(stageId) as { path: string } | undefined;
-    if (!att || !artifact) return reply.code(409).send({ error: "gate_unavailable", details: "no attempt/artifact to re-judge" });
-
-    const artifactText = readArtifact(artifact.path, tree.run.project_path);
-    if (!artifactText) return reply.code(409).send({ error: "gate_unavailable", details: "artifact content not found on disk" });
-
-    const genProvider = producerToProviderStr(att.producer);
-    const sel = deps.engine.catalog.pickJudge(genProvider, { requiredCrossVendor: true });
-    if (!sel) return reply.code(409).send({ error: "no_eligible_judge", details: "all cross-vendor judge providers disabled" });
-
-    try {
-      const judgeModel = deps.engine.catalog.resolve(sel.provider, sel.model);
-      const result = await deps.engine.critique({
-        judgeModel,
-        rubricMd: "Re-evaluate the artifact against the stage's gate criteria. Score correctness and completeness (0..1) and return outcome pass|fail|revise with a substantive critique.",
-        artifactText,
-      });
-      const verdict = result.parsed as { outcome?: string; critique_md?: string; score?: Record<string, number> } | undefined;
-      if (verdict?.outcome) {
-        recordVerdict({
-          attempt_id: att.id,
-          judge_producer: providerToProducer(toGenProvider(sel.provider)),
-          judge_model_id: sel.model,
-          outcome: verdict.outcome as "pass" | "fail" | "revise",
-          critique_md: verdict.critique_md,
-          score_json: verdict.score,
-        });
-      }
-      return reply.code(200).send({ run_id: id, stage_id: stageId, action: "gate", ok: true, outcome: verdict?.outcome ?? null });
-    } catch (err) {
-      return reply.code(502).send({ error: "gate_failed", details: (err as Error).message });
-    }
+    const res = await regateStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps) });
+    if (!res.ok) return reply.code(502).send({ error: "gate_failed", reason: res.reason });
+    return reply.code(200).send({ run_id: id, stage_id: stageId, action: "gate", ok: true, outcome: res.outcome });
   });
 }
