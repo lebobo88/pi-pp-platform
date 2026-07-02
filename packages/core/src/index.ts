@@ -41,6 +41,12 @@ export * from "./config.js";
 export * from "./security/secret-scan.js";
 export * from "./security/untrusted-envelope.js";
 
+// Engine seams (M2): the @pp/engine layer reuses these pure helpers. Exported
+// here because @pp/core only publishes the "." entry point (no subpath exports).
+export * from "./hooks/bash-safety.js";
+export { buildCritiqueOutputSchema, validateCritiqueResult, normalizeCritiqueResult, extractJsonValue } from "./mcp/critique-schema.js";
+export type { CritiqueOutcome, CritiqueVerdict } from "./mcp/critique-schema.js";
+
 // Pricing
 export * from "./util/prices.js";
 
