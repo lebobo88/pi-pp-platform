@@ -1,15 +1,16 @@
 /**
  * Browser-validation stage (web-ui / mobile profiles).
  *
- * Boots the project's dev server and drives the spec's acceptance flows in a
- * real browser (Playwright), scanning console + network for errors. When no
- * browser is available (Playwright/chromium missing, or not opted in via
- * PP_BROWSER_VALIDATION=1) it DEGRADES OPEN per core's contract: it records an
- * "unavailable" result and surfaces the gap without blocking the run.
+ * When opted in (PP_BROWSER_VALIDATION=1) and Playwright is available, this
+ * phase drives the spec's routes in a REAL headless chromium: it resolves a base
+ * URL (PP_BROWSER_BASE_URL, else it boots the project's dev server via
+ * runtime_smoke_test.dev_cmd), navigates each route, and records console/page/
+ * network errors into core Findings, then finalizes — surfacing the stage when
+ * the browser found runtime errors.
  *
- * The real browser drive is delegated to the browser-validator role's coding
- * session (Playwright available); this phase owns the start/finalize bookkeeping
- * and the degraded path.
+ * It DEGRADES OPEN per core's contract whenever it cannot run (not opted in,
+ * Playwright/chromium missing, or the dev server / drive failed): records an
+ * "unavailable" result and surfaces the evidence gap without blocking the run.
  */
 
 import { createRequire } from "node:module";
@@ -18,22 +19,44 @@ import {
   browserValidationFinalize,
   finalizeStage,
   startStage,
+  type Finding,
 } from "@pp/core";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
+import { bootDevServer, playwrightDrive, type BrowserDriver, type DevServer } from "./browser-drive.js";
 
 const require = createRequire(import.meta.url);
+
+// Injectable driver seam: production uses real Playwright; tests inject a fake
+// so the finding→finalize→severity wiring is exercised without a chromium binary.
+let _driver: BrowserDriver = playwrightDrive;
+export function setBrowserDriver(driver: BrowserDriver): void { _driver = driver; }
+export function resetBrowserDriver(): void { _driver = playwrightDrive; }
 
 /** Best-effort: is a Playwright browser drive available and opted in? */
 function browserAvailable(): boolean {
   if (process.env.PP_BROWSER_VALIDATION !== "1") return false;
   try {
-    // Resolve without importing chromium binaries; presence of the module is
-    // necessary-but-not-sufficient, so this stays behind the opt-in flag.
     require.resolve("playwright");
     return true;
   } catch {
     return false;
   }
+}
+
+/** Degrade open: record "unavailable", surface the gap, do NOT block the run. */
+async function degradeOpen(ctx: RunContext, stage_id: string, reason: string, marker: string): Promise<StageOutcome> {
+  const out = browserValidationFinalize({
+    run_id: ctx.run_id,
+    stage_id,
+    engine: "playwright",
+    findings: [],
+    engine_status: "unavailable",
+    unavailable_reason: reason,
+  });
+  emit(ctx, "validation.result", { kind: "browser", severity: out.effective_severity, degraded: true }, { stage_id });
+  await finalizeStage({ stage_id, status: "passed" });
+  emit(ctx, "stage.finalized", { status: "passed", degraded: marker }, { stage_id });
+  return "passed";
 }
 
 export async function runBrowserValidationStage(ctx: RunContext, stage: StageSpec): Promise<StageOutcome> {
@@ -44,35 +67,51 @@ export async function runBrowserValidationStage(ctx: RunContext, stage: StageSpe
   browserValidationStart({ run_id: ctx.run_id, routes });
 
   if (!browserAvailable()) {
-    // Degrade open: record unavailable, surface the gap, do NOT block the run.
-    const out = browserValidationFinalize({
-      run_id: ctx.run_id,
+    return degradeOpen(
+      ctx,
       stage_id,
-      engine: "playwright",
-      findings: [],
-      engine_status: "unavailable",
-      unavailable_reason:
-        "no browser drive available (Playwright/chromium not installed or PP_BROWSER_VALIDATION!=1) — validation skipped, gap surfaced",
-    });
-    emit(ctx, "validation.result", { kind: "browser", severity: out.effective_severity, degraded: true }, { stage_id });
-    // effective_severity="unavailable" does not block finalize(passed); the gap
-    // is recorded in the report for the operator.
-    await finalizeStage({ stage_id, status: "passed" });
-    emit(ctx, "stage.finalized", { status: "passed", degraded: "browser-unavailable" }, { stage_id });
-    return "passed";
+      "no browser drive available (Playwright/chromium not installed or PP_BROWSER_VALIDATION!=1) — validation skipped, gap surfaced",
+      "browser-unavailable",
+    );
   }
 
-  // Browser available: the browser-validator role drives the flows in a coding
-  // session, then records findings. Full drive lands with the Playwright wiring;
-  // here we finalize a clean run so the gate is satisfied when a browser exists.
+  // Resolve a target and drive the routes for real.
+  let devServer: DevServer | undefined;
+  let baseUrl = process.env.PP_BROWSER_BASE_URL;
+  let findings: Finding[] = [];
+  let driveError: string | undefined;
+  try {
+    if (!baseUrl) {
+      devServer = await bootDevServer(ctx.projectPath, ctx.profile?.runtime_smoke_test, ctx.signal);
+      baseUrl = devServer.baseUrl;
+    }
+    findings = await _driver(baseUrl, routes);
+  } catch (err) {
+    driveError = (err as Error).message;
+  } finally {
+    if (devServer) {
+      try { await devServer.stop(); } catch { /* best-effort teardown */ }
+    }
+  }
+
+  if (driveError) {
+    return degradeOpen(ctx, stage_id, `browser drive could not run: ${driveError}`, "browser-drive-failed");
+  }
+
   const out = browserValidationFinalize({
     run_id: ctx.run_id,
     stage_id,
     engine: "playwright",
-    findings: [],
+    base_url: baseUrl,
+    findings,
     engine_status: "ran",
   });
-  emit(ctx, "validation.result", { kind: "browser", severity: out.effective_severity, degraded: false }, { stage_id });
+  emit(
+    ctx,
+    "validation.result",
+    { kind: "browser", severity: out.effective_severity, degraded: false, findings: findings.length },
+    { stage_id },
+  );
   if (out.effective_severity === "errors") {
     await finalizeStage({ stage_id, status: "surfaced" });
     emit(ctx, "stage.surfaced", { reason: "browser validation found runtime errors" }, { stage_id });

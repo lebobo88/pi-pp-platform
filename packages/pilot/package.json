@@ -28,6 +28,7 @@
   "dependencies": {
     "@pp/core": "workspace:*",
     "@pp/engine": "workspace:*",
+    "playwright": "^1.48.0",
     "yaml": "^2.4.0",
     "zod": "^3.23.0"
   },

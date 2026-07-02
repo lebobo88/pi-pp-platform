@@ -36,13 +36,24 @@ accounting matches reality.
   1-token reachability probe + one trivial critique per provider whose key is
   present. Good for "is my key wired", not a full run.
 
+- **Browser validation (real drive)** — on `web-ui`/`mobile` profiles, opt in
+  with `PP_BROWSER_VALIDATION=1` and the stage drives the routes in real headless
+  chromium (`packages/pilot/src/phases/browser-*.ts`): it resolves a base URL
+  (`PP_BROWSER_BASE_URL`, else it boots the project's `runtime_smoke_test.dev_cmd`),
+  navigates each route, and records console/page/network errors into findings;
+  the stage **surfaces** on any error. Requires the chromium binary
+  (`pnpm -F @pp/pilot exec playwright install chromium`). Without opt-in or the
+  binary it **degrades open** (records an evidence gap, never blocks). The
+  finding→severity wiring is unit-tested with an injectable driver (no chromium
+  needed); the real drive is verified to capture console errors + non-2xx
+  responses.
+
 ## Known gaps (tracked, not yet automated)
 
-- **Browser validation**: the stage degrades open when Playwright/chromium is
-  absent; the real browser drive lands behind `PP_BROWSER_VALIDATION=1` and is
-  not yet exercised in CI.
-- **No CI on real keys**: `validate:live`/`test:live` are manual — run them
-  before shipping a change that touches the generation/critique/pricing paths.
+- **No CI on real keys / real browser**: `validate:live`/`test:live` and the
+  `PP_BROWSER_VALIDATION=1` drive are manual (the browser drive needs a chromium
+  binary in CI). Run them before shipping a change that touches the
+  generation/critique/pricing or web-ui runtime paths.
 
 ## TL;DR
 
