@@ -124,6 +124,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       profileSummary: profileSummary(ctx),
       profileName: ctx.profileName,
       requestText: ctx.requestText,
+      execution: "session-coding",
     });
     const genProvider = providerForModel(rot.model_id);
     if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {

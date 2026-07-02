@@ -120,11 +120,15 @@ async function generate(
   priorCritiques: string[],
 ): Promise<GenOut> {
   const role = loadRolePrompt(stage.agent);
+  // A tests_pre stage always produces a completion (the tdd_manifest YAML).
+  const isTddManifestStage = stage.kind === "tests_pre";
+  const execution = isTddManifestStage ? "completion" : stage.execution ?? role.execution;
   const systemPrompt = renderSystemPrompt(role, {
     profileSummary: profileSummary(ctx),
     profileName: ctx.profileName,
     priorCritiques,
     requestText: ctx.requestText,
+    execution,
   });
   // Resolve the generator's provider FROM the model (effective ladder), not the
   // legacy hardcoded "anthropic". Preflight the credential so a missing key
@@ -141,12 +145,6 @@ async function generate(
   mkdirSync(sessionDir, { recursive: true });
 
   emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex }, { stage_id });
-
-  // A tests_pre stage must produce a `tdd_manifest` artifact (YAML), which the
-  // TDD gate loads to run the red/green check — always a completion, even
-  // though test-strategist is otherwise a coding role.
-  const isTddManifestStage = stage.kind === "tests_pre";
-  const execution = isTddManifestStage ? "completion" : stage.execution ?? role.execution;
 
   let artifactText: string;
   let artifactPath: string;

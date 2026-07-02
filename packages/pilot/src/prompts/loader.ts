@@ -218,7 +218,39 @@ export type RenderContext = {
   profileName?: string;
   /** The user request text, appended so the agent sees the ask. */
   requestText?: string;
+  /** Execution mode of the stage — drives the completion output contract below. */
+  execution?: ExecutionMode;
 };
+
+/**
+ * Completion mode has NO tools and NO file access — the model's entire response
+ * IS the artifact. Agentic models (deepseek/codex-style) otherwise narrate "let
+ * me read the files…" or emit tool calls, which fail every artifact gate. This
+ * directive makes them produce the document directly.
+ */
+const COMPLETION_CONTRACT =
+  "## Output contract (READ FIRST)\n\n" +
+  "You are running in COMPLETION mode: you have NO tools, NO file access, and NO " +
+  "further turns. Your ENTIRE response IS the deliverable artifact. Do NOT narrate " +
+  "steps, do NOT say you will read files or explore the codebase, do NOT ask " +
+  "questions, and do NOT emit tool calls or code-fenced tool syntax. Output ONLY " +
+  "the complete, final artifact in the required format — nothing before or after it. " +
+  "Any preamble or process note will FAIL the review gate.";
+
+/**
+ * Coding sessions: some models answer with code in a markdown block or ask
+ * clarifying questions instead of calling the file tools — which writes nothing
+ * to disk, so the gate sees no diff and fails. This contract forces real tool use.
+ */
+const SESSION_CODING_CONTRACT =
+  "## Execution contract (READ FIRST)\n\n" +
+  "You have file-editing tools (write/edit/bash) and a real working directory. You " +
+  "MUST USE THE TOOLS to create and modify files — the harness only captures changes " +
+  "you actually write to disk and commit; code shown only in a chat/markdown reply is " +
+  "IGNORED and FAILS the gate. Do NOT answer with a code block instead of editing, do " +
+  "NOT ask clarifying questions, and do NOT offer options — make reasonable assumptions " +
+  "(pick a sensible language/file path if unspecified) and implement the change directly, " +
+  "then verify your files are written before finishing.";
 
 /** Load the game engine gotcha pack for a game-dev-* profile, if present. */
 export function loadGotchasForProfile(profileName?: string): string | null {
@@ -250,7 +282,13 @@ export function loadPromptAddendum(role: string, profileName?: string): string |
  * request itself is passed as the pi task/user prompt, not folded in here.
  */
 export function renderSystemPrompt(role: RolePrompt, ctx: RenderContext = {}): string {
-  const blocks: string[] = [role.cleanedBody.trim()];
+  const execution = ctx.execution ?? role.execution;
+  const blocks: string[] = [];
+  // Lead with the execution contract so weaker agentic models produce the
+  // artifact directly (completion) or actually call the file tools (coding).
+  if (execution === "completion") blocks.push(COMPLETION_CONTRACT);
+  else if (execution === "session-coding") blocks.push(SESSION_CODING_CONTRACT);
+  blocks.push(role.cleanedBody.trim());
 
   if (ctx.profileSummary) {
     blocks.push(`## Active project profile\n\n${ctx.profileSummary.trim()}`);

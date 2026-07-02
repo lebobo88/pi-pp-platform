@@ -150,8 +150,18 @@ export class RunSupervisor {
           },
         });
       })
-      .catch(() => {
-        /* start failure surfaces via the race below */
+      .catch((err) => {
+        // Surface the reason instead of swallowing it — a run that rejects
+        // (rather than returning status:crashed) still gets a finalized event
+        // carrying why, so the UI/SSE never shows a bare "crashed".
+        this.serverBus.publish({
+          type: "run.finalized",
+          data: {
+            status: "crashed",
+            finished_at: new Date().toISOString(),
+            abort_reason: (err as Error)?.message ?? "run failed to start",
+          },
+        });
       })
       .finally(() => this.release());
     this.inflight.add(settled);

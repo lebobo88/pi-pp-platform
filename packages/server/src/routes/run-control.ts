@@ -5,11 +5,38 @@
  *   POST /runs/:id/stages/:sid/retry   — Reflexion-honoring manual retry (eligibility)
  *   POST /runs/:id/stages/:sid/gate    — re-judge only (engine critique → recordVerdict)
  */
+import { execFileSync } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { registerProject, ProjectDirNotFoundError, checkRetryEligible, db } from "@pp/core";
 import { retryStage, regateStage, EventBus, type PilotEvent } from "@pp/pilot";
 import { V1, type ServerDeps } from "../deps.js";
+
+/**
+ * Ensure the project is a git repo — worktrees, diff capture, and coding stages
+ * all need one. Best-effort: a fresh project directory is initialized with an
+ * initial commit so HEAD exists. Never blocks the run.
+ */
+function ensureGitRepo(path: string): void {
+  try {
+    execFileSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { stdio: "ignore" });
+    return; // already a repo
+  } catch {
+    /* not a repo — initialize below */
+  }
+  try {
+    execFileSync("git", ["-C", path, "init"], { stdio: "ignore" });
+    execFileSync("git", ["-C", path, "add", "-A"], { stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.email=pp@local", "-c", "user.name=pi-pp-platform", "-C", path,
+       "commit", "-m", "initial commit (pi-pp-platform)", "--allow-empty"],
+      { stdio: "ignore" },
+    );
+  } catch {
+    /* best-effort — the pilot degrades gracefully if git remains unavailable */
+  }
+}
 
 const TIER = z.enum(["haiku", "sonnet", "opus", "fable"]);
 const StartBody = z.object({
@@ -77,6 +104,9 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
       }
       throw err;
     }
+
+    // A new project directory may not be a git repo yet — worktrees/diffs need one.
+    ensureGitRepo(path);
 
     try {
       const { run_id, queued } = await deps.supervisor.start({
