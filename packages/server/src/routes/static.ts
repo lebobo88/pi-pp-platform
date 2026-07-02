@@ -14,8 +14,10 @@ export async function registerStatic(app: FastifyInstance, uiDistPath: string): 
     const pathname = (req.raw.url ?? "/").split("?")[0]!;
     const isApi = pathname.startsWith("/api") || pathname === "/healthz";
     if (req.method === "GET" && !isApi && !extname(pathname)) {
+      // Disable @fastify/static's own Cache-Control so our no-store on the SPA
+      // shell isn't clobbered — a stale index.html would pin an old asset graph.
       reply.header("Cache-Control", "no-store");
-      return reply.type("text/html").sendFile("index.html");
+      return reply.type("text/html").sendFile("index.html", { cacheControl: false });
     }
     return reply.code(404).send({ error: "not_found", path: pathname });
   });

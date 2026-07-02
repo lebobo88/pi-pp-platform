@@ -9,7 +9,9 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "parity": "node parity/audit.mjs"
+    "parity": "node parity/audit.mjs",
+    "demo": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/demo.mjs",
+    "start": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/start.mjs"
   },
   "devDependencies": {
     "yaml": "^2.4.0"

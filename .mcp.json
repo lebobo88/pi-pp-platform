@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pp_harness": {
+      "command": "node",
+      "args": ["packages/mcp-adapter/dist/bin.js"]
+    }
+  }
+}

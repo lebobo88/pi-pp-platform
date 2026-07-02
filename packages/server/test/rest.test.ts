@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -118,6 +118,18 @@ describe("projects CRUD", () => {
 
     const del = await app.inject({ method: "DELETE", url: `/api/v1/projects/${encodeURIComponent(projectDir)}` });
     expect((del.json() as { removed: boolean }).removed).toBe(true);
+  });
+
+  it("GET detail works for a deep URL-encoded path (maxParamLength — no 414)", async () => {
+    // A deeply nested dir whose encodeURIComponent form exceeds Fastify's
+    // ~100-char default maxParamLength.
+    const deep = mkdtempSync(join(tmpdir(), "pp-srv-deep-"));
+    const nested = join(deep, "a", "b", "c", "d", "e", "really", "deeply", "nested", "project", "root");
+    mkdirSync(nested, { recursive: true });
+    await app.inject({ method: "POST", url: "/api/v1/projects", payload: { path: nested, name: "Deep" } });
+    const detail = await get(`/api/v1/projects/${encodeURIComponent(nested)}`);
+    expect(detail.statusCode).toBe(200);
+    expect((detail.json() as { name: string }).name).toBe("Deep");
   });
 
   it("PUT profile with invalid yaml → 422", async () => {

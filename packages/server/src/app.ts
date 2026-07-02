@@ -41,7 +41,17 @@ export interface BuildAppOptions {
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
   if (opts.dbPath) setDbPath(opts.dbPath);
 
-  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
+  // maxParamLength: URL-encoded absolute project paths (esp. deep Windows paths
+  // like C:\Users\...\a\b\c\project → %5C… escapes) blow past Fastify's ~100-char
+  // default and 414 on GET /projects/:path (+ /master-plan, /agents-md,
+  // /constitution, /profile). 4096 comfortably covers real paths. Set via
+  // routerOptions (the Fastify 5 forward-compatible location — the top-level
+  // option is deprecated for fastify@6).
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 8 * 1024 * 1024,
+    routerOptions: { maxParamLength: 4096 },
+  });
 
   const bus = opts.bus ?? createInMemoryBus();
   const makeEngine = opts.makeEngine ?? (() => createEngine({ mode: process.env.PP_LLM === "fake" ? "fake" : "pi" }));
