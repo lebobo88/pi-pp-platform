@@ -1,6 +1,23 @@
 {
   "name": "pi-pp-platform",
   "private": true,
+  "description": "Web control plane for the pair-programmer AI coding harness on the pi runtime — multi-provider generation, cross-vendor judging, best-of-N, budgets, and a full run-lifecycle UI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lebobo88/pi-pp-platform.git"
+  },
+  "homepage": "https://github.com/lebobo88/pi-pp-platform#readme",
+  "bugs": "https://github.com/lebobo88/pi-pp-platform/issues",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "llm",
+    "code-generation",
+    "multi-agent",
+    "pair-programmer",
+    "pi"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },

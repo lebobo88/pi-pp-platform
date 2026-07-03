@@ -11,11 +11,12 @@ export function registerLegacyRoutes(app: FastifyInstance): void {
 
   app.get("/runs", async (req) => {
     const q = req.query as { project_path?: string; status?: string; limit?: string };
+    // Legacy contract is a bare array; the paginated envelope lives on /api/v1/runs.
     return listRuns({
       project_path: q.project_path,
       status: q.status as RunStatus | undefined,
       limit: q.limit ? Number(q.limit) : undefined,
-    });
+    }).items;
   });
 
   app.get("/runs/:id", async (req, reply) => {

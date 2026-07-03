@@ -83,7 +83,7 @@ All configuration is via `PP_*` environment variables. Values verified against
 | `PP_PORT` | `7878` | Server listen port (host is always `127.0.0.1`). |
 | `PP_API_TOKEN` | _(unset)_ | Bearer token for `/api/v1`. The server enforces loopback-only regardless; a token adds defense-in-depth. |
 | `PP_UI_DIST` | _(unset)_ | Path to `ui/dist`; when set, `ppd` serves the built SPA. |
-| `PP_ECOSYSTEM` | _off_ | Enables ecosystem (Hydra / TheEights / Constitution) subprocess writes. **Default off** (M8a guard) — standalone runs never touch the ecosystem. |
+| `PP_ECOSYSTEM` | _off_ | Enables ecosystem (Hydra / TheEights / Constitution) subprocess writes. **Default off** — standalone runs never touch the ecosystem. |
 | `PP_PLATFORM_DIR` | _(derived)_ | Platform install dir override. |
 | `PP_ASSETS_DIR` | _(bundled)_ | Override the `assets/` location (teams, rubrics, profiles, prompts). |
 | `PP_REPO_ROOT` | _(derived)_ | Repo root override. |

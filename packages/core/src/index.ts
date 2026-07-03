@@ -20,6 +20,8 @@ export * from "./orchestrator/taxonomy.js";
 export * from "./orchestrator/missability.js";
 export * from "./orchestrator/profiles.js";
 export * from "./orchestrator/teams.js";
+export * from "./orchestrator/agents-library.js";
+export * from "./orchestrator/team-recommend.js";
 export * from "./orchestrator/forums.js";
 export * from "./orchestrator/master-plan.js";
 export * from "./orchestrator/agents-md.js";
@@ -34,6 +36,7 @@ export * from "./orchestrator/loop-ceiling.js";
 export * from "./orchestrator/profile-detect.js";
 export * from "./orchestrator/design-templates.js";
 export { forceUnlock, type ForceUnlockResult } from "./util/lock.js";
+export { parseFrontmatter, type FlatFrontmatter } from "./util/frontmatter.js";
 // Pilot seam (M3): autogenesis analyzer consumed by @pp/pilot's finalize phase.
 export { analyzeAndPropose, listProposals, setProposalStatus } from "./orchestrator/autogenesis-analyzer.js";
 export type { DetectedProposal } from "./orchestrator/autogenesis-analyzer.js";

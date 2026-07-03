@@ -142,16 +142,18 @@ export const mockCaps: BudgetCap[] = [
   { scope: "run", limit_usd: 3, warn_pct: 0.8, block_pct: 1.0 },
 ];
 
-/** GET /system/janitor is empty (no persistence); this is a POST-execute result. */
-export const mockJanitorEmpty: JanitorReport = { ran_at: null, swept: 0, reclaimed_bytes: 0, entries: [] };
+/** GET /system/janitor before any run (empty default); mockJanitor is a POST-execute result. */
+export const mockJanitorEmpty: JanitorReport = { ran_at: null, dry_run: false, crashed_runs: [], swept: 0, reclaimed_bytes: 0, entries: [] };
 export const mockJanitor: JanitorReport = {
   ran_at: "2026-07-01T03:00:00.000Z",
+  dry_run: false,
+  crashed_runs: [],
   swept: 3,
-  reclaimed_bytes: 0,
+  reclaimed_bytes: 41_582_336,
   entries: [
-    { path: ".harness/candidates/run_5vB9kFg6hL2", kind: "worktree", bytes: 0, age_days: 0 },
-    { path: "C:/AiAppDeployments/acme-checkout/.harness/.lock", kind: "lock", bytes: 0, age_days: 0 },
-    { path: "pp/cand-run_5vB9kFg6hL2-a", kind: "branch", bytes: 0, age_days: 0 },
+    { path: ".harness/candidates/run_5vB9kFg6hL2", kind: "worktree", bytes: 41_582_080, age_days: 1.2 },
+    { path: "C:/AiAppDeployments/acme-checkout/.harness/.lock", kind: "lock", bytes: 256, age_days: 1.2 },
+    { path: "pp/cand-run_5vB9kFg6hL2-a", kind: "branch", bytes: 0, age_days: 1.2 },
   ],
 };
 

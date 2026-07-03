@@ -9,7 +9,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { setProviderKey, clearProviderKey, listPiProviders, listPiModels, piEnvKeyHint } from "@pp/engine";
+import { setProviderKey, clearProviderKey, listPiProviders, listPiModels, piEnvKeyHint, refreshPiModels } from "@pp/engine";
 import { catalog, knownProviderIds } from "@pp/core";
 import { allProviderStatuses, providerStatusWire, visibleProviders, modelsForProviderMerged } from "../wire.js";
 import { V1, type ServerDeps } from "../deps.js";
@@ -73,6 +73,16 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
   app.get(`${V1}/providers/:vendor/models`, async (req) => {
     const vendor = (req.params as { vendor: string }).vendor;
     return { provider: vendor, models: modelsForProviderMerged(vendor).map((m) => m.id) };
+  });
+
+  app.post(`${V1}/providers/:vendor/models/refresh`, async (req, reply) => {
+    // Re-fetch the live model list for a dynamic provider (static providers
+    // return their built-in list unchanged).
+    const vendor = (req.params as { vendor: string }).vendor;
+    const known = listPiModels(vendor).length > 0 || visibleProviders(storage).includes(vendor);
+    if (!known) return reply.code(404).send({ error: "unknown provider" });
+    const models = await refreshPiModels(vendor);
+    return { provider: vendor, refreshed: true, models: models.map((m) => m.id) };
   });
 
   app.post(`${V1}/providers/:vendor/test`, async (req, reply) => {

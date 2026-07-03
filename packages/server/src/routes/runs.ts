@@ -1,7 +1,7 @@
 /**
- * Run routes: list / detail (RunTree) / replay / missability / borda, artifact
- * content, and the run-control surface (registered but 501 until the pilot is
- * wired in M5d).
+ * Run read routes: list (cursor-paginated RunListResponse envelope) / detail
+ * (RunTree) / replay / missability / borda, and artifact content. Run-control
+ * mutations live in run-control.ts.
  */
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -20,11 +20,12 @@ function contentKind(path: string): string {
 
 export function registerRunRoutes(app: FastifyInstance): void {
   app.get(`${V1}/runs`, async (req) => {
-    const q = req.query as { project_path?: string; status?: string; limit?: string };
+    const q = req.query as { project_path?: string; status?: string; limit?: string; cursor?: string };
     return listRuns({
       project_path: q.project_path,
       status: q.status as RunStatus | undefined,
       limit: q.limit ? Number(q.limit) : undefined,
+      cursor: q.cursor,
     });
   });
 

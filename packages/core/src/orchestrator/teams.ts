@@ -109,6 +109,9 @@ function validateTeamSpec(spec: TeamSpec, path: string): void {
     }
     // R3-tail Fix 0.4: best_of_n_on_major_scope must be a sane integer.
     // Typos like "3.5" or strings would silently disable the policy.
+    // NOTE: an explicit best_of run (StartRunRequest.n) allows up to 8; the
+    // tighter [2, 7] cap here applies only to auto-promotion and is budget
+    // policy, not a hard platform limit.
     const bon = stage.best_of_n_on_major_scope;
     if (bon !== undefined) {
       if (!Number.isInteger(bon) || bon < 2 || bon > 7) {

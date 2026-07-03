@@ -142,7 +142,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     const amStatus = safe(() => agentsMdStatus(path)) as { agents_md?: { sections?: unknown[] } } | null;
     const c = safe(() => readConstitution(path)) as { sha: string } | null;
 
-    const recent = listRuns({ project_path: path, limit: 10 });
+    const recent = listRuns({ project_path: path, limit: 10 }).items;
 
     return {
       ...base,

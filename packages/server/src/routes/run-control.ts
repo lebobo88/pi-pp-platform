@@ -46,7 +46,7 @@ const StartBody = z.object({
   mode: z.enum(["single", "team", "best_of", "review"]),
   team: z.string().optional(),
   forum: z.string().optional(),
-  n: z.number().int().min(2).max(7).optional(),
+  n: z.number().int().min(2).max(8).optional(),
   scope_override: z.enum(["trivial", "standard", "major"]).optional(),
   tier_cap: TIER.optional(),
   tier_floor: TIER.optional(),

@@ -49,7 +49,8 @@ export async function runHttpServer(): Promise<void> {
         const project = url.searchParams.get("project_path") ?? undefined;
         const status = url.searchParams.get("status") as "pending" | "running" | "surfaced" | "complete" | "crashed" | "aborted" | null;
         const limit = Number(url.searchParams.get("limit") ?? "50");
-        return send(res, 200, listRuns({ project_path: project, status: status ?? undefined, limit }));
+        // Legacy surface keeps the bare-array shape; paging clients use /api/v1.
+        return send(res, 200, listRuns({ project_path: project, status: status ?? undefined, limit }).items);
       }
       const runMatch = /^\/runs\/(run_[\w-]+)$/.exec(url.pathname);
       if (runMatch) return send(res, 200, getRun(runMatch[1]!));

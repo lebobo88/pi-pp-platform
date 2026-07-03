@@ -25,6 +25,7 @@ import {
   detectProfile,
   writeProjectProfile,
   getBuiltinProfile,
+  recommendTeams,
   ensureAgentsAndClaudeMd,
   type TeamSpec,
   type Forum,
@@ -277,11 +278,25 @@ export class RunPilot {
               : [{ kind: "docs", gate_type: "docs_polish", agent: "docs-author" }],
           };
         }
+        // Deterministic team suggestion — best-effort, never blocks the abort.
+        let suggestion = "";
+        try {
+          const top = recommendTeams({
+            request_text: ctx.requestText,
+            project_path: ctx.projectPath,
+            profile: ctx.profileName,
+            scope: "major",
+          }).recommendations[0];
+          if (top) {
+            suggestion = ` Suggested team: "${top.team}"${top.reasons[0] ? ` (${top.reasons[0]})` : ""}`;
+          }
+        } catch { /* recommendation is advisory only */ }
         return {
           abort: true,
           reason:
             "major-scope request in single mode — re-run with a team pipeline " +
-            "(mode=team, e.g. feature-team). Refusing to force a major change through the single-stage path.",
+            "(mode=team, e.g. feature-team). Refusing to force a major change through the single-stage path." +
+            suggestion,
         };
       }
       // standard

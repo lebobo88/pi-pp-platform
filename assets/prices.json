@@ -1,25 +1,158 @@
 {
-  "_comment": "Per-1M-token USD prices. User-editable. Used to compute cost_usd per attempt. Update as vendor pricing changes.",
-  "_updated": "2026-05-05",
+  "_comment": "generated from packages/core/catalog.json — edit the catalog, then re-run scripts/generate-catalog-providers.mjs",
+  "_updated": "2026-07-03",
   "openai": {
-    "gpt-5.5":          { "input": 5.00,  "output": 15.00 },
-    "gpt-5.4":          { "input": 4.00,  "output": 12.00 },
-    "gpt-5.3-codex":    { "input": 3.00,  "output": 9.00  },
-    "gpt-5.1-codex-max":{ "input": 6.00,  "output": 18.00 }
+    "gpt-5.5": {
+      "input": 5,
+      "output": 30
+    },
+    "gpt-5.4": {
+      "input": 2.5,
+      "output": 15
+    },
+    "gpt-5.3-codex": {
+      "input": 1.75,
+      "output": 14
+    },
+    "gpt-5.1-codex-max": {
+      "input": 1.25,
+      "output": 10
+    }
   },
   "google": {
-    "gemini-3.1-pro-preview": { "input": 7.00, "output": 21.00 },
-    "gemini-2.5-pro":   { "input": 3.50,  "output": 10.50 },
-    "gemini-2.5-flash": { "input": 0.30,  "output": 0.90  }
+    "gemini-3.1-pro-preview": {
+      "input": 2,
+      "output": 12
+    },
+    "gemini-2.5-pro": {
+      "input": 1.25,
+      "output": 10
+    },
+    "gemini-2.5-flash": {
+      "input": 0.3,
+      "output": 2.5
+    }
   },
   "anthropic": {
-    "claude-fable-5":    { "input": 30.00, "output": 150.00 },
-    "claude-opus-4-7":   { "input": 15.00, "output": 75.00 },
-    "claude-opus-4-6":   { "input": 15.00, "output": 75.00 },
-    "claude-sonnet-4-6": { "input": 3.00,  "output": 15.00 },
-    "claude-haiku-4-5":  { "input": 0.80,  "output": 4.00  }
+    "claude-fable-5": {
+      "input": 10,
+      "output": 50
+    },
+    "claude-opus-4-7": {
+      "input": 5,
+      "output": 25
+    },
+    "claude-opus-4-6": {
+      "input": 5,
+      "output": 25
+    },
+    "claude-sonnet-4-6": {
+      "input": 3,
+      "output": 15
+    },
+    "claude-haiku-4-5-20251001": {
+      "input": 1,
+      "output": 5
+    },
+    "claude-haiku-4-5": {
+      "input": 1,
+      "output": 5
+    }
   },
-  "_pricing_notes": {
-    "claude-fable-5": "CONSERVATIVE PLACEHOLDER — 2x opus-4-7 rates. Requires authoritative pricing confirmation from Anthropic before production use."
-  }
+  "amazon-bedrock": {
+    "anthropic.claude-haiku-4-5": {
+      "input": 1,
+      "output": 5
+    },
+    "anthropic.claude-opus-4-6": {
+      "input": 5,
+      "output": 25
+    },
+    "mistral.mistral-large-3": {
+      "input": 0.5,
+      "output": 1.5
+    }
+  },
+  "ant-ling": {},
+  "azure-openai-responses": {},
+  "cerebras": {},
+  "cloudflare-ai-gateway": {},
+  "cloudflare-workers-ai": {},
+  "deepseek": {},
+  "fireworks": {
+    "accounts/fireworks/models/nemotron-3-ultra": {
+      "input": 0.6,
+      "output": 2.4
+    }
+  },
+  "github-copilot": {},
+  "google-vertex": {},
+  "groq": {
+    "qwen/qwen3.6-27b": {
+      "input": 0.6,
+      "output": 3
+    }
+  },
+  "huggingface": {
+    "openai/gpt-oss-20b": {
+      "input": 0.05,
+      "output": 0.2
+    }
+  },
+  "kimi-coding": {},
+  "minimax": {},
+  "minimax-cn": {},
+  "mistral": {
+    "mistral-large-3": {
+      "input": 0.5,
+      "output": 1.5
+    },
+    "mistral-small-4": {
+      "input": 0.15,
+      "output": 0.6
+    },
+    "codestral-2508": {
+      "input": 0.3,
+      "output": 0.9
+    }
+  },
+  "moonshotai": {},
+  "moonshotai-cn": {},
+  "nvidia": {
+    "nvidia/nemotron-3-ultra": {
+      "input": 0,
+      "output": 0
+    },
+    "nvidia/nemotron-3-super": {
+      "input": 0,
+      "output": 0
+    }
+  },
+  "openai-codex": {},
+  "opencode": {},
+  "opencode-go": {},
+  "openrouter": {},
+  "together": {
+    "Qwen/Qwen3.7-Plus": {
+      "input": 0.32,
+      "output": 1.28
+    },
+    "minimaxai/MiniMax-M3": {
+      "input": 0.3,
+      "output": 1.2
+    }
+  },
+  "vercel-ai-gateway": {},
+  "xai": {},
+  "xiaomi": {},
+  "xiaomi-token-plan-ams": {},
+  "xiaomi-token-plan-cn": {},
+  "xiaomi-token-plan-sgp": {},
+  "zai": {
+    "glm-5": {
+      "input": 1,
+      "output": 3.2
+    }
+  },
+  "zai-coding-cn": {}
 }

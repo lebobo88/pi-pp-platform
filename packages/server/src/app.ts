@@ -1,10 +1,10 @@
 /**
  * buildApp — assemble the Fastify control-plane server.
  *
- * Foundation scope (M5c): all read routes for shared/api-types.ts, provider key
- * management via @pp/engine auth, SSE over an injected BusPort, and static UI
- * serving. Run-control routes are registered but return 501 until the pilot is
- * wired (M5d). No @pp/pilot dependency.
+ * Registers: security (loopback + bearer gate), legacy reads, library/project/
+ * run read routes for shared/api-types.ts, live run-control mutations via the
+ * RunSupervisor + @pp/pilot, provider key management via @pp/engine auth, SSE
+ * over an injected BusPort, and static UI serving.
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import { setDbPath } from "@pp/core";

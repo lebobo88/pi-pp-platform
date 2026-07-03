@@ -1,21 +1,20 @@
 /**
  * Library + system read routes: teams, rubrics, profiles, forums, taxonomy,
  * models, budgets (+ caps), evolution proposals, doctor, janitor.
- *
- * Contract deltas (flagged for ui-foundation — these paths are NOT yet in
- * shared/api-types.ts apiPaths): /forums, /forums/:id, /taxonomy.
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   listTeams, getTeam,
+  listAgents, getAgent,
+  recommendTeams,
   listRubrics, getRubric,
   listBuiltinProfiles, getBuiltinProfile,
   listForums, getForum,
   TAXONOMY_SECTIONS,
   budgetStatus,
   getBudgetCaps, setBudgetCaps,
-  runJanitor,
+  runJanitor, getJanitorReport,
   doctor,
   listProposals, setProposalStatus,
   getPlatformSetting, setPlatformSetting,
@@ -35,6 +34,13 @@ const CapsBody = z.object({ caps: z.array(CapSchema) });
 const ReviewBody = z.object({
   decision: z.enum(["approve", "reject", "commit", "rollback"]),
   note: z.string().optional(),
+});
+
+const RecommendBody = z.object({
+  request_text: z.string().min(1),
+  project_path: z.string().optional(),
+  profile: z.string().optional(),
+  scope: z.enum(["trivial", "standard", "major"]).optional(),
 });
 
 const SETTINGS_KEY = "harness_settings";
@@ -68,6 +74,28 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     const t = getTeam({ name, project_path: q.project_path ?? process.cwd() });
     if (!t) return reply.code(404).send({ error: `team ${name} not found` });
     return t;
+  });
+  app.post(`${V1}/teams/recommend`, async (req, reply) => {
+    const parsed = RecommendBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: "validation failed", details: parsed.error.flatten() });
+    }
+    const b = parsed.data;
+    return recommendTeams({ ...b, project_path: b.project_path ?? process.cwd() });
+  });
+
+  // ── Agents ──
+  app.get(`${V1}/agents`, async (req) => {
+    const q = req.query as { project_path?: string };
+    return listAgents({ project_path: q.project_path ?? process.cwd() });
+  });
+  app.get(`${V1}/agents/:id`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { project_path?: string };
+    // Core rejects ids outside [\w.-] (path-traversal guard) by returning null.
+    const a = getAgent({ id, project_path: q.project_path ?? process.cwd() });
+    if (!a) return reply.code(404).send({ error: `agent ${id} not found` });
+    return a;
   });
 
   // ── Rubrics ──
@@ -185,27 +213,16 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     return reply.code(202).send({ ok: true, started: true, smoke });
   });
 
-  // ── Janitor: GET reports nothing swept yet; POST runs it (dry_run previews) ──
-  app.get(`${V1}/system/janitor`, async () => ({
-    ran_at: null,
-    swept: 0,
-    reclaimed_bytes: 0,
-    entries: [],
-  }));
+  // ── Janitor: GET returns the last persisted report; POST runs it (dry_run previews) ──
+  app.get(`${V1}/system/janitor`, async () =>
+    getJanitorReport() ?? { ran_at: null, dry_run: false, crashed_runs: [], entries: [], swept: 0, reclaimed_bytes: 0 });
   app.post(`${V1}/system/janitor`, async (req) => {
     const body = (req.body ?? {}) as { dry_run?: boolean };
-    if (body.dry_run) {
-      // No side-effect preview available from core; report an empty plan.
-      return { ran_at: new Date().toISOString(), swept: 0, reclaimed_bytes: 0, entries: [], dry_run: true };
+    const report = runJanitor({ dry_run: body.dry_run === true });
+    if (!report.dry_run) {
+      // Events reflect mutations only — a dry_run plan sweeps nothing.
+      deps.bus.publish({ type: "janitor.result", data: { swept: report.swept, reclaimed_bytes: report.reclaimed_bytes, details: report } });
     }
-    const r = runJanitor();
-    const entries = [
-      ...r.swept_worktrees.map((path) => ({ path, kind: "worktree", bytes: 0, age_days: 0 })),
-      ...r.swept_locks.map((path) => ({ path, kind: "lock", bytes: 0, age_days: 0 })),
-      ...r.swept_branches.map((path) => ({ path, kind: "branch", bytes: 0, age_days: 0 })),
-    ];
-    const report = { ran_at: new Date().toISOString(), swept: entries.length, reclaimed_bytes: 0, entries, crashed_runs: r.crashed_runs };
-    deps.bus.publish({ type: "janitor.result", data: { swept: report.swept, reclaimed_bytes: 0, details: report } });
     return report;
   });
 }

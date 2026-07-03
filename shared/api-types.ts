@@ -11,7 +11,8 @@
  * Keep in sync with:
  *   - packages/core/src/db/schema.ts   (row shapes)
  *   - the daemon's config.ts           (status / mode / vendor enums)
- *   - assets/prices.json               (ModelInfo)
+ *   - packages/core/catalog.json       (providers/models/pricing; both prices.json
+ *     files are generated from it by scripts/generate-catalog-providers.mjs)
  */
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -196,6 +197,20 @@ export interface RunSummary {
   cost_usd?: number | null;
 }
 
+/**
+ * Cursor-paginated run listing.
+ *
+ * BREAKING CHANGE (wire): `GET /api/v1/runs` now returns this envelope instead
+ * of a bare `RunSummary[]`. `next_cursor` is an opaque keyset cursor (base64url
+ * of `"<started_at>|<id>"` of the last row on the page); pass it back as
+ * `?cursor=` to fetch the next page. `null` means there are no more rows.
+ * The legacy `GET /runs` route still returns the bare array.
+ */
+export interface RunListResponse {
+  items: RunSummary[];
+  next_cursor: string | null;
+}
+
 /* ────────────────────────────────────────────────────────────────────────
  * UI-level resource shapes
  * ──────────────────────────────────────────────────────────────────────── */
@@ -309,6 +324,74 @@ export interface TeamSpec {
   stages?: TeamStage[];
   taxonomy_required?: string[];
   missability_required?: string[];
+}
+
+/* ── Agents library — mirror @pp/core orchestrator/agents-library.ts ──── */
+
+export type AgentCategory =
+  | "engineering"
+  | "judge"
+  | "executive"
+  | "game"
+  | "governance"
+  | "harness"
+  | "other";
+
+/**
+ * One agent prompt (from `GET /agents`, sorted by id). Resolution mirrors
+ * teams: project `.claude/agents` → user `~/.claude/agents` → built-in
+ * assets/agents-src, first-resolution wins.
+ */
+export interface AgentSummary {
+  /** Role slug — the prompt filename without `.md`. */
+  id: string;
+  /** Frontmatter `name`, falling back to the id. */
+  name: string;
+  description: string;
+  category: AgentCategory;
+  /** Frontmatter `model`: either a pinned id or a tier alias ("opus"). */
+  model?: string;
+  /** Derived from `model` — tier alias directly, pinned id via reverse lookup. */
+  tier?: ClaudeTier;
+  /** Team yamls whose stages dispatch this agent as a generator. */
+  teams: string[];
+  origin: "project" | "user" | "builtin";
+}
+
+/** Full agent (from `GET /agents/:id`) — summary plus the prompt body. */
+export interface AgentDetail extends AgentSummary {
+  /** Frontmatter-stripped markdown prompt body. */
+  body: string;
+}
+
+/* ── Team recommendation — mirror @pp/core orchestrator/team-recommend.ts ── */
+
+/** `POST /teams/recommend` body. Deterministic heuristics — no model calls. */
+export interface TeamRecommendRequest {
+  request_text: string;
+  /** Project-team override discovery + profile detection; defaults server-side. */
+  project_path?: string;
+  /** Explicit profile override; falls back to profile.yaml then detection. */
+  profile?: string;
+  /** Scope override; omit to use the heuristic triage classification. */
+  scope?: "trivial" | "standard" | "major";
+}
+
+export interface TeamRecommendation {
+  team: string;
+  score: number;
+  /** "high" only on the #1 entry when score>=6 and margin over #2 >=3. */
+  confidence: "high" | "medium" | "low";
+  /** Per-rule scoring reasons (profile compat, triage signals, keywords, …). */
+  reasons: string[];
+}
+
+export interface TeamRecommendResponse {
+  scope: "trivial" | "standard" | "major";
+  /** True when triage (or the caller's override) classified the request as major. */
+  suggest_team_mode: boolean;
+  /** Top 5 of all discoverable teams, sorted score desc then name asc. */
+  recommendations: TeamRecommendation[];
 }
 
 export interface ProfileSpec {
@@ -497,19 +580,28 @@ export interface ReplayBundle {
  * Janitor report — mirror daemon/src/orchestrator/janitor.ts
  * ──────────────────────────────────────────────────────────────────────── */
 
+/** One planned (or executed) janitor sweep target. */
+export interface JanitorEntry {
+  path: string;
+  kind: "worktree" | "branch" | "lock" | "run";
+  bytes: number;
+  age_days: number;
+}
+
 /**
- * Janitor report — mirrors the server. The pi janitor sweeps abandoned
- * worktrees / locks / branches; entries carry `bytes: 0` (no size accounting)
- * and `reclaimed_bytes: 0`. A GET returns an empty report (`ran_at: null`, no
- * persistence); a POST actually runs (or previews with `dry_run: true`).
+ * Janitor report — mirrors @pp/core janitor.ts. Two-phase: `dry_run: true`
+ * returns the full sweep plan (entries with real byte/age accounting) without
+ * mutating anything; a real run executes it, sums `reclaimed_bytes` over the
+ * successful sweeps, and persists the report. A GET returns the last persisted
+ * report, or an empty default (`ran_at: null`) when the janitor has never run.
  */
 export interface JanitorReport {
   ran_at: string | null;
+  dry_run: boolean;
+  crashed_runs: string[];
+  entries: JanitorEntry[];
   swept: number;
   reclaimed_bytes: number;
-  entries: Array<{ path: string; kind: string; bytes: number; age_days: number }>;
-  dry_run?: boolean;
-  crashed_runs?: unknown;
 }
 
 /** Raw text body of an on-disk artifact / candidate output (by path). */
@@ -535,7 +627,7 @@ export interface StartRunRequest {
   team?: string | null;
   /** Forum name (mode="review"). */
   forum?: string | null;
-  /** Candidate fan-out (mode="best_of"); 2..7. */
+  /** Candidate fan-out (mode="best_of"); 2..8. */
   n?: number | null;
   /** Claude tier ceiling / floor overrides. */
   tier_cap?: ClaudeTier | null;
@@ -579,6 +671,17 @@ export interface ProviderTestResult {
   model?: string;
   wall_ms?: number;
   detail?: string;
+}
+
+/**
+ * Result of `POST /providers/:vendor/models/refresh` (no request body).
+ * `models` is the refreshed (or static-fallback) pi model-id list; unknown
+ * vendors 404 with `{error: "unknown provider"}`.
+ */
+export interface ProviderModelsRefreshResponse {
+  provider: string;
+  refreshed: boolean;
+  models: string[];
 }
 
 /** Autogenesis review decision. */
@@ -941,6 +1044,9 @@ export const apiPaths = {
   providerKey: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/key`,
   providerTest: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/test`,
   providerModels: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/models`,
+  /** POST — re-fetch a dynamic provider's live model list (no body). */
+  providerModelsRefresh: (vendor: string) =>
+    `${API_BASE}/providers/${encodeURIComponent(vendor)}/models/refresh`,
   models: `${API_BASE}/models`,
 
   budgets: `${API_BASE}/budgets`,
@@ -949,6 +1055,11 @@ export const apiPaths = {
 
   teams: `${API_BASE}/teams`,
   team: (name: string) => `${API_BASE}/teams/${encodeURIComponent(name)}`,
+  /** POST — body TeamRecommendRequest; returns a TeamRecommendResponse. */
+  teamsRecommend: `${API_BASE}/teams/recommend`,
+
+  agents: `${API_BASE}/agents`,
+  agent: (id: string) => `${API_BASE}/agents/${encodeURIComponent(id)}`,
 
   profiles: `${API_BASE}/profiles`,
   profile: (name: string) => `${API_BASE}/profiles/${encodeURIComponent(name)}`,

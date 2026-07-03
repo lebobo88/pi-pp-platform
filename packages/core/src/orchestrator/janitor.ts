@@ -3,48 +3,75 @@
  * stale candidate worktrees, removes orphan project locks, and surfaces
  * them on the next /pp:status. Idempotent — safe to call on every daemon
  * start and via /pp:doctor.
+ *
+ * Two-phase: the full sweep plan (entries with byte/age accounting) is
+ * computed first; `dry_run: true` returns that plan without touching
+ * anything, while a real run executes it and persists the report under
+ * the `janitor:last_report` platform setting.
  */
 
 import { execFileSync } from "node:child_process";
-import { rmSync, existsSync, statSync } from "node:fs";
+import { rmSync, existsSync, statSync, lstatSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { db, txImmediate } from "../db/database.js";
 import { projectLockPath } from "../util/paths.js";
 import { readLockMetadata, isPidAlive } from "../util/lock.js";
+import { getPlatformSetting, setPlatformSetting } from "./settings.js";
 import { log } from "../util/logger.js";
 
 const STALE_RUN_HOURS = 6;
 const STALE_LOCK_HOURS = 6;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function runJanitor(): {
+export const JANITOR_REPORT_KEY = "janitor:last_report";
+
+/** One planned (or executed) sweep target. */
+export interface JanitorEntry {
+  path: string;
+  kind: "worktree" | "branch" | "lock" | "run";
+  bytes: number;
+  age_days: number;
+}
+
+/** Result of a janitor pass — mirrors shared/api-types JanitorReport. */
+export interface JanitorReport {
+  ran_at: string;
+  dry_run: boolean;
   crashed_runs: string[];
-  swept_worktrees: string[];
-  swept_branches: string[];
-  swept_locks: string[];
-} {
-  const cutoff = new Date(Date.now() - STALE_RUN_HOURS * 60 * 60 * 1000).toISOString();
+  entries: JanitorEntry[];
+  swept: number;
+  reclaimed_bytes: number;
+}
 
-  // 1. Mark stale `running` rows as `crashed`.
+/** A plan item pairs the reportable entry with its (deferred) sweep action. */
+type PlanItem = {
+  entry: JanitorEntry;
+  sweep: () => boolean;
+};
+
+export function runJanitor(opts?: { dry_run?: boolean }): JanitorReport {
+  const dryRun = opts?.dry_run === true;
+  const now = Date.now();
+  const cutoff = new Date(now - STALE_RUN_HOURS * 60 * 60 * 1000).toISOString();
+
+  // ── Phase 1: compute the full sweep plan without mutating anything. ──
+
+  // 1. Stale `running`/`pending` rows that would be marked `crashed`.
   const stale = db()
-    .prepare(`SELECT id FROM runs WHERE status IN ('running', 'pending') AND started_at < ?`)
-    .all(cutoff) as Array<{ id: string }>;
+    .prepare(`SELECT id, started_at FROM runs WHERE status IN ('running', 'pending') AND started_at < ?`)
+    .all(cutoff) as Array<{ id: string; started_at: string }>;
+  const staleRunIds = stale.map((r) => r.id);
+  const runEntries: JanitorEntry[] = stale.map((r) => ({
+    path: r.id,
+    kind: "run",
+    bytes: 0,
+    age_days: ageDays(now - Date.parse(r.started_at)),
+  }));
 
-  const crashed: string[] = [];
-  if (stale.length) {
-    txImmediate(() => {
-      const stmt = db().prepare(`UPDATE runs SET status = 'crashed', finished_at = ? WHERE id = ?`);
-      const now = new Date().toISOString();
-      for (const r of stale) {
-        stmt.run(now, r.id);
-        crashed.push(r.id);
-      }
-    });
-    log.info({ count: crashed.length }, "janitor marked stale runs as crashed");
-  }
-
-  // 2. Sweep stale candidate worktrees and 3. orphan project locks across every known project.
-  const swept_worktrees: string[] = [];
-  const swept_branches: string[] = [];
-  const swept_locks: string[] = [];
+  const plan: PlanItem[] = [];
+  // Projects whose worktree registry references missing paths — pruned on a
+  // real run only (git worktree prune mutates .git, so never in dry_run).
+  const pruneProjects = new Set<string>();
 
   const projects = db()
     .prepare(
@@ -56,7 +83,7 @@ export function runJanitor(): {
     .all() as Array<{ project_path: string }>;
 
   for (const { project_path } of projects) {
-    // Worktree sweep
+    // Worktree + branch plan
     try {
       const stdout = execFileGit(["worktree", "list", "--porcelain"], project_path);
       const wtBlocks = stdout.split(/\n\n/);
@@ -67,28 +94,43 @@ export function runJanitor(): {
         const wtPath = wtMatch[1]!;
         const branch = branchMatch[1]!;
         if (!existsSync(wtPath)) {
-          execFileGit(["worktree", "prune"], project_path);
+          pruneProjects.add(project_path);
           continue;
         }
         const stat = statSync(wtPath);
-        const ageMs = Date.now() - stat.mtime.getTime();
+        const ageMs = now - stat.mtime.getTime();
         if (ageMs > STALE_RUN_HOURS * 60 * 60 * 1000) {
-          try {
-            execFileGit(["worktree", "remove", "--force", wtPath], project_path);
-            swept_worktrees.push(wtPath);
-            try {
-              execFileGit(["branch", "-D", branch], project_path);
-              swept_branches.push(branch);
-            } catch { /* branch may already be gone */ }
-          } catch (err) {
-            log.warn({ err, wtPath }, "worktree remove failed during sweep");
-            try { rmSync(wtPath, { recursive: true, force: true }); } catch { /* ignore */ }
-          }
+          plan.push({
+            entry: { path: wtPath, kind: "worktree", bytes: dirSizeBytes(wtPath), age_days: ageDays(ageMs) },
+            sweep: () => {
+              try {
+                execFileSync("git", ["worktree", "remove", "--force", wtPath], {
+                  cwd: project_path, encoding: "utf8", windowsHide: true,
+                });
+                return true;
+              } catch (err) {
+                log.warn({ err, wtPath }, "worktree remove failed during sweep");
+                try { rmSync(wtPath, { recursive: true, force: true }); } catch { /* ignore */ }
+                return !existsSync(wtPath);
+              }
+            },
+          });
+          plan.push({
+            entry: { path: branch, kind: "branch", bytes: 0, age_days: ageDays(ageMs) },
+            sweep: () => {
+              try {
+                execFileSync("git", ["branch", "-D", branch], {
+                  cwd: project_path, encoding: "utf8", windowsHide: true,
+                });
+                return true;
+              } catch { /* branch may already be gone */ return false; }
+            },
+          });
         }
       }
     } catch { /* not a git project or other error */ }
 
-    // Project-lock sweep — remove `<project>/.harness/.lock` if older than
+    // Project-lock plan — sweep `<project>/.harness/.lock` if older than
     // STALE_LOCK_HOURS. The lock file is created at start_run via
     // ProjectLock.acquire() and deleted at finalize_run via release().
     // A leftover lock means the daemon crashed mid-run.
@@ -96,27 +138,110 @@ export function runJanitor(): {
       const lockPath = projectLockPath(project_path);
       if (existsSync(lockPath)) {
         const stat = statSync(lockPath);
-        const ageMs = Date.now() - stat.mtime.getTime();
+        const ageMs = now - stat.mtime.getTime();
         const meta = readLockMetadata(lockPath);
         const deadPid = meta && !isPidAlive(meta.pid);
         const ageExceeded = ageMs > STALE_LOCK_HOURS * 60 * 60 * 1000;
         if (deadPid || ageExceeded) {
-          try {
-            rmSync(lockPath, { force: true });
-            swept_locks.push(lockPath);
-            log.info(
-              { lockPath, reason: deadPid ? `dead_pid=${meta!.pid}` : `age=${Math.round(ageMs / 1000)}s` },
-              "janitor removed stale project lock",
-            );
-          } catch (err) {
-            log.warn({ err, lockPath }, "stale lock removal failed");
-          }
+          plan.push({
+            entry: { path: lockPath, kind: "lock", bytes: stat.size, age_days: ageDays(ageMs) },
+            sweep: () => {
+              try {
+                rmSync(lockPath, { force: true });
+                log.info(
+                  { lockPath, reason: deadPid ? `dead_pid=${meta!.pid}` : `age=${Math.round(ageMs / 1000)}s` },
+                  "janitor removed stale project lock",
+                );
+                return true;
+              } catch (err) {
+                log.warn({ err, lockPath }, "stale lock removal failed");
+                return false;
+              }
+            },
+          });
         }
       }
     } catch { /* ignore */ }
   }
 
-  return { crashed_runs: crashed, swept_worktrees, swept_branches, swept_locks };
+  const entries: JanitorEntry[] = [...runEntries, ...plan.map((p) => p.entry)];
+  const ran_at = new Date().toISOString();
+
+  if (dryRun) {
+    return { ran_at, dry_run: true, crashed_runs: staleRunIds, entries, swept: 0, reclaimed_bytes: 0 };
+  }
+
+  // ── Phase 2: execute the plan. ──
+
+  let swept = 0;
+  let reclaimed_bytes = 0;
+
+  const crashed: string[] = [];
+  if (stale.length) {
+    txImmediate(() => {
+      const stmt = db().prepare(`UPDATE runs SET status = 'crashed', finished_at = ? WHERE id = ?`);
+      const finished = new Date().toISOString();
+      for (const r of stale) {
+        stmt.run(finished, r.id);
+        crashed.push(r.id);
+      }
+    });
+    swept += crashed.length;
+    log.info({ count: crashed.length }, "janitor marked stale runs as crashed");
+  }
+
+  for (const project_path of pruneProjects) {
+    execFileGit(["worktree", "prune"], project_path);
+  }
+
+  for (const item of plan) {
+    if (item.sweep()) {
+      swept += 1;
+      reclaimed_bytes += item.entry.bytes;
+    }
+  }
+
+  const report: JanitorReport = { ran_at, dry_run: false, crashed_runs: crashed, entries, swept, reclaimed_bytes };
+  try {
+    setPlatformSetting(JANITOR_REPORT_KEY, report);
+  } catch (err) {
+    log.warn({ err }, "janitor report persistence failed");
+  }
+  return report;
+}
+
+/** Last persisted (non-dry-run) janitor report, or null if none has run yet. */
+export function getJanitorReport(): JanitorReport | null {
+  return getPlatformSetting<JanitorReport>(JANITOR_REPORT_KEY);
+}
+
+/**
+ * Recursive on-disk size of a directory (or file). Best-effort: unreadable
+ * entries are skipped, and the walk bails out after `maxEntries` filesystem
+ * entries so a pathological tree can't stall the janitor.
+ */
+export function dirSizeBytes(path: string, maxEntries = 50_000): number {
+  let total = 0;
+  let seen = 0;
+  const stack: string[] = [path];
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (++seen > maxEntries) break;
+    try {
+      const stat = lstatSync(current);
+      if (stat.isDirectory()) {
+        for (const name of readdirSync(current)) stack.push(join(current, name));
+      } else if (stat.isFile()) {
+        total += stat.size;
+      }
+    } catch { /* skip unreadable entries */ }
+  }
+  return total;
+}
+
+function ageDays(ageMs: number): number {
+  if (!Number.isFinite(ageMs) || ageMs < 0) return 0;
+  return Math.round((ageMs / DAY_MS) * 10) / 10;
 }
 
 /** Synchronous git helper. Returns stdout (empty string on non-zero exit). */

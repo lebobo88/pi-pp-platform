@@ -36,6 +36,8 @@ import {
   BUILTIN_PROFILES, BUILTIN_PROFILE_NAMES, type ProfileName,
   // teams / forums / templates
   getTeam, listTeams, listForums, getForum, getDesignTemplate, TEMPLATES_BY_KIND,
+  // agents library / team recommendation
+  listAgents, getAgent, recommendTeams,
   // constitution
   ensureConstitution, readConstitution, forbiddenPatterns,
   // replay / janitor / rubrics
@@ -175,6 +177,7 @@ const ListRunsSchema = z.object({
   project_path: z.string().optional(),
   status: z.enum(RUN_STATUS).optional(),
   limit: z.number().int().min(1).max(500).optional(),
+  cursor: z.string().optional(),
 });
 
 const GetRunSchema = z.object({ run_id: z.string().min(1) });
@@ -355,6 +358,15 @@ const WriteProfileSchema = z.object({
 });
 const GetTeamSchema = z.object({ name: z.string().min(1), project_path: z.string().min(1) });
 const ListTeamsSchema = z.object({ project_path: z.string().min(1) });
+const ListAgentsSchema = z.object({ project_path: z.string().optional() });
+const GetAgentSchema = z.object({ id: z.string().min(1), project_path: z.string().optional() });
+const RecommendTeamSchema = z.object({
+  request_text: z.string().min(1),
+  project_path: z.string().optional(),
+  profile: z.string().optional(),
+  scope: z.enum(["trivial", "standard", "major"]).optional(),
+});
+const JanitorSchema = z.object({ dry_run: z.boolean().optional() });
 const GetDesignTemplateSchema = z.object({ kind: z.string().min(1) });
 const GetForumSchema = z.object({ id: z.string().min(1) });
 const ReplaySchema = z.object({ run_id: z.string().min(1) });
@@ -451,8 +463,8 @@ export const TOOLS: ToolDef[] = [
     description: "Write artifact bytes under <project>/.harness/<run_id>/ and register it. Bytes are secret-scanned before writing; supports base64 encoding and manual-edit detection.",
     schema: ArchiveArtifactSchema, handler: (a) => archiveArtifact(ArchiveArtifactSchema.parse(a)) },
   { name: "list_runs", availability: "full",
-    description: "List recent runs, optionally filtered by project_path and/or status. Returns up to `limit` rows (default 50).",
-    schema: ListRunsSchema, handler: (a) => listRuns(ListRunsSchema.parse(a)) },
+    description: "List recent runs, optionally filtered by project_path and/or status. Returns up to `limit` rows (default 50). Pass `cursor` (base64url of \"<started_at>|<id>\" of the last row seen) to page past a previous listing.",
+    schema: ListRunsSchema, handler: (a) => listRuns(ListRunsSchema.parse(a)).items },
   { name: "get_run", availability: "full",
     description: "Return the full tree for a run: run row, all stages, attempts, verdicts, and artifacts.",
     schema: GetRunSchema, handler: (a) => getRun(GetRunSchema.parse(a).run_id) },
@@ -641,6 +653,20 @@ export const TOOLS: ToolDef[] = [
   { name: "team_list", availability: "full",
     description: "List all available teams (project + user + builtin, first-resolution wins).",
     schema: ListTeamsSchema, handler: (a) => listTeams(ListTeamsSchema.parse(a)) },
+  { name: "recommend_team", availability: "full",
+    description: "Deterministically score every discoverable team against a request (profile compat, triage signals, keyword hints) and return the top 5 with reasons. Pure heuristics — no model calls.",
+    schema: RecommendTeamSchema, handler: (a) => {
+      const p = RecommendTeamSchema.parse(a);
+      return recommendTeams({ ...p, project_path: p.project_path ?? process.cwd() });
+    } },
+
+  // ── Agents (full) ──
+  { name: "list_agents", availability: "full",
+    description: "List all agent prompts (project → user → builtin, first-resolution wins). Returns AgentSummary[]: {id,name,description,category,model,tier,teams,origin}.",
+    schema: ListAgentsSchema, handler: (a) => listAgents(ListAgentsSchema.parse(a)) },
+  { name: "get_agent", availability: "full",
+    description: "Resolve one agent prompt by id (project → user → builtin). Returns the summary plus {body} (frontmatter-stripped markdown), or null.",
+    schema: GetAgentSchema, handler: (a) => getAgent(GetAgentSchema.parse(a)) },
 
   // ── Design templates (full) ──
   { name: "get_design_template", availability: "full",
@@ -660,8 +686,8 @@ export const TOOLS: ToolDef[] = [
 
   // ── Ops (full) ──
   { name: "janitor", availability: "full",
-    description: "Run the janitor: mark >6h runs 'crashed', sweep stale candidate worktrees/branches. Idempotent.",
-    schema: EmptySchema, handler: () => runJanitor() },
+    description: "Run the janitor: mark >6h runs 'crashed', sweep stale candidate worktrees/branches/locks. dry_run returns the sweep plan without mutating. Idempotent.",
+    schema: JanitorSchema, handler: (a) => runJanitor({ dry_run: JanitorSchema.parse(a).dry_run === true }) },
   { name: "replay", availability: "full",
     description: "Build a replay bundle for a run: prompt set, model/CLI versions, HEAD SHA, profile, taxonomy mapping, stage/attempt/verdict tree.",
     schema: ReplaySchema, handler: (a) => buildReplayBundle(ReplaySchema.parse(a).run_id) },

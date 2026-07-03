@@ -2763,16 +2763,48 @@ export function archiveArtifact(input: ArchiveArtifactInput): ArchiveArtifactOut
   return { status: "ok", artifact_id: id, absolute_path: absolute, sha256 };
 }
 
-export function listRuns(filter: { project_path?: string; status?: RunStatus; limit?: number }): unknown[] {
+export type RunListPage = { items: unknown[]; next_cursor: string | null };
+
+/** Opaque keyset cursor: base64url of "<started_at>|<id>" of the last row seen. */
+function encodeRunCursor(started_at: string, id: string): string {
+  return Buffer.from(`${started_at}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeRunCursor(cursor: string): { started_at: string; id: string } | null {
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const sep = raw.lastIndexOf("|");
+    if (sep <= 0 || sep === raw.length - 1) return null;
+    return { started_at: raw.slice(0, sep), id: raw.slice(sep + 1) };
+  } catch {
+    return null;
+  }
+}
+
+export function listRuns(filter: { project_path?: string; status?: RunStatus; limit?: number; cursor?: string }): RunListPage {
   const where: string[] = [];
   const params: unknown[] = [];
   if (filter.project_path) { where.push("project_path = ?"); params.push(filter.project_path); }
   if (filter.status)       { where.push("status = ?");       params.push(filter.status); }
+  if (filter.cursor) {
+    const c = decodeRunCursor(filter.cursor);
+    // Keyset pagination on (started_at, id) DESC; a malformed cursor is
+    // ignored (first page) rather than throwing on a read path.
+    if (c) {
+      where.push("(started_at < ? OR (started_at = ? AND id < ?))");
+      params.push(c.started_at, c.started_at, c.id);
+    }
+  }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const limit = Math.max(1, Math.min(filter.limit ?? 50, 500));
-  return db()
-    .prepare(`SELECT id, project_path, request_text, team, mode, status, started_at, finished_at FROM runs ${whereSql} ORDER BY started_at DESC LIMIT ?`)
-    .all(...params, limit);
+  // Fetch limit+1 to detect whether another page exists without a COUNT(*).
+  const rows = db()
+    .prepare(`SELECT id, project_path, request_text, team, mode, status, started_at, finished_at FROM runs ${whereSql} ORDER BY started_at DESC, id DESC LIMIT ?`)
+    .all(...params, limit + 1) as Array<{ id: string; started_at: string }>;
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  const next_cursor = rows.length > limit && last ? encodeRunCursor(last.started_at, last.id) : null;
+  return { items, next_cursor };
 }
 
 export function getRun(run_id: string): unknown {

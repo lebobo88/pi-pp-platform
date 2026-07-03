@@ -186,10 +186,10 @@ describe("provider keys — write-only + masked", () => {
     for (const id of ["openai", "google", "anthropic"]) {
       expect(avail.find((p) => p.id === id)?.in_catalog).toBe(true);
     }
-    // a curated pi provider (mistral) is offered even though it is not yet in the catalog
+    // every pi provider (e.g. mistral) is now a generated catalog entry, enabled by default
     const mistral = avail.find((p) => p.id === "mistral");
     expect(mistral).toBeTruthy();
-    expect(mistral!.in_catalog).toBe(false);
+    expect(mistral!.in_catalog).toBe(true);
     expect(mistral!.env_key_hint).toBe("MISTRAL_API_KEY");
     expect(ids.length).toBeGreaterThan(3);
   });
@@ -213,7 +213,7 @@ describe("provider keys — write-only + masked", () => {
 
 describe("run reads + run-control validation", () => {
   it("GET /runs empty, unknown run 404", async () => {
-    expect((await get("/api/v1/runs")).json()).toEqual([]);
+    expect((await get("/api/v1/runs")).json()).toEqual({ items: [], next_cursor: null });
     expect((await get("/api/v1/runs/run_missing")).statusCode).toBe(404);
   });
 

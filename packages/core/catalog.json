@@ -1,14 +1,19 @@
 {
   "_comment": "Bundled default provider/model catalog — the single source of truth for which providers exist, their models + pricing, the generation ladders, and the judge pool. A user override at ~/.pi-pp-platform/catalog.json (dir honors PP_PLATFORM_DIR) deep-merges over this default, winning per provider-id and per model-id. An absent/partial user file reproduces the historical 3-vendor behavior for everything it does not mention. Keep in sync with assets/catalog.json.",
-  "_updated": "2026-07-02",
+  "_updated": "2026-07-03",
   "version": 1,
-
   "default_ladder": "claude",
   "generation_ladders": {
     "claude": {
       "provider": "anthropic",
-      "order": ["haiku", "sonnet", "opus"],
-      "off_ladder": ["fable"],
+      "order": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ],
+      "off_ladder": [
+        "fable"
+      ],
       "tiers": {
         "haiku": "claude-haiku-4-5-20251001",
         "sonnet": "claude-sonnet-4-6",
@@ -23,13 +28,21 @@
       }
     }
   },
-
   "judge_pool": [
-    { "provider": "openai", "model": "gpt-5.4", "escalated": "gpt-5.5" },
-    { "provider": "google", "model": "gemini-3.1-pro-preview" },
-    { "provider": "anthropic", "model": "claude-opus-4-7" }
+    {
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "escalated": "gpt-5.5"
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.1-pro-preview"
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-4-7"
+    }
   ],
-
   "providers": {
     "openai": {
       "display_name": "OpenAI",
@@ -37,10 +50,22 @@
       "env_key_hint": "OPENAI_API_KEY",
       "pi_provider": "openai",
       "models": {
-        "gpt-5.5":           { "input_per_1m": 5.00, "output_per_1m": 15.00 },
-        "gpt-5.4":           { "input_per_1m": 4.00, "output_per_1m": 12.00 },
-        "gpt-5.3-codex":     { "input_per_1m": 3.00, "output_per_1m": 9.00 },
-        "gpt-5.1-codex-max": { "input_per_1m": 6.00, "output_per_1m": 18.00 }
+        "gpt-5.5": {
+          "input_per_1m": 5,
+          "output_per_1m": 30
+        },
+        "gpt-5.4": {
+          "input_per_1m": 2.5,
+          "output_per_1m": 15
+        },
+        "gpt-5.3-codex": {
+          "input_per_1m": 1.75,
+          "output_per_1m": 14
+        },
+        "gpt-5.1-codex-max": {
+          "input_per_1m": 1.25,
+          "output_per_1m": 10
+        }
       }
     },
     "google": {
@@ -49,9 +74,18 @@
       "env_key_hint": "GEMINI_API_KEY",
       "pi_provider": "google",
       "models": {
-        "gemini-3.1-pro-preview": { "input_per_1m": 7.00, "output_per_1m": 21.00 },
-        "gemini-2.5-pro":         { "input_per_1m": 3.50, "output_per_1m": 10.50 },
-        "gemini-2.5-flash":       { "input_per_1m": 0.30, "output_per_1m": 0.90 }
+        "gemini-3.1-pro-preview": {
+          "input_per_1m": 2,
+          "output_per_1m": 12
+        },
+        "gemini-2.5-pro": {
+          "input_per_1m": 1.25,
+          "output_per_1m": 10
+        },
+        "gemini-2.5-flash": {
+          "input_per_1m": 0.3,
+          "output_per_1m": 2.5
+        }
       }
     },
     "anthropic": {
@@ -60,17 +94,400 @@
       "env_key_hint": "ANTHROPIC_API_KEY",
       "pi_provider": "anthropic",
       "models": {
-        "claude-fable-5":            { "input_per_1m": 30.00, "output_per_1m": 150.00 },
-        "claude-opus-4-7":           { "input_per_1m": 15.00, "output_per_1m": 75.00 },
-        "claude-opus-4-6":           { "input_per_1m": 15.00, "output_per_1m": 75.00 },
-        "claude-sonnet-4-6":         { "input_per_1m": 3.00,  "output_per_1m": 15.00 },
-        "claude-haiku-4-5-20251001": { "input_per_1m": 0.80,  "output_per_1m": 4.00 },
-        "claude-haiku-4-5":          { "input_per_1m": 0.80,  "output_per_1m": 4.00 }
+        "claude-fable-5": {
+          "input_per_1m": 10,
+          "output_per_1m": 50
+        },
+        "claude-opus-4-7": {
+          "input_per_1m": 5,
+          "output_per_1m": 25
+        },
+        "claude-opus-4-6": {
+          "input_per_1m": 5,
+          "output_per_1m": 25
+        },
+        "claude-sonnet-4-6": {
+          "input_per_1m": 3,
+          "output_per_1m": 15
+        },
+        "claude-haiku-4-5-20251001": {
+          "input_per_1m": 1,
+          "output_per_1m": 5
+        },
+        "claude-haiku-4-5": {
+          "input_per_1m": 1,
+          "output_per_1m": 5
+        }
       }
+    },
+    "amazon-bedrock": {
+      "display_name": "Amazon Bedrock",
+      "enabled": true,
+      "env_key_hint": "AWS_ACCESS_KEY_ID",
+      "pi_provider": "amazon-bedrock",
+      "models": {
+        "anthropic.claude-haiku-4-5": {
+          "display_name": "Claude Haiku 4.5 (Bedrock)",
+          "input_per_1m": 1,
+          "output_per_1m": 5,
+          "context_window": 200000,
+          "max_tokens": 64000,
+          "reasoning": true,
+          "custom": true
+        },
+        "anthropic.claude-opus-4-6": {
+          "display_name": "Claude Opus 4.6 (Bedrock)",
+          "input_per_1m": 5,
+          "output_per_1m": 25,
+          "context_window": 1000000,
+          "max_tokens": 128000,
+          "reasoning": true,
+          "custom": true
+        },
+        "mistral.mistral-large-3": {
+          "display_name": "Mistral Large 3 (Bedrock)",
+          "input_per_1m": 0.5,
+          "output_per_1m": 1.5,
+          "context_window": 262144,
+          "cache_write_per_1m": 0,
+          "custom": true
+        }
+      }
+    },
+    "ant-ling": {
+      "display_name": "Ant Ling",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "ant-ling",
+      "models": {}
+    },
+    "azure-openai-responses": {
+      "display_name": "Azure OpenAI",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "azure-openai-responses",
+      "models": {}
+    },
+    "cerebras": {
+      "display_name": "Cerebras",
+      "enabled": true,
+      "env_key_hint": "CEREBRAS_API_KEY",
+      "pi_provider": "cerebras",
+      "models": {}
+    },
+    "cloudflare-ai-gateway": {
+      "display_name": "Cloudflare AI Gateway",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "cloudflare-ai-gateway",
+      "models": {}
+    },
+    "cloudflare-workers-ai": {
+      "display_name": "Cloudflare Workers AI",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "cloudflare-workers-ai",
+      "models": {}
+    },
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "enabled": true,
+      "env_key_hint": "DEEPSEEK_API_KEY",
+      "pi_provider": "deepseek",
+      "models": {}
+    },
+    "fireworks": {
+      "display_name": "Fireworks",
+      "enabled": true,
+      "env_key_hint": "FIREWORKS_API_KEY",
+      "pi_provider": "fireworks",
+      "models": {
+        "accounts/fireworks/models/nemotron-3-ultra": {
+          "display_name": "NVIDIA Nemotron 3 Ultra",
+          "input_per_1m": 0.6,
+          "output_per_1m": 2.4,
+          "context_window": 262144,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "github-copilot": {
+      "display_name": "GitHub Copilot",
+      "enabled": true,
+      "env_key_hint": "COPILOT_GITHUB_TOKEN",
+      "pi_provider": "github-copilot",
+      "models": {}
+    },
+    "google-vertex": {
+      "display_name": "Google Vertex AI",
+      "enabled": true,
+      "env_key_hint": "GOOGLE_APPLICATION_CREDENTIALS",
+      "pi_provider": "google-vertex",
+      "models": {}
+    },
+    "groq": {
+      "display_name": "Groq",
+      "enabled": true,
+      "env_key_hint": "GROQ_API_KEY",
+      "pi_provider": "groq",
+      "models": {
+        "qwen/qwen3.6-27b": {
+          "display_name": "Qwen 3.6 27B",
+          "input_per_1m": 0.6,
+          "output_per_1m": 3,
+          "context_window": 131072,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "huggingface": {
+      "display_name": "Hugging Face",
+      "enabled": true,
+      "env_key_hint": "HF_TOKEN",
+      "pi_provider": "huggingface",
+      "models": {
+        "openai/gpt-oss-20b": {
+          "display_name": "GPT-OSS 20B (routed)",
+          "input_per_1m": 0.05,
+          "output_per_1m": 0.2,
+          "context_window": 131072,
+          "max_tokens": 32768,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "kimi-coding": {
+      "display_name": "Kimi For Coding",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "kimi-coding",
+      "models": {}
+    },
+    "minimax": {
+      "display_name": "MiniMax",
+      "enabled": true,
+      "env_key_hint": "MINIMAX_API_KEY",
+      "pi_provider": "minimax",
+      "models": {}
+    },
+    "minimax-cn": {
+      "display_name": "MiniMax CN",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "minimax-cn",
+      "models": {}
+    },
+    "mistral": {
+      "display_name": "Mistral",
+      "enabled": true,
+      "env_key_hint": "MISTRAL_API_KEY",
+      "pi_provider": "mistral",
+      "models": {
+        "mistral-large-3": {
+          "display_name": "Mistral Large 3 (25.12)",
+          "input_per_1m": 0.5,
+          "output_per_1m": 1.5,
+          "context_window": 262144,
+          "cache_read_per_1m": 0.05,
+          "cache_write_per_1m": 0,
+          "custom": true
+        },
+        "mistral-small-4": {
+          "display_name": "Mistral Small 4 (26.03)",
+          "input_per_1m": 0.15,
+          "output_per_1m": 0.6,
+          "context_window": 128000,
+          "cache_read_per_1m": 0.015,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        },
+        "codestral-2508": {
+          "display_name": "Codestral (25.08)",
+          "input_per_1m": 0.3,
+          "output_per_1m": 0.9,
+          "context_window": 256000,
+          "cache_read_per_1m": 0.03,
+          "cache_write_per_1m": 0,
+          "custom": true
+        }
+      }
+    },
+    "moonshotai": {
+      "display_name": "Moonshot AI",
+      "enabled": true,
+      "env_key_hint": "MOONSHOT_API_KEY",
+      "pi_provider": "moonshotai",
+      "models": {}
+    },
+    "moonshotai-cn": {
+      "display_name": "Moonshot AI CN",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "moonshotai-cn",
+      "models": {}
+    },
+    "nvidia": {
+      "display_name": "NVIDIA",
+      "enabled": true,
+      "env_key_hint": "NVIDIA_API_KEY",
+      "pi_provider": "nvidia",
+      "models": {
+        "nvidia/nemotron-3-ultra": {
+          "display_name": "Nemotron 3 Ultra (550B)",
+          "input_per_1m": 0,
+          "output_per_1m": 0,
+          "context_window": 1000000,
+          "max_tokens": 131072,
+          "reasoning": true,
+          "custom": true
+        },
+        "nvidia/nemotron-3-super": {
+          "display_name": "Nemotron 3 Super (120B A12B)",
+          "input_per_1m": 0,
+          "output_per_1m": 0,
+          "context_window": 1000000,
+          "max_tokens": 131072,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "openai-codex": {
+      "display_name": "OpenAI Codex",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "openai-codex",
+      "models": {}
+    },
+    "opencode": {
+      "display_name": "OpenCode Zen",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "opencode",
+      "models": {}
+    },
+    "opencode-go": {
+      "display_name": "OpenCode Zen Go",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "opencode-go",
+      "models": {}
+    },
+    "openrouter": {
+      "display_name": "OpenRouter",
+      "enabled": true,
+      "env_key_hint": "OPENROUTER_API_KEY",
+      "pi_provider": "openrouter",
+      "models": {}
+    },
+    "together": {
+      "display_name": "Together",
+      "enabled": true,
+      "env_key_hint": "TOGETHER_API_KEY",
+      "pi_provider": "together",
+      "models": {
+        "Qwen/Qwen3.7-Plus": {
+          "display_name": "Qwen3.7-Plus",
+          "input_per_1m": 0.32,
+          "output_per_1m": 1.28,
+          "context_window": 1000000,
+          "cache_write_per_1m": 0,
+          "custom": true
+        },
+        "minimaxai/MiniMax-M3": {
+          "display_name": "MiniMax M3",
+          "input_per_1m": 0.3,
+          "output_per_1m": 1.2,
+          "context_window": 1000000,
+          "max_tokens": 128000,
+          "cache_read_per_1m": 0.06,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "vercel-ai-gateway": {
+      "display_name": "Vercel AI Gateway",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "vercel-ai-gateway",
+      "models": {}
+    },
+    "xai": {
+      "display_name": "xAI",
+      "enabled": true,
+      "env_key_hint": "XAI_API_KEY",
+      "pi_provider": "xai",
+      "models": {}
+    },
+    "xiaomi": {
+      "display_name": "Xiaomi",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "xiaomi",
+      "models": {}
+    },
+    "xiaomi-token-plan-ams": {
+      "display_name": "Xiaomi Token Plan AMS",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "xiaomi-token-plan-ams",
+      "models": {}
+    },
+    "xiaomi-token-plan-cn": {
+      "display_name": "Xiaomi Token Plan CN",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "xiaomi-token-plan-cn",
+      "models": {}
+    },
+    "xiaomi-token-plan-sgp": {
+      "display_name": "Xiaomi Token Plan SGP",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "xiaomi-token-plan-sgp",
+      "models": {}
+    },
+    "zai": {
+      "display_name": "Z.AI",
+      "enabled": true,
+      "env_key_hint": "ZAI_API_KEY",
+      "pi_provider": "zai",
+      "models": {
+        "glm-5": {
+          "display_name": "GLM-5",
+          "input_per_1m": 1,
+          "output_per_1m": 3.2,
+          "context_window": 200000,
+          "max_tokens": 131072,
+          "cache_read_per_1m": 0.2,
+          "cache_write_per_1m": 0,
+          "reasoning": true,
+          "custom": true
+        }
+      }
+    },
+    "zai-coding-cn": {
+      "display_name": "Z.AI Coding CN",
+      "enabled": true,
+      "env_key_hint": null,
+      "pi_provider": "zai-coding-cn",
+      "models": {}
     }
   },
-
   "_pricing_notes": {
-    "claude-fable-5": "CONSERVATIVE PLACEHOLDER — 2x opus-4-7 rates. Requires authoritative pricing confirmation from Anthropic before production use."
+    "claude-fable-5": "VERIFIED 2026-07-03 against Anthropic's official pricing docs (platform.claude.com/docs/en/about-claude/pricing) — $10/$50 per MTok, GA on the Claude API since 2026-06-09; 1M context / 128K max output. Matches pi 0.80.3 builtin pricing.",
+    "claude-sonnet-5": "pi builtin carries the introductory $2/$10 per MTok pricing; sticker price $3/$15 resumes after 2026-08-31 (official Anthropic pricing page).",
+    "gpt-5.1-codex-max": "STALE — the gpt-5.1 line is scheduled for API removal 2026-07-23 per OpenAI's deprecations page; priced at pi's builtin $1.25/$10 until then. Prefer gpt-5.3-codex.",
+    "big-3-curated": "openai/google/anthropic curated prices re-verified 2026-07-03 against the official provider pricing pages; pi 0.80.3 builtin pricing agrees for all of them (no >10% divergence found).",
+    "nvidia-custom": "Nemotron 3 Ultra/Super are $0/$0 — NVIDIA's hosted NIM endpoints publish no official per-token price (free developer tier; production is GPU-licensed via NVIDIA AI Enterprise)."
   }
 }
