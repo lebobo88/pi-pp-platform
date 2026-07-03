@@ -21,6 +21,7 @@ export * from "./orchestrator/missability.js";
 export * from "./orchestrator/profiles.js";
 export * from "./orchestrator/teams.js";
 export * from "./orchestrator/agents-library.js";
+export * from "./orchestrator/skills.js";
 export * from "./orchestrator/team-recommend.js";
 export * from "./orchestrator/forums.js";
 export * from "./orchestrator/master-plan.js";
@@ -40,6 +41,8 @@ export { parseFrontmatter, type FlatFrontmatter } from "./util/frontmatter.js";
 // Pilot seam (M3): autogenesis analyzer consumed by @pp/pilot's finalize phase.
 export { analyzeAndPropose, listProposals, setProposalStatus } from "./orchestrator/autogenesis-analyzer.js";
 export type { DetectedProposal } from "./orchestrator/autogenesis-analyzer.js";
+// A5: local evolution commit/rollback (closes the analyzer's propose→review loop).
+export * from "./orchestrator/evolution-commit.js";
 // Pilot seam (M7): visual regression + browser validation stage drivers.
 export * from "./orchestrator/browser-validation.js";
 export * from "./orchestrator/visual-regression.js";

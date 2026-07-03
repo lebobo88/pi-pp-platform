@@ -65,6 +65,12 @@ export type StageSpec = {
   rubricHint?: string;
   /** team_yaml judge.model_pref hint. */
   judgeModelPref?: string;
+  /**
+   * team_yaml stage `skills` — explicit skill ids that are ALWAYS injected
+   * into the generator prompt (on top of the registry's auto-selection),
+   * regardless of each skill's own injection/applies_to_* scoping.
+   */
+  skills?: string[];
   /** When set (>=2), run this stage as a best-of-N candidate race. */
   bestOf?: number;
   /**

@@ -15,7 +15,7 @@ export async function runTaxonomyPhase(ctx: RunContext): Promise<void> {
 
   if (ctx.scope !== "trivial") {
     try {
-      const role = loadRolePrompt("taxonomy-mapper");
+      const role = loadRolePrompt("taxonomy-mapper", { projectPath: ctx.projectPath });
       await ctx.engine.runAuthoringCompletion({
         model: ctx.engine.catalog.resolveTier(role.tier ?? "haiku"),
         systemPrompt: renderSystemPrompt(role, { requestText: ctx.requestText }),

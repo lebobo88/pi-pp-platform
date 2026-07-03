@@ -521,6 +521,15 @@ export const evolution = {
     // list_pending takes the Empty schema {} — no args.
     return safeCall("evolution", "evolution.list_pending", {});
   },
+  commit(envelope: EightsEnvelope, proposal_id: string): Promise<{ status?: string } | null> {
+    // CommitArgs: { envelope, proposal_id }. Mirrors a local evolution-commit
+    // write (best-effort — the local override file is authoritative).
+    return safeCall("evolution", "evolution.commit", { envelope, proposal_id });
+  },
+  rollback(envelope: EightsEnvelope, proposal_id: string): Promise<{ status?: string } | null> {
+    // RollbackArgs: { envelope, proposal_id }.
+    return safeCall("evolution", "evolution.rollback", { envelope, proposal_id });
+  },
 };
 
 export const audit = {

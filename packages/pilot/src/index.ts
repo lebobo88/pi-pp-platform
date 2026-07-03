@@ -43,6 +43,7 @@ export {
   CODING_ROLES,
   READONLY_ROLES,
   type RolePrompt,
+  type RolePromptOrigin,
   type ExecutionMode,
   type RenderContext,
 } from "./prompts/loader.js";

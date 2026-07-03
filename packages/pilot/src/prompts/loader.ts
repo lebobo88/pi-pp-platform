@@ -15,6 +15,7 @@
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLAUDE_TIER_MODELS, type ClaudeTier } from "@pp/core";
 
@@ -56,6 +57,9 @@ export type RoleFrontmatter = {
   tools?: string;
 };
 
+/** Which layer of the override chain a role prompt resolved from. */
+export type RolePromptOrigin = "project" | "user" | "builtin";
+
 export type RolePrompt = {
   role: string;
   name: string;
@@ -67,6 +71,8 @@ export type RolePrompt = {
   execution: ExecutionMode;
   /** The prompt body with Claude-Code-specific procedure stripped. */
   cleanedBody: string;
+  /** project `.claude/agents` → user `~/.claude/agents` → builtin agents-src. */
+  origin: RolePromptOrigin;
 };
 
 /** Reverse lookup: pinned model id → tier. */
@@ -185,13 +191,31 @@ function assetsDir(...parts: string[]): string {
   return join(base, ...parts);
 }
 
-/** Load and parse a role prompt from assets/agents-src/<role>.md. */
-export function loadRolePrompt(role: string): RolePrompt {
-  const path = join(agentsSrcDir(), `${role}.md`);
-  if (!existsSync(path)) {
-    throw new Error(`prompt loader: no agent prompt for role "${role}" at ${path}`);
+/**
+ * Load and parse a role prompt through the override chain (first hit wins):
+ *
+ *   1. `<projectPath>/.claude/agents/<role>.md` — project override (written
+ *      by an evolution commit on a `resource:pp.stage-prompt.*` proposal,
+ *      or authored by hand)
+ *   2. `~/.claude/agents/<role>.md`             — user override
+ *   3. `assets/agents-src/<role>.md`            — repo builtin
+ *
+ * Without `opts.projectPath` the project layer is skipped; fixtures with no
+ * override files resolve to the builtin exactly as before.
+ */
+export function loadRolePrompt(role: string, opts: { projectPath?: string } = {}): RolePrompt {
+  const candidates: Array<{ path: string; origin: RolePromptOrigin }> = [];
+  if (opts.projectPath) {
+    candidates.push({ path: join(opts.projectPath, ".claude", "agents", `${role}.md`), origin: "project" });
   }
-  const md = readFileSync(path, "utf8");
+  candidates.push({ path: join(homedir(), ".claude", "agents", `${role}.md`), origin: "user" });
+  candidates.push({ path: join(agentsSrcDir(), `${role}.md`), origin: "builtin" });
+
+  const found = candidates.find((c) => existsSync(c.path));
+  if (!found) {
+    throw new Error(`prompt loader: no agent prompt for role "${role}" at ${candidates.at(-1)!.path}`);
+  }
+  const md = readFileSync(found.path, "utf8");
   const { frontmatter, body } = parseFrontmatter(md);
   const tools = (frontmatter.tools ?? "")
     .split(",")
@@ -206,6 +230,7 @@ export function loadRolePrompt(role: string): RolePrompt {
     tools,
     execution: classifyExecution(role),
     cleanedBody: cleanClaudeCodeProcedure(body),
+    origin: found.origin,
   };
 }
 
@@ -220,6 +245,12 @@ export type RenderContext = {
   requestText?: string;
   /** Execution mode of the stage — drives the completion output contract below. */
   execution?: ExecutionMode;
+  /**
+   * Skills selected for this stage (already budgeted/truncated by the caller —
+   * see stage-loop's selectStageSkills). Rendered as an "## Applicable skills"
+   * section after the profile summary and before gotchas/addenda.
+   */
+  skills?: Array<{ name: string; body: string }>;
 };
 
 /**
@@ -292,6 +323,15 @@ export function renderSystemPrompt(role: RolePrompt, ctx: RenderContext = {}): s
 
   if (ctx.profileSummary) {
     blocks.push(`## Active project profile\n\n${ctx.profileSummary.trim()}`);
+  }
+
+  if (ctx.skills && ctx.skills.length > 0) {
+    // Skill bodies were written for Claude Code — run them through the same
+    // procedure-stripping pass as the agent prompt bodies.
+    const joined = ctx.skills
+      .map((s) => `### Skill: ${s.name}\n\n${cleanClaudeCodeProcedure(s.body).trim()}`)
+      .join("\n\n");
+    blocks.push(`## Applicable skills\n\n${joined}`);
   }
 
   const addendum = loadPromptAddendum(role.role, ctx.profileName);

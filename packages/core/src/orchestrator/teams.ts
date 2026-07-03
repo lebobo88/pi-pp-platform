@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { db, txImmediate } from "../db/database.js";
 import { ClaudeTier, isClaudeTier } from "../config.js";
+import { getSkill } from "./skills.js";
 
 export type TeamStage = {
   kind: string;
@@ -29,6 +30,16 @@ export type TeamStage = {
     model_tier?: ClaudeTier;
   };
   judge:     { tier: "cross_vendor" | "same_vendor"; rubric?: string; model_pref?: string };
+  /**
+   * Optional explicit skill injections for this stage. Ids resolve through
+   * the skill registry (project `.claude/skills` → `~/.claude/skills` →
+   * builtin assets/skills) and are ALWAYS injected into the generator prompt
+   * regardless of the skill's own injection/applies_to_* scoping — the yaml
+   * asked for them by name. Unresolvable ids warn at load time and are
+   * silently skipped at injection time (never fatal — the harness tolerates
+   * extra/unknown fields on the team-yaml hot path).
+   */
+  skills?: string[];
   /**
    * R3-tail post-mortem Fix 0.4 (2026-05-21): when triage classifies the
    * request as `scope: "major"` (high surface area, ≥3 in major-keyword
@@ -77,7 +88,7 @@ export function getTeam(opts: { name: string; project_path: string }): { team: T
       const text = readFileSync(path, "utf8");
       const parsed = YAML.parse(text) as TeamSpec;
       if (!parsed?.name) continue;
-      validateTeamSpec(parsed, path);
+      validateTeamSpec(parsed, path, opts.project_path);
       const origin: "project" | "user" | "builtin" =
         dir.startsWith(opts.project_path) ? "project" :
         dir === USER_TEAMS_DIR ? "user" :
@@ -97,7 +108,7 @@ export function getTeam(opts: { name: string; project_path: string }): { team: T
  * policy. Other fields are not validated here (the harness has always
  * tolerated extra/missing fields on the team-yaml hot path).
  */
-function validateTeamSpec(spec: TeamSpec, path: string): void {
+function validateTeamSpec(spec: TeamSpec, path: string, projectPath: string): void {
   for (const stage of spec.stages ?? []) {
     const tier = stage.generator?.model_tier;
     if (tier !== undefined && !isClaudeTier(tier)) {
@@ -118,6 +129,18 @@ function validateTeamSpec(spec: TeamSpec, path: string): void {
         throw new Error(
           `team yaml ${path}: stage "${stage.kind}" has best_of_n_on_major_scope=${JSON.stringify(bon)}. ` +
           `Must be an integer in [2, 7] — best-of-N below 2 is meaningless and above 7 burns budget.`,
+        );
+      }
+    }
+    // A1b skill injection: stage.skills ids should resolve through the skill
+    // registry (project → user → builtin). Warn-only — an unresolvable id is
+    // skipped at injection time, never fatal (unlike model_tier, a stale skill
+    // reference doesn't corrupt tier/budget policy).
+    for (const id of stage.skills ?? []) {
+      if (typeof id !== "string" || !getSkill({ id, project_path: projectPath })) {
+        console.warn(
+          `team yaml ${path}: stage "${stage.kind}" lists skill "${String(id)}" which does not resolve ` +
+          `(checked <project>/.claude/skills → ~/.claude/skills → builtin assets/skills); it will be ignored at injection time`,
         );
       }
     }

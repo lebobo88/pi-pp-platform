@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS teams (
   loaded_at           TEXT NOT NULL
 );
 
+-- Skill registry cache (mirrors teams): last-resolved frontmatter-markdown
+-- per skill id. getSkill always re-reads disk; this row is the audit copy.
+CREATE TABLE IF NOT EXISTS skills (
+  id                  TEXT PRIMARY KEY,
+  origin              TEXT NOT NULL,                       -- builtin | user | project
+  md_text             TEXT NOT NULL,
+  loaded_at           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sub_cli_sessions (
   project_path        TEXT NOT NULL,
   agent               TEXT NOT NULL,                       -- codex | gemini
@@ -199,3 +208,22 @@ CREATE TABLE IF NOT EXISTS artifact_validations (
 );
 CREATE INDEX IF NOT EXISTS idx_av_stage ON artifact_validations(stage_id, validator_kind);
 CREATE INDEX IF NOT EXISTS idx_av_run   ON artifact_validations(run_id);
+
+-- v8 (A5): local evolution commit/rollback audit trail (mirrors schema.ts —
+-- evolution_proposals itself is a v7 table defined there). One row per
+-- commitProposal write to a project-scoped override target (always inside
+-- <project>/.claude/ or <project>/.harness/). snapshot_path / sha_before are
+-- NULL when the target did not exist before the commit (rollback then deletes
+-- the target instead of restoring a snapshot). Rows persist for audit.
+CREATE TABLE IF NOT EXISTS evolution_commits (
+  id                  TEXT PRIMARY KEY,
+  proposal_id         TEXT NOT NULL REFERENCES evolution_proposals(id) ON DELETE CASCADE,
+  target_path         TEXT NOT NULL,
+  snapshot_path       TEXT,
+  sha_before          TEXT,
+  sha_after           TEXT NOT NULL,
+  note                TEXT,
+  committed_at        TEXT NOT NULL,
+  rolled_back_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_evolution_commits_proposal ON evolution_commits(proposal_id);

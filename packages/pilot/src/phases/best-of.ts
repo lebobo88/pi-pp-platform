@@ -104,7 +104,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
   });
   emit(ctx, "stage.started", { kind: stage.kind, gate_type: stage.gate_type, agent: stage.agent, best_of: n, shuffle_seed }, { stage_id });
 
-  const role = loadRolePrompt(stage.agent);
+  const role = loadRolePrompt(stage.agent, { projectPath: ctx.projectPath });
 
   // ── Generate every candidate (each in its own worktree, rotated model/seed).
   const cand: Cand[] = [];

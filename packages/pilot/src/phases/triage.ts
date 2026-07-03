@@ -26,7 +26,7 @@ export async function runTriagePhase(
     // heuristic's floor — the heuristic is the guardrail — but we record its
     // narrative on the stream for the operator.
     try {
-      const role = loadRolePrompt("triage");
+      const role = loadRolePrompt("triage", { projectPath: ctx.projectPath });
       const res = await ctx.engine.runAuthoringCompletion({
         model: ctx.engine.catalog.resolveTier(role.tier ?? "haiku"),
         systemPrompt: renderSystemPrompt(role, { requestText: ctx.requestText }),

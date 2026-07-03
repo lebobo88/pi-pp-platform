@@ -358,6 +358,7 @@ function teamStages(team: TeamSpec, scope: string): StageSpec[] {
     teamStageModelTier: s.generator.model_tier as ClaudeTier | undefined,
     rubricHint: s.judge?.rubric,
     judgeModelPref: s.judge?.model_pref,
+    skills: s.skills,
     bestOf: scope === "major" && s.best_of_n_on_major_scope ? s.best_of_n_on_major_scope : undefined,
   }));
 }

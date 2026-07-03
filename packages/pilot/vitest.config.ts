@@ -13,6 +13,15 @@ if (!process.env.PP_HOME) {
   process.env.PP_HOME = mkdtempSync(join(tmpdir(), "pp-pilot-home-"));
 }
 
+// Isolate the user scope too: dev machines have ~/.claude/agents and
+// ~/.claude/skills installed (AgentSmith), which would shadow the builtin
+// prompts/skills under test now that loadRolePrompt and the skill registry
+// consult homedir(). Point USERPROFILE/HOME at an empty temp dir for every
+// worker; individual test files may still swap in their own fake home.
+if (!process.env.PP_PILOT_FAKE_USER_HOME) {
+  process.env.PP_PILOT_FAKE_USER_HOME = mkdtempSync(join(tmpdir(), "pp-pilot-userhome-"));
+}
+
 export default defineConfig({
   // Source uses NodeNext `.js` specifiers that resolve to `.ts` on disk.
   resolve: {
@@ -30,6 +39,8 @@ export default defineConfig({
     fileParallelism: false,
     env: {
       PP_HOME: process.env.PP_HOME,
+      USERPROFILE: process.env.PP_PILOT_FAKE_USER_HOME,
+      HOME: process.env.PP_PILOT_FAKE_USER_HOME,
     },
   },
 });

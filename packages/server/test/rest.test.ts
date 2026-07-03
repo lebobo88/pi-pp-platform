@@ -10,6 +10,12 @@ process.env.PP_PLATFORM_DIR = join(home, "platform");
 delete process.env.PP_ECOSYSTEM;
 delete process.env.PP_API_TOKEN;
 const dbPath = join(home, "state.db");
+// Isolate the user scope too: the developer machine may have ~/.claude/skills
+// (AgentSmith) installed, which would shadow the builtin skills under test.
+// Must happen before buildApp is imported (teams.ts binds USER_TEAMS_DIR at
+// import; skills.ts reads homedir() per call).
+process.env.USERPROFILE = home;
+process.env.HOME = home;
 
 let app: FastifyInstance;
 
@@ -71,6 +77,26 @@ describe("health + library reads", () => {
 
     const bad = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { judge_pool: [] } });
     expect(bad.statusCode).toBe(422);
+  });
+
+  it("GET /api/v1/skills + /skills/:id (404 on unknown)", async () => {
+    const list = await get("/api/v1/skills");
+    expect(list.statusCode).toBe(200);
+    const skills = list.json() as Array<{ id: string; injection: string; origin: string; priority: number }>;
+    expect(skills.length).toBeGreaterThanOrEqual(17);
+    const ac = skills.find((s) => s.id === "artifact-conventions")!;
+    expect(ac).toMatchObject({ origin: "builtin", injection: "generator", priority: 50 });
+
+    const one = await get("/api/v1/skills/judge-policy");
+    expect(one.statusCode).toBe(200);
+    const detail = one.json() as { body?: string; version?: number; max_chars?: number };
+    expect(typeof detail.body).toBe("string");
+    expect(detail.version).toBe(1);
+    expect(detail.max_chars).toBe(6000);
+
+    expect((await get("/api/v1/skills/nope-not-a-skill")).statusCode).toBe(404);
+    // Path-traversal ids must 404, not escape the skill dirs.
+    expect((await get(`/api/v1/skills/${encodeURIComponent("../teams/feature-team")}`)).statusCode).toBe(404);
   });
 
   it("GET /api/v1/doctor is reachable", async () => {

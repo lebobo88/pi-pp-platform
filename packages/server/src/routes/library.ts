@@ -1,12 +1,14 @@
 /**
- * Library + system read routes: teams, rubrics, profiles, forums, taxonomy,
- * models, budgets (+ caps), evolution proposals, doctor, janitor.
+ * Library + system read routes: teams, agents, skills, rubrics, profiles,
+ * forums, taxonomy, models, budgets (+ caps), evolution proposals, doctor,
+ * janitor.
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   listTeams, getTeam,
   listAgents, getAgent,
+  listSkills, getSkill,
   recommendTeams,
   listRubrics, getRubric,
   listBuiltinProfiles, getBuiltinProfile,
@@ -17,6 +19,8 @@ import {
   runJanitor, getJanitorReport,
   doctor,
   listProposals, setProposalStatus,
+  commitProposal, rollbackProposal,
+  CommitContentRequiredError, ProposalNotFoundError, ProposalStatusError, EvolutionTargetError,
   getPlatformSetting, setPlatformSetting,
   catalog, judgePool, judgePoolProviders,
 } from "@pp/core";
@@ -34,6 +38,8 @@ const CapsBody = z.object({ caps: z.array(CapSchema) });
 const ReviewBody = z.object({
   decision: z.enum(["approve", "reject", "commit", "rollback"]),
   note: z.string().optional(),
+  /** Reviewer-authored override body — required by decision=commit (the analyzer authors no patch). */
+  content: z.string().optional(),
 });
 
 const RecommendBody = z.object({
@@ -96,6 +102,20 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     const a = getAgent({ id, project_path: q.project_path ?? process.cwd() });
     if (!a) return reply.code(404).send({ error: `agent ${id} not found` });
     return a;
+  });
+
+  // ── Skills ──
+  app.get(`${V1}/skills`, async (req) => {
+    const q = req.query as { project_path?: string };
+    return listSkills({ project_path: q.project_path ?? process.cwd() });
+  });
+  app.get(`${V1}/skills/:id`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { project_path?: string };
+    // Core rejects ids outside [\w.-] (path-traversal guard) by returning null.
+    const s = getSkill({ id, project_path: q.project_path ?? process.cwd() });
+    if (!s) return reply.code(404).send({ error: `skill ${id} not found` });
+    return s;
   });
 
   // ── Rubrics ──
@@ -177,8 +197,34 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     }
     const decision = parsed.data.decision;
     if (decision === "commit" || decision === "rollback") {
-      // commit/rollback route through the ecosystem PpWriteBridge — not wired here.
-      return reply.code(501).send({ error: "evolution_commit_pending", hint: "ecosystem commit/rollback wiring pending" });
+      // A5: local evolution commit/rollback — writes the project-scoped
+      // override target (path-guarded to .claude/ + .harness/) and keeps a
+      // reversible snapshot + evolution_commits audit row.
+      try {
+        if (decision === "commit") {
+          const res = commitProposal({ id, content: parsed.data.content, note: parsed.data.note });
+          return {
+            id, decision, status: "committed", updated: true,
+            target_path: res.target_path, snapshot_path: res.snapshot_path,
+          };
+        }
+        const res = rollbackProposal({ id });
+        return {
+          id, decision, status: "rolled_back", updated: true,
+          target_path: res.target_path, snapshot_path: res.snapshot_path,
+        };
+      } catch (err) {
+        if (err instanceof CommitContentRequiredError) {
+          return reply.code(422).send({ error: "content_required", message: err.message });
+        }
+        if (err instanceof ProposalNotFoundError) {
+          return reply.code(404).send({ error: err.message });
+        }
+        if (err instanceof ProposalStatusError || err instanceof EvolutionTargetError) {
+          return reply.code(409).send({ error: err.message });
+        }
+        throw err;
+      }
     }
     const updated = setProposalStatus(id, decision === "approve" ? "approved" : "rejected");
     if (!updated) return reply.code(404).send({ error: `proposal ${id} not pending or not found` });

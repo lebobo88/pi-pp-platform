@@ -519,11 +519,11 @@ rows:
   # ── MCP compat ──
   - id: MCP1
     subsystem: mcp-compat
-    capability: pp_harness-compatible MCP stdio server (75 tools)
+    capability: pp_harness-compatible MCP stdio server (80 tools)
     disposition: ADAPT
-    replacement_note: "@pp/mcp-adapter (M7a) — 58 full / 17 stub"
+    replacement_note: "@pp/mcp-adapter (M7a) — 63 full / 17 stub (75 compat + list_agents/get_agent/recommend_team + list_skills/get_skill)"
     verify:
-      - {type: export, module: packages/mcp-adapter/dist/index.js, symbol: TOOLS, op: len, expect: 75}
+      - {type: export, module: packages/mcp-adapter/dist/index.js, symbol: TOOLS, op: len, expect: 80}
       - {type: export, module: packages/mcp-adapter/dist/index.js, symbol: toolCoverage, op: defined}
       - {type: test, file: packages/mcp-adapter/test/roundtrip.test.ts, contains: not_available_in_adapter}
     status: done
@@ -565,10 +565,13 @@ rows:
   # ── Skills ──
   - id: SK1
     subsystem: skills
-    capability: 8 harness skills → platform skills
-    disposition: REBUILD
+    capability: 8 harness skills + 9 executive-domain skills → first-class skill registry
+    disposition: PORT
+    replacement_note: "assets/skills (17 frontmatter-md skills) + @pp/core listSkills/getSkill/selectSkillsForStage + GET /skills[/id] + list_skills/get_skill MCP tools"
     verify:
-      - {type: test, file: docs/skills-map.md, contains: "judge-policy.ts"}
+      - {type: asset-count, dir: assets/skills, ext: .md, expect: 17}
+      - {type: export, module: packages/core/dist/index.js, symbol: selectSkillsForStage, op: defined}
+      - {type: test, file: packages/core/test/skills-loader.unit.mjs, contains: selectSkillsForStage}
     status: done
 
   # ── Hooks (H1-H29) — 29 dispatcher behaviors, new-home disposition ──

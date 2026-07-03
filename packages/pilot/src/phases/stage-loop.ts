@@ -24,6 +24,7 @@ import {
   getRubric,
   runTddCheck,
   runArtifactValidator,
+  selectSkillsForStage,
   type GateType,
   type Profile,
   type VerdictOutcome,
@@ -58,6 +59,49 @@ const ARTIFACT_KIND_BY_KIND: Record<string, string> = {
   architecture: "adr",
   contracts: "openapi",
 };
+
+/** Default total budget (chars) for skill bodies injected into one prompt. */
+const SKILLS_BUDGET_CHARS_DEFAULT = 24_000;
+
+type SkillsSelection = {
+  injected: Array<{ id: string; name: string; body: string }>;
+  skipped: string[];
+};
+
+/**
+ * Select + budget the skills for a generator stage. The core selector returns
+ * priority-ordered specs but does NOT truncate bodies — the injector enforces
+ * both the per-skill max_chars and the total PP_SKILLS_BUDGET_CHARS budget
+ * (default 24000) here. Deterministic: skills are taken in selector order
+ * (priority asc, id asc); the first one that no longer fits exhausts the
+ * budget and everything after it is skipped.
+ */
+function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSelection {
+  const specs = selectSkillsForStage({
+    stage_kind: stage.kind,
+    agent: stage.agent,
+    gate_type: stage.gate_type,
+    profile: ctx.profileName,
+    project_path: ctx.projectPath,
+    explicit: stage.skills,
+  });
+  const raw = Number(process.env.PP_SKILLS_BUDGET_CHARS);
+  let remaining = Number.isFinite(raw) && raw >= 0 ? raw : SKILLS_BUDGET_CHARS_DEFAULT;
+  const injected: SkillsSelection["injected"] = [];
+  const skipped: string[] = [];
+  let exhausted = false;
+  for (const spec of specs) {
+    const body = spec.body.length > spec.max_chars ? spec.body.slice(0, spec.max_chars) : spec.body;
+    if (exhausted || body.length > remaining) {
+      exhausted = true;
+      skipped.push(spec.id);
+      continue;
+    }
+    remaining -= body.length;
+    injected.push({ id: spec.id, name: spec.name, body });
+  }
+  return { injected, skipped };
+}
 
 function gitDiffHead(cwd: string): string | null {
   try {
@@ -119,16 +163,30 @@ async function generate(
   parentAttemptId: string | undefined,
   priorCritiques: string[],
 ): Promise<GenOut> {
-  const role = loadRolePrompt(stage.agent);
+  const role = loadRolePrompt(stage.agent, { projectPath: ctx.projectPath });
   // A tests_pre stage always produces a completion (the tdd_manifest YAML).
   const isTddManifestStage = stage.kind === "tests_pre";
   const execution = isTddManifestStage ? "completion" : stage.execution ?? role.execution;
+  // Skill injection (A1b): explicit team-yaml ids + registry auto-selection,
+  // budgeted here (the loader does not truncate). Observability mirrors the
+  // tier-resolve run.context emit; silent when nothing matched so default
+  // runs stay byte-identical.
+  const skills = selectStageSkills(ctx, stage);
+  if (skills.injected.length > 0 || skills.skipped.length > 0) {
+    emit(ctx, "run.context", {
+      phase: "skills",
+      stage_kind: stage.kind,
+      injected: skills.injected.map((s) => s.id),
+      skipped: skills.skipped,
+    });
+  }
   const systemPrompt = renderSystemPrompt(role, {
     profileSummary: profileSummary(ctx),
     profileName: ctx.profileName,
     priorCritiques,
     requestText: ctx.requestText,
     execution,
+    skills: skills.injected.map((s) => ({ name: s.name, body: s.body })),
   });
   // Resolve the generator's provider FROM the model (effective ladder), not the
   // legacy hardcoded "anthropic". Preflight the credential so a missing key

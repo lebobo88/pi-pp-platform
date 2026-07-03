@@ -36,8 +36,8 @@ import {
   BUILTIN_PROFILES, BUILTIN_PROFILE_NAMES, type ProfileName,
   // teams / forums / templates
   getTeam, listTeams, listForums, getForum, getDesignTemplate, TEMPLATES_BY_KIND,
-  // agents library / team recommendation
-  listAgents, getAgent, recommendTeams,
+  // agents library / skills / team recommendation
+  listAgents, getAgent, listSkills, getSkill, recommendTeams,
   // constitution
   ensureConstitution, readConstitution, forbiddenPatterns,
   // replay / janitor / rubrics
@@ -360,6 +360,8 @@ const GetTeamSchema = z.object({ name: z.string().min(1), project_path: z.string
 const ListTeamsSchema = z.object({ project_path: z.string().min(1) });
 const ListAgentsSchema = z.object({ project_path: z.string().optional() });
 const GetAgentSchema = z.object({ id: z.string().min(1), project_path: z.string().optional() });
+const ListSkillsSchema = z.object({ project_path: z.string().optional() });
+const GetSkillSchema = z.object({ id: z.string().min(1), project_path: z.string().optional() });
 const RecommendTeamSchema = z.object({
   request_text: z.string().min(1),
   project_path: z.string().optional(),
@@ -667,6 +669,14 @@ export const TOOLS: ToolDef[] = [
   { name: "get_agent", availability: "full",
     description: "Resolve one agent prompt by id (project → user → builtin). Returns the summary plus {body} (frontmatter-stripped markdown), or null.",
     schema: GetAgentSchema, handler: (a) => getAgent(GetAgentSchema.parse(a)) },
+
+  // ── Skills (full) ──
+  { name: "list_skills", availability: "full",
+    description: "List all skills (project → user → builtin, first-resolution wins; flat <id>.md or <id>/SKILL.md). Returns SkillSummary[]: {id,name,description,origin,injection,applies_to_stages,applies_to_agents,applies_to_profiles,priority}.",
+    schema: ListSkillsSchema, handler: (a) => listSkills(ListSkillsSchema.parse(a)) },
+  { name: "get_skill", availability: "full",
+    description: "Resolve one skill by id (project → user → builtin). Returns the summary plus {body,version,max_chars,applies_to_gate_types}, or null.",
+    schema: GetSkillSchema, handler: (a) => getSkill(GetSkillSchema.parse(a)) },
 
   // ── Design templates (full) ──
   { name: "get_design_template", availability: "full",

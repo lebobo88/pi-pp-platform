@@ -1,0 +1,85 @@
+---
+name: profile-aware-gating
+description: How <project>/.harness/profile.yaml modifies gates: per-profile rubric bindings, required artifacts, required missability checks, and cross-vendor upgrades. Includes the 16 built-in profiles and the bootstrap flow.
+version: 1
+injection: none
+priority: 50
+max_chars: 6000
+---
+# Profile-aware gating
+
+A project declares its type by placing a YAML file at `<project>/.harness/profile.yaml`. The driver reads the profile during step 2 of the lifecycle (via the `profile-loader` agent) and passes the profile name to `gate_eligible_judges` in every stage. The daemon then applies profile-specific overrides on top of the base gate decision.
+
+## How profile.yaml looks
+
+```yaml
+name: web-ui                              # one of the 16 built-in names
+description: User-facing web product
+required_taxonomy_sections: ["4.4", "4.13"]
+required_rubrics:
+  design: wcag-2.2-aa@1
+  contract: openapi-3.1-stability@1
+required_artifacts:
+  - screen_state_matrix
+  - a11y_plan
+  - localization_plan
+  - responsive_matrix
+  - visual_regression_report
+required_missability_checks:
+  - ui-error-empty-loading
+  - accessibility-localization
+  - rollout-reversibility
+notes: ...
+```
+
+If the file is missing, the driver invokes `detect_profile` and follows the bootstrap flow in the `pair-programmer` skill step 2 (auto-write on confidence=high, prompt the user otherwise). The user can answer `skip` to run in **generic mode** (no overrides) for that single run. If the file is unparseable, the loader returns `source: "error"` and the driver decides whether to abort or continue in generic mode.
+
+## What each built-in profile does (summary)
+
+The built-in set is 16 profiles total: the 10 non-game profiles in the table below plus the 6 game-dev profiles listed after it.
+
+| Profile | Forces cross-vendor everywhere? | Notable rubric bindings | Notable required artifacts | Notable missability ids |
+|---|---|---|---|---|
+| `web-ui` | no | design: WCAG 2.2 AA | screen_state_matrix, a11y_plan, localization_plan, responsive_matrix, visual_regression_report | ui-error-empty-loading, accessibility-localization, rollout-reversibility |
+| `api-platform` | no | contract: OpenAPI 3.1 stability | openapi | third-party-failure |
+| `internal-tool` | no | ux: rfc-2119-normative (lighter) | audit_log_spec | — |
+| `enterprise` | **YES** | security: OWASP ASVS L2; supply_chain: SLSA L2 | sbom, dpia, control_matrix | supply-chain-integrity, operational-ownership, decision-logging |
+| `ai-agentic` | upgrade on eval/tool-permission gates | security: ASVS L1; design: NIST AI RMF Govern | ai_system_spec, eval_suite, tool_permission_matrix, hitl_workflow, data_egress_review | ai-evals-hitl |
+| `mobile` | no | — | offline_state_matrix, store_rollout_plan, permission_ux_table, crash_reporting_plan | rollout-reversibility, operational-ownership |
+| `sdk` | no | contract: OpenAPI 3.1 stability | semver_policy, deprecation_policy, sample_app | deprecation-sunset |
+| `data-product` | no | spec: metric-dictionary | metric_dictionary, lineage_map, freshness_sla | analytics-semantics, schema-evolution |
+| `embedded` | no | — | device_lifecycle, fleet_update_plan, failure_safe_policy | rollout-reversibility, operational-ownership |
+| `non-ui-cli` | no | — | runbook, retry_backoff_doc | supportability |
+
+Game-dev family:
+
+- `game-dev` — base game-development profile. Binds game accessibility on design artifacts, adds game-dev missability checks, and seeds the shared artifact set for design/tech/perf/localization/release/telemetry.
+- `game-dev-unity` / `game-dev-unreal` / `game-dev-godot` — engine-specific game profiles layered on top of `game-dev`.
+- `game-dev-web` — web-game profile layered on top of `game-dev` and `web-ui`; it inherits browser-validation / visual-regression expectations.
+- `game-dev-custom` — custom-engine game profile layered on top of `game-dev`; expects an engine-conventions document instead of guessing project idioms.
+
+## How `gate_eligible_judges` uses the profile
+
+When the driver calls `gate_eligible_judges(gate_type, generator_producer, generator_model?, prompt_keywords, profile, artifact_kind, rubric_hint?)`:
+
+1. Compute the **base tier** from `gate_type` (cross-vendor required for spec/design/security/contract; same-vendor OK otherwise).
+2. Apply **content-aware upgrade** by scanning `prompt_keywords` for the security/concurrency regex set.
+3. Apply **profile-aware upgrade**:
+   - `enterprise` → cross-vendor on every gate.
+   - `ai-agentic` → cross-vendor on any gate touching evals or tool permissions.
+4. Apply any **vendor capability upgrade**. Example: same-vendor Codex is impossible when `generator_model` resolves to `gpt-5.4`, because `pp_codex.critique` is pinned to that same model; the daemon upgrades that path to cross-vendor automatically.
+5. Pick the **rubric** in this priority order: explicit `rubric_hint` (when it names a real rubric) → artifact-kind-specific mapping (including explicit null overrides for test-plan/test-strategy-style artifacts) → built-in default for the gate (WCAG for design, ASVS for security, OpenAPI for contract, RFC 2119 for spec).
+
+The decision payload returned to the driver carries `upgraded`, `reason`, and `rubric_id`, so the user can see *why* a gate was tightened.
+
+## Profile + missability
+
+After all stages complete, `run_missability_checks` runs. The driver passes `required_check_ids` = (the run's taxonomy mapping `missability_required` ∪ profile's `required_missability_checks`). Any failure in that union surfaces the run.
+
+## Profile snapshot is captured at run start
+
+`start_run` reads `<project>/.harness/profile.yaml` and persists the YAML body verbatim into `runs.profile_snapshot_json`. If the file changes mid-run, the snapshot is unaffected. Replay reconstructs the run with the exact profile that was active.
+
+## Authoring a custom profile
+
+Copy a built-in template via `get_builtin_profile(name)` and adjust. Recognized fields: `name`, `description`, `required_taxonomy_sections`, `required_rubrics`, `required_artifacts`, `required_missability_checks`, `notes`. Other fields are ignored.

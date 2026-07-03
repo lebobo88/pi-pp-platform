@@ -364,6 +364,44 @@ export interface AgentDetail extends AgentSummary {
   body: string;
 }
 
+/* ── Skill registry — mirror @pp/core orchestrator/skills.ts ──────────── */
+
+/** Where a skill's body is injected: generator prompts, judge prompts, or reference-only. */
+export type SkillInjection = "generator" | "judge" | "none";
+
+/**
+ * One skill (from `GET /skills`, sorted by id). Resolution mirrors agents:
+ * project `.claude/skills` → user `~/.claude/skills` → built-in assets/skills,
+ * first-resolution wins. Both flat `<id>.md` files and `<id>/SKILL.md`
+ * directories are accepted at every level.
+ */
+export interface SkillSummary {
+  /** Skill slug — the filename without `.md` (or the `<id>/SKILL.md` dirname). */
+  id: string;
+  /** Frontmatter `name`, falling back to the id. */
+  name: string;
+  description: string;
+  origin: "project" | "user" | "builtin";
+  injection: SkillInjection;
+  /** Empty array = applies everywhere; "*" entries also match everything. */
+  applies_to_stages: string[];
+  applies_to_agents: string[];
+  applies_to_profiles: string[];
+  /** Injection order: lower first. Default 50. */
+  priority: number;
+}
+
+/** Full skill (from `GET /skills/:id`) — summary plus the body + injection budget. */
+export interface SkillDetail extends SkillSummary {
+  /** Frontmatter-stripped markdown body. */
+  body: string;
+  /** Frontmatter `version`; default 1. */
+  version: number;
+  /** Injection budget: bodies longer than this are truncated by the injector. Default 6000. */
+  max_chars: number;
+  applies_to_gate_types: string[];
+}
+
 /* ── Team recommendation — mirror @pp/core orchestrator/team-recommend.ts ── */
 
 /** `POST /teams/recommend` body. Deterministic heuristics — no model calls. */
@@ -689,20 +727,35 @@ export type EvolutionDecision = "approve" | "reject" | "commit" | "rollback";
 
 export interface EvolutionReviewRequest {
   decision: EvolutionDecision;
-  /** Optional reviewer note (stored, not required). */
+  /** Optional reviewer note (stored on the evolution_commits row for commit). */
   note?: string;
+  /**
+   * Reviewer-authored override body. REQUIRED by `decision: "commit"` — the
+   * analyzer detects drift but authors no patch, so the reviewer supplies the
+   * content to write to the resource's project-override target. A commit
+   * without content returns `422 content_required`.
+   */
+  content?: string;
 }
 
 /**
- * Review response from the server. `approve`/`reject` mutate the proposal and
- * return this ack; `commit`/`rollback` route through the ecosystem bridge and
- * currently return `501` (TODO(M7)).
+ * Review response from the server. `approve`/`reject` mutate the proposal
+ * status and return this ack. `commit` writes `content` to the proposal's
+ * project-scoped override target (rubric → `.claude/rubrics/<id>.md`,
+ * stage-prompt → `.claude/agents/<role>.md`, missability →
+ * `.harness/missability-overrides.json`), snapshotting any pre-existing
+ * target; `rollback` restores the snapshot (or deletes a target the commit
+ * created). Wrong-status or path-guard violations return `409`.
  */
 export interface EvolutionReviewResponse {
   id: string;
   decision: EvolutionDecision;
   status: string;
   updated: boolean;
+  /** Absolute path of the override file written (commit) or restored/deleted (rollback). */
+  target_path?: string;
+  /** Absolute path of the pre-commit snapshot; null when the target didn't exist before. */
+  snapshot_path?: string | null;
 }
 
 /** Replace the set of budget caps. */
@@ -1060,6 +1113,9 @@ export const apiPaths = {
 
   agents: `${API_BASE}/agents`,
   agent: (id: string) => `${API_BASE}/agents/${encodeURIComponent(id)}`,
+
+  skills: `${API_BASE}/skills`,
+  skill: (id: string) => `${API_BASE}/skills/${encodeURIComponent(id)}`,
 
   profiles: `${API_BASE}/profiles`,
   profile: (name: string) => `${API_BASE}/profiles/${encodeURIComponent(name)}`,

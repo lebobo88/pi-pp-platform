@@ -52,6 +52,18 @@ describe("pp_harness adapter — stdio round-trip", () => {
     expect(teams.length).toBeGreaterThan(0);
   });
 
+  it("list_skills/get_skill round-trip the builtin skill registry", async () => {
+    const skills = await callTool<Array<{ id: string; injection: string }>>(adapter.client, "list_skills", { project_path: adapter.ppHome });
+    expect(Array.isArray(skills)).toBe(true);
+    expect(skills.length).toBeGreaterThanOrEqual(17);
+    const first = skills.find((s) => s.id === "judge-policy")!;
+    expect(first).toBeTruthy();
+    const skill = await callTool<{ body?: string; max_chars?: number } | null>(adapter.client, "get_skill", { id: first.id, project_path: adapter.ppHome });
+    expect(skill).toBeTruthy();
+    expect(typeof skill!.body).toBe("string");
+    expect(skill!.max_chars).toBe(6000);
+  });
+
   it("a stubbed tool returns the structured not_available_in_adapter error", async () => {
     const res = await callTool<{ error?: string; hint?: string }>(adapter.client, "start_best_of_stage", {
       run_id: "run_x",

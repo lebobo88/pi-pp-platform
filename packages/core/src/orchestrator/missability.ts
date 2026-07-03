@@ -682,14 +682,49 @@ export function hasAiProvenanceFrontmatter(text: string): boolean {
   return false;
 }
 
+/**
+ * A5: project-scoped missability overrides at
+ * `<project>/.harness/missability-overrides.json` — written by an evolution
+ * commit on a `resource:pp.missability.<check_id>` proposal. Shape:
+ *
+ *   { "<check_id>": { "disabled": true } | { "pattern_override": "<regex>" } }
+ *
+ * `disabled` records the check as `skipped` (not fail — a disabled required
+ * check no longer blocks finalize); `pattern_override` replaces the check's
+ * heuristic with a plain text-pattern scan using the given regex (case-
+ * insensitive). A malformed file (or a malformed regex) warns and is ignored.
+ */
+export type MissabilityOverride = { disabled?: boolean; pattern_override?: string };
+
+function loadMissabilityOverrides(project_path: string): {
+  overrides: Record<string, MissabilityOverride>;
+  path: string;
+} {
+  const path = join(project_path, ".harness", "missability-overrides.json");
+  if (!existsSync(path)) return { overrides: {}, path };
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object keyed by check_id");
+    }
+    return { overrides: parsed as Record<string, MissabilityOverride>, path };
+  } catch (err) {
+    console.warn(`[pp] malformed missability overrides at ${path} — ignored: ${(err as Error).message}`);
+    return { overrides: {}, path };
+  }
+}
+
+export type MissabilityStatus = "pass" | "fail" | "n/a" | "skipped";
+
 export function runMissabilityChecks(opts: {
   run_id: string;
   required_check_ids?: CheckId[];
 }): {
-  results: Array<{ check_id: CheckId; status: "pass" | "fail" | "n/a"; evidence?: string }>;
+  results: Array<{ check_id: CheckId; status: MissabilityStatus; evidence?: string }>;
   pass_count: number;
   fail_count: number;
   na_count: number;
+  skipped_count: number;
 } {
   const run = db().prepare(`SELECT project_path, taxonomy_mapping_json, constitution_sha FROM runs WHERE id = ?`).get(opts.run_id) as
     | { project_path: string; taxonomy_mapping_json: string | null; constitution_sha: string | null }
@@ -745,8 +780,10 @@ export function runMissabilityChecks(opts: {
     } catch { /* ignore */ }
   }
 
+  const { overrides, path: overridesPath } = loadMissabilityOverrides(run.project_path);
+
   const requiredSet = new Set<CheckId>(opts.required_check_ids ?? []);
-  const results: Array<{ check_id: CheckId; status: "pass" | "fail" | "n/a"; evidence?: string }> = [];
+  const results: Array<{ check_id: CheckId; status: MissabilityStatus; evidence?: string }> = [];
   for (const def of CHECK_DEFINITIONS) {
     const required = requiredSet.has(def.id);
     const triggered = def.triggers(artifactKinds, requiredSections);
@@ -754,10 +791,35 @@ export function runMissabilityChecks(opts: {
       results.push({ check_id: def.id, status: "n/a" });
       continue;
     }
-    const r = def.evaluate(texts, {
-      project_path: run.project_path,
-      constitution_sha_at_start: run.constitution_sha,
-    });
+    const ov = overrides[def.id];
+    if (ov && typeof ov === "object" && ov.disabled === true) {
+      results.push({
+        check_id: def.id,
+        status: "skipped",
+        evidence: `disabled by project override (${overridesPath}) — committed via an evolution proposal; see /pp:evolution list`,
+      });
+      continue;
+    }
+    let r: { status: "pass" | "fail" | "n/a"; evidence?: string };
+    let overrideRe: RegExp | null = null;
+    if (ov && typeof ov === "object" && typeof ov.pattern_override === "string") {
+      try {
+        overrideRe = new RegExp(ov.pattern_override, "i");
+      } catch (err) {
+        console.warn(
+          `[pp] missability override for "${def.id}": invalid pattern_override regex — ignored: ${(err as Error).message}`,
+        );
+      }
+    }
+    if (overrideRe) {
+      const p = textPatternCheck(texts, overrideRe);
+      r = { status: p.status, evidence: `pattern_override via ${overridesPath}${p.evidence ? `: ${p.evidence}` : ""}` };
+    } else {
+      r = def.evaluate(texts, {
+        project_path: run.project_path,
+        constitution_sha_at_start: run.constitution_sha,
+      });
+    }
     results.push({ check_id: def.id, status: r.status, evidence: r.evidence });
   }
 
@@ -771,8 +833,9 @@ export function runMissabilityChecks(opts: {
     stmt.run(`mc_${Math.random().toString(36).slice(2, 12)}`, opts.run_id, r.check_id, r.status, r.evidence ?? null, now);
   }
 
-  const pass_count = results.filter(r => r.status === "pass").length;
-  const fail_count = results.filter(r => r.status === "fail").length;
-  const na_count   = results.filter(r => r.status === "n/a").length;
-  return { results, pass_count, fail_count, na_count };
+  const pass_count    = results.filter(r => r.status === "pass").length;
+  const fail_count    = results.filter(r => r.status === "fail").length;
+  const na_count      = results.filter(r => r.status === "n/a").length;
+  const skipped_count = results.filter(r => r.status === "skipped").length;
+  return { results, pass_count, fail_count, na_count, skipped_count };
 }
