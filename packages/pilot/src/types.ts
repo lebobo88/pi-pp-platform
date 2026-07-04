@@ -123,6 +123,14 @@ export type RunContext = {
   // phase 6: team pipeline (major/team/review modes)
   team?: TeamSpec;
 
+  /**
+   * Artifacts from stages that PASSED, in pipeline order. Downstream stages
+   * inject these into their prompts ("Approved upstream artifacts") so e.g.
+   * the code stage implements the approved spec instead of re-deriving the
+   * request from scratch.
+   */
+  stageArtifacts: Array<{ kind: string; agent: string; path: string; text: string }>;
+
   // tier audit accumulator (archived as tier_decisions.json)
   tierTrace: Array<{
     stage_kind: string;

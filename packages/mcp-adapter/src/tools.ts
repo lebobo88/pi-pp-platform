@@ -348,7 +348,11 @@ const TeardownCandidatesSchema = z.object({
 const GetProfileSchema = z.object({ project_path: z.string().min(1) });
 const GetBuiltinProfileSchema = z.object({ name: z.enum(BUILTIN_PROFILE_NAMES as unknown as [string, ...string[]]) });
 const GetRubricSchema = z.object({ id: z.string().min(1) });
-const DetectProfileSchema = z.object({ project_path: z.string().min(1) });
+const DetectProfileSchema = z.object({
+  project_path: z.string().min(1),
+  /** Optional request text — refines detection when the filesystem is inconclusive. */
+  request_text: z.string().optional(),
+});
 const WriteProfileSchema = z.object({
   project_path: z.string().min(1),
   name: z.enum(BUILTIN_PROFILE_NAMES as unknown as [string, ...string[]]),
@@ -621,8 +625,11 @@ export const TOOLS: ToolDef[] = [
     description: "Return the built-in profile templates (id + description).",
     schema: EmptySchema, handler: () => listBuiltinProfiles() },
   { name: "detect_profile", availability: "full",
-    description: "Sniff a project for framework/packaging signals and recommend a built-in profile. Pure (reads files only).",
-    schema: DetectProfileSchema, handler: (a) => detectProfile(DetectProfileSchema.parse(a).project_path) },
+    description: "Sniff a project for framework/packaging signals and recommend a built-in profile. Pure (reads files only). Pass request_text to refine detection when the filesystem is inconclusive (e.g. game-shaped requests on empty projects).",
+    schema: DetectProfileSchema, handler: (a) => {
+      const p = DetectProfileSchema.parse(a);
+      return detectProfile(p.project_path, { requestText: p.request_text });
+    } },
   { name: "write_profile", availability: "full",
     description: "Persist a built-in profile to <project>/.harness/profile.yaml with a provenance header.",
     schema: WriteProfileSchema,

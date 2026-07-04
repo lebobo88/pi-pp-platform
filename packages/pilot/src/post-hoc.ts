@@ -133,6 +133,7 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
     missabilityRequired: [],
     profile,
     profileName: profile?.name,
+    stageArtifacts: [],
     tierTrace: [],
     finalStatus: "complete",
   };

@@ -145,7 +145,7 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     return f;
   });
 
-  // ── Taxonomy (DELTA: not in apiPaths yet) ──
+  // ── Taxonomy (declared as apiPaths.taxonomy in shared/api-types.ts) ──
   app.get(`${V1}/taxonomy`, async () => TAXONOMY_SECTIONS);
 
   // ── Models (pi catalog for every visible provider) ──

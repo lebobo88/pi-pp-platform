@@ -19,7 +19,7 @@ export function runProfilePhase(ctx: RunContext): void {
   let profile = loadProjectProfile(ctx.projectPath);
 
   if (!profile) {
-    const detection = detectProfile(ctx.projectPath);
+    const detection = detectProfile(ctx.projectPath, { requestText: ctx.requestText });
     if (detection.recommendation && (detection.confidence === "high" || detection.confidence === "medium")) {
       try {
         writeProjectProfile(ctx.projectPath, detection.recommendation, {

@@ -31,7 +31,9 @@ beforeAll(async () => {
   engine = await import("../src/index.js");
   projection = await import("../src/catalog-to-modelsjson.js");
   pi = await import("@earendil-works/pi-coding-agent");
-});
+  // ~20s of pi/core module transforms on a cold cache; under a full parallel
+  // `pnpm -r test` the default 30s hook timeout flakes on worker contention.
+}, 120_000);
 
 describe("all-35 provider catalog", () => {
   it("enables every pi provider while keeping the curated big-3 blocks", () => {

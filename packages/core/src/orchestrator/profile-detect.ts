@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileName } from "./profiles.js";
+import { classifyRequestText } from "./taxonomy.js";
 
 export type Confidence = "high" | "medium" | "low" | "none";
 
@@ -302,7 +303,69 @@ function classifyTargets(targets: string[]): { console_cert: boolean; mobile_tar
   };
 }
 
-export function detectProfile(projectPath: string): ProfileDetection {
+export type DetectProfileOptions = {
+  /**
+   * The user's request text. Consulted ONLY when filesystem detection lands in
+   * the null/low-confidence tail — a manifest-based detection always wins.
+   * Lets a "create a tauri calculator with snake" request on an empty project
+   * bootstrap a game-dev profile instead of running in generic mode.
+   */
+  requestText?: string;
+};
+
+/** True when the project carries a Tauri shell manifest. */
+function hasTauriManifest(projectPath: string): boolean {
+  return (
+    existsSync(join(projectPath, "src-tauri", "tauri.conf.json")) ||
+    existsSync(join(projectPath, "src-tauri", "tauri.conf.json5")) ||
+    existsSync(join(projectPath, "tauri.conf.json"))
+  );
+}
+
+export function detectProfile(projectPath: string, opts: DetectProfileOptions = {}): ProfileDetection {
+  const fs = detectProfileFromFilesystem(projectPath);
+  if (fs.confidence === "high" || fs.confidence === "medium") return fs;
+
+  const tauri = hasTauriManifest(projectPath);
+  const cls = opts.requestText ? classifyRequestText(opts.requestText) : null;
+
+  // Request-text refinement: game-shaped requests route to the game-dev
+  // family. A desktop webview shell (tauri/electron — Tauri renders via a
+  // webview, so the web-engines gotcha pack applies) or explicit web delivery
+  // picks game-dev-web; otherwise game-dev-custom. Medium confidence = the
+  // auto-bootstrap threshold, so profile.yaml gets written and the engineer
+  // prompt picks up the engine gotchas/addenda.
+  if (cls?.game) {
+    const webish = cls.desktopShell !== null || cls.web || tauri;
+    const shellNote = cls.desktopShell ? ` (${cls.desktopShell} desktop shell)` : tauri ? " (tauri manifest)" : "";
+    const alternatives = new Set<ProfileName>(fs.alternatives);
+    if (fs.recommendation) alternatives.add(fs.recommendation);
+    return {
+      recommendation: webish ? "game-dev-web" : "game-dev-custom",
+      confidence: "medium",
+      signals: [...fs.signals, `request text: game-shaped${shellNote}`],
+      alternatives: Array.from(alternatives),
+      flags: { engine: webish ? "web" : "custom" },
+    };
+  }
+
+  // Filesystem Tauri signal without a game-shaped request: a Tauri app is a
+  // webview UI — web-ui is the closest profile (there is no desktop profile).
+  if (tauri) {
+    const alternatives = new Set<ProfileName>(fs.alternatives);
+    if (fs.recommendation) alternatives.add(fs.recommendation);
+    return {
+      recommendation: "web-ui",
+      confidence: "medium",
+      signals: [...fs.signals, "src-tauri/tauri.conf.json present (Tauri desktop shell — webview UI)"],
+      alternatives: Array.from(alternatives),
+    };
+  }
+
+  return fs;
+}
+
+function detectProfileFromFilesystem(projectPath: string): ProfileDetection {
   const signals: string[] = [];
   const alternatives = new Set<ProfileName>();
 

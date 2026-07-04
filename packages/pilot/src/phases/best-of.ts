@@ -15,7 +15,6 @@
 
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import {
   startBestOfStage,
   recordAttempt,
@@ -35,8 +34,8 @@ import {
 } from "@pp/core";
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { generationModelIdForTier } from "../generation-model.js";
-import { loadRolePrompt, renderSystemPrompt } from "../prompts/loader.js";
-import { selectStageSkills } from "./stage-loop.js";
+import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
+import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty } from "./stage-loop.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -60,18 +59,6 @@ const ROTATION: Array<{ tier: ClaudeTier; seed: string }> = [
 function rotationFor(candidateIndex: number): { tier: ClaudeTier; seed: string; model_id: string } {
   const slot = ROTATION[(candidateIndex - 1) % ROTATION.length]!;
   return { tier: slot.tier, seed: slot.seed, model_id: generationModelIdForTier(slot.tier) };
-}
-
-function gitDiffHead(cwd: string): string | null {
-  try {
-    return execFileSync("git", ["show", "--stat", "--patch", "HEAD"], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    });
-  } catch {
-    return null;
-  }
 }
 
 /** Average of a critique verdict's numeric score entries (0 when absent). */
@@ -141,6 +128,8 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       requestText: ctx.requestText,
       execution: "session-coding",
       skills: skills.injected.map((s) => ({ name: s.name, body: s.body })),
+      upstreamArtifacts: ctx.stageArtifacts.map((a) => ({ kind: a.kind, text: a.text })),
+      agentsMd: loadAgentsMdForPrompt(ctx.projectPath) ?? undefined,
     });
     const genProvider = providerForModel(rot.model_id);
     if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
@@ -150,6 +139,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       );
     }
     const model = ctx.engine.catalog.resolve(genProvider, rot.model_id);
+    const baseSha = gitHeadSha(c.worktree_path);
     const gen = await ctx.engine.runCodingSession({
       cwd: c.worktree_path,
       systemPrompt,
@@ -195,10 +185,15 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     recordSmokeStatus({ stage_id, candidate_index: c.candidate_index, status: smoke });
     emit(ctx, "smoke.status", { candidate_index: c.candidate_index, status: smoke }, { stage_id, attempt_id: attempt.attempt_id });
 
+    // Harness-side commit + attempt-scoped diff (baseSha..HEAD): a candidate
+    // that wrote nothing yields empty text and loses on merit, instead of the
+    // judge being handed the worktree's pre-existing HEAD commit.
+    gitAutoCommitIfDirty(c.worktree_path, `pp ${ctx.run_id} ${stage.kind} candidate ${c.candidate_index}`);
+    const rangeDiff = gitDiffRange(c.worktree_path, baseSha);
     cand.push({
       index: c.candidate_index,
       attempt_id: attempt.attempt_id,
-      text: gitDiffHead(c.worktree_path) ?? gen.text,
+      text: rangeDiff && rangeDiff.trim().length > 0 ? rangeDiff : gen.text,
       tier: rot.tier,
       seed: rot.seed,
       smoke,
@@ -323,5 +318,15 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
   if (merge.merge_status === "conflict" || merge.merge_status === "empty" || merge.merge_status === "smoke_failed") {
     return "surfaced";
   }
+
+  // Feed the winning candidate's diff to downstream stages, same as the
+  // single-attempt path's finalizePassed does.
+  const winnerCand = cand.find((c) => c.index === winnerIndex);
+  ctx.stageArtifacts.push({
+    kind: stage.kind,
+    agent: stage.agent,
+    path: `${stage.kind}/candidate-${winnerIndex}/`,
+    text: winnerCand?.text ?? "",
+  });
   return "passed";
 }

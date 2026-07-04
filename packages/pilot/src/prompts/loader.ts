@@ -258,7 +258,58 @@ export type RenderContext = {
    * section after the profile summary and before gotchas/addenda.
    */
   skills?: Array<{ name: string; body: string }>;
+  /**
+   * Artifacts from already-PASSED stages (the approved spec, ADRs, …), rendered
+   * right after the execution contract so the generator implements what the
+   * gate approved instead of re-deriving the request. Bodies are budgeted here
+   * (PP_UPSTREAM_BUDGET_CHARS, default 16000 total).
+   */
+  upstreamArtifacts?: Array<{ kind: string; text: string }>;
+  /** The project's AGENTS.md conventions (placeholder sections pre-stripped). */
+  agentsMd?: string;
+  /** On Reflexion retries: the rejected attempt's artifact, for revision. */
+  priorArtifact?: string;
 };
+
+/** Default total budget (chars) for upstream artifact bodies in one prompt. */
+const UPSTREAM_BUDGET_CHARS_DEFAULT = 16_000;
+
+/**
+ * Read `<project>/AGENTS.md` for prompt injection, dropping sections whose
+ * body is still the scaffold placeholder. Returns null when the file is
+ * missing or nothing substantive remains — the caller then omits the block.
+ * This restores the original pair-programmer contract where every generator
+ * read AGENTS.md first ("Conventions in AGENTS.md beat your priors").
+ */
+export function loadAgentsMdForPrompt(projectPath: string): string | null {
+  const path = join(projectPath, "AGENTS.md");
+  if (!existsSync(path)) return null;
+  const md = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+  const lines = md.split("\n");
+  const kept: string[] = [];
+  let section: string[] = [];
+  let substantive = false;
+  const flush = () => {
+    if (section.length === 0) return;
+    const body = section.slice(1).join("\n").trim();
+    const isPlaceholder = body === "" || /^_?to be populated_?\.?$/i.test(body);
+    if (!isPlaceholder) {
+      kept.push(...section);
+      // Only a filled ## section counts as substance — the # title/preamble
+      // alone is generic scaffold text not worth a prompt block.
+      if (/^##\s/.test(section[0] ?? "")) substantive = true;
+    }
+    section = [];
+  };
+  for (const line of lines) {
+    if (/^##\s/.test(line)) flush();
+    section.push(line);
+  }
+  flush();
+  if (!substantive) return null;
+  const out = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out.length > 0 ? out : null;
+}
 
 /**
  * Completion mode has NO tools and NO file access — the model's entire response
@@ -326,10 +377,38 @@ export function renderSystemPrompt(role: RolePrompt, ctx: RenderContext = {}): s
   // artifact directly (completion) or actually call the file tools (coding).
   if (execution === "completion") blocks.push(COMPLETION_CONTRACT);
   else if (execution === "session-coding") blocks.push(SESSION_CODING_CONTRACT);
+
+  // Approved upstream artifacts come BEFORE the role body: the spec the gate
+  // passed is the ground truth this stage implements. Budgeted so a huge
+  // upstream diff can't starve the rest of the prompt.
+  if (ctx.upstreamArtifacts && ctx.upstreamArtifacts.length > 0) {
+    const raw = Number(process.env.PP_UPSTREAM_BUDGET_CHARS);
+    let remaining = Number.isFinite(raw) && raw >= 0 ? raw : UPSTREAM_BUDGET_CHARS_DEFAULT;
+    const parts: string[] = [];
+    for (const a of ctx.upstreamArtifacts) {
+      if (remaining <= 0) break;
+      const body = a.text.length > remaining ? `${a.text.slice(0, remaining)}\n\n[truncated]` : a.text;
+      remaining -= Math.min(a.text.length, remaining);
+      parts.push(`### Approved ${a.kind} artifact\n\n${body.trim()}`);
+    }
+    blocks.push(
+      "## Approved upstream artifacts (implement THIS)\n\n" +
+        "Earlier pipeline stages produced these and they PASSED review. They are the authoritative " +
+        "definition of the work — implement them; do not re-interpret the raw request.\n\n" +
+        parts.join("\n\n"),
+    );
+  }
+
   blocks.push(role.cleanedBody.trim());
 
   if (ctx.profileSummary) {
     blocks.push(`## Active project profile\n\n${ctx.profileSummary.trim()}`);
+  }
+
+  if (ctx.agentsMd) {
+    blocks.push(
+      "## Project conventions (AGENTS.md — these beat your priors)\n\n" + ctx.agentsMd.trim(),
+    );
   }
 
   if (ctx.skills && ctx.skills.length > 0) {
@@ -346,6 +425,15 @@ export function renderSystemPrompt(role: RolePrompt, ctx: RenderContext = {}): s
 
   const gotchas = loadGotchasForProfile(ctx.profileName);
   if (gotchas) blocks.push(`## Engine gotchas\n\n${gotchas.trim()}`);
+
+  if (ctx.priorArtifact) {
+    const cap = 12_000;
+    const body =
+      ctx.priorArtifact.length > cap ? `${ctx.priorArtifact.slice(0, cap)}\n\n[truncated]` : ctx.priorArtifact;
+    blocks.push(
+      "## Your previous attempt (rejected — revise, do not restart)\n\n" + body.trim(),
+    );
+  }
 
   if (ctx.priorCritiques && ctx.priorCritiques.length > 0) {
     const joined = ctx.priorCritiques.map((c, i) => `### Prior critique ${i + 1}\n\n${c.trim()}`).join("\n\n");

@@ -10,7 +10,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { mkdirSync } from "node:fs";
 import {
   startStage,
@@ -25,13 +25,14 @@ import {
   runTddCheck,
   runArtifactValidator,
   selectSkillsForStage,
+  promoteArtifact,
   type GateType,
   type Profile,
   type VerdictOutcome,
   type ClaudeTier,
 } from "@pp/core";
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
-import { loadRolePrompt, renderSystemPrompt } from "../prompts/loader.js";
+import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
 import { resolveTier, escalateTierForRetry } from "../tier-resolver.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
@@ -111,9 +112,9 @@ export function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSele
   return { injected, skipped };
 }
 
-function gitDiffHead(cwd: string): string | null {
+function git(cwd: string, args: string[]): string | null {
   try {
-    return execFileSync("git", ["show", "--stat", "--patch", "HEAD"], {
+    return execFileSync("git", args, {
       cwd,
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
@@ -121,6 +122,56 @@ function gitDiffHead(cwd: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** HEAD sha, or null in a repo with no commits (or no repo). */
+export function gitHeadSha(cwd: string): string | null {
+  return git(cwd, ["rev-parse", "HEAD"])?.trim() ?? null;
+}
+
+/**
+ * Pathspec that keeps harness metadata (.harness transcripts, snapshots,
+ * archived artifacts) out of attempt commits and judged diffs — judges must
+ * see only the product change. (The judges on run_pIgGjPhWo59e explicitly
+ * dinged the attempt for committed harness artifacts.)
+ */
+const EXCLUDE_HARNESS = [":(exclude).harness", ":(exclude).harness/**"] as const;
+
+/**
+ * The diff an attempt actually produced: baseSha..HEAD. With no base (fresh
+ * repo) falls back to the full HEAD patch. NEVER use `git show HEAD` directly
+ * for judging — when an attempt commits nothing, that hands the judge whatever
+ * pre-existing commit happens to be HEAD (the exact bug behind
+ * run_pIgGjPhWo59e, where judges graded the scaffolding commit).
+ */
+export function gitDiffRange(cwd: string, baseSha: string | null): string | null {
+  if (!baseSha) return git(cwd, ["show", "--stat", "--patch", "HEAD", "--", ".", ...EXCLUDE_HARNESS]);
+  const head = gitHeadSha(cwd);
+  if (!head || head === baseSha) return null;
+  return git(cwd, ["diff", "--stat", "--patch", baseSha, "HEAD", "--", ".", ...EXCLUDE_HARNESS]);
+}
+
+/**
+ * Commit whatever the session left in the working tree (minus .harness).
+ * Models narrate commits they never ran (deepseek's engineer-0 did exactly
+ * that) — the harness owns the commit so the attempt diff is always real.
+ * Returns true when a commit was created.
+ */
+export function gitAutoCommitIfDirty(cwd: string, message: string): boolean {
+  const status = git(cwd, ["status", "--porcelain", "--", ".", ...EXCLUDE_HARNESS]);
+  if (!status || status.trim().length === 0) return false;
+  if (git(cwd, ["add", "-A", "--", ".", ...EXCLUDE_HARNESS]) === null) return false;
+  return (
+    git(cwd, [
+      "-c",
+      "user.email=pp@local",
+      "-c",
+      "user.name=pi-pp-platform",
+      "commit",
+      "-m",
+      message,
+    ]) !== null
+  );
 }
 
 /** Drives one stage to a terminal outcome. */
@@ -142,24 +193,63 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
 
   // ── Attempt 0: generate → judge ──────────────────────────────────────────
   const gen0 = await generate(ctx, stage, stage_id, resolution.model_id, resolution.tier, 0, undefined, []);
+
+  // Zero-change guard: a coding attempt that wrote nothing has no diff to
+  // judge — skip the (paid) judge call entirely and go straight to Reflexion
+  // with a synthetic critique. Never let a judge grade a stale HEAD commit.
+  if (gen0.zeroChange) {
+    emit(
+      ctx,
+      "gate.blocked",
+      { reason: "attempt produced zero file changes — judge skipped", gate_type: stage.gate_type, zero_change: true },
+      { stage_id },
+    );
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText);
+  }
+
   const judged0 = await judge(ctx, stage, stage_id, gen0.attempt_id, resolution.model_id, gen0.artifactText, false);
   if (judged0 === "abort") return abortStage(ctx, stage_id, "judge tool failure");
 
   if (judged0.outcome === "pass") {
     const settled = await driveReadiness(ctx, stage, stage_id, gen0.attempt_id);
-    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen0.attempt_id);
+    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen0.attempt_id, gen0);
     if (settled.action === "surface") return surface(ctx, stage_id, settled.reason);
     // action === "retry": fall through to Reflexion using the blocker message.
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique);
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText);
   }
 
   // fail / revise → Reflexion ×1.
-  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md);
+  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText);
 }
 
 // ── generation ───────────────────────────────────────────────────────────────
 
-type GenOut = { attempt_id: string; artifactText: string };
+type GenOut = {
+  attempt_id: string;
+  artifactText: string;
+  artifactPath: string;
+  /** session-coding attempt that left the working tree untouched. */
+  zeroChange: boolean;
+};
+
+/** Synthetic critique for the zero-change Reflexion retry — no judge involved. */
+export const ZERO_CHANGE_CRITIQUE =
+  "The attempt produced ZERO file changes: no tool calls reached disk, so there is nothing to " +
+  "review. You must create real files in the working directory with your write/edit/bash tools. " +
+  "Do not answer with code blocks or descriptions — every file must be written via a tool call.";
+
+/** Task prompt for coding sessions: the ask + how the harness captures work. */
+function buildCodingTaskPrompt(ctx: RunContext): string {
+  const upstream =
+    ctx.stageArtifacts.length > 0
+      ? " Approved upstream artifacts (spec, design, …) are in your system prompt — implement THOSE, not a re-interpretation of the request."
+      : "";
+  return (
+    `${ctx.requestText}\n\n` +
+    `Implement this in the current working directory using your write/edit/bash tools.${upstream} ` +
+    `The harness only captures changes actually written to disk; verify your files exist before finishing.`
+  );
+}
 
 async function generate(
   ctx: RunContext,
@@ -170,6 +260,7 @@ async function generate(
   retryIndex: number,
   parentAttemptId: string | undefined,
   priorCritiques: string[],
+  priorArtifact?: string,
 ): Promise<GenOut> {
   const role = loadRolePrompt(stage.agent, { projectPath: ctx.projectPath });
   // A tests_pre stage always produces a completion (the tdd_manifest YAML).
@@ -195,6 +286,11 @@ async function generate(
     requestText: ctx.requestText,
     execution,
     skills: skills.injected.map((s) => ({ name: s.name, body: s.body })),
+    // Cross-stage cohesion: passed artifacts (the approved spec, etc.), the
+    // project's AGENTS.md conventions, and — on retries — the rejected attempt.
+    upstreamArtifacts: ctx.stageArtifacts.map((a) => ({ kind: a.kind, text: a.text })),
+    agentsMd: loadAgentsMdForPrompt(ctx.projectPath) ?? undefined,
+    priorArtifact,
   });
   // Resolve the generator's provider FROM the model (effective ladder), not the
   // legacy hardcoded "anthropic". Preflight the credential so a missing key
@@ -214,22 +310,37 @@ async function generate(
 
   let artifactText: string;
   let artifactPath: string;
+  let zeroChange = false;
   let genResult;
 
   if (execution === "session-coding" || execution === "session-readonly") {
+    const coding = execution === "session-coding";
+    const baseSha = coding ? gitHeadSha(ctx.projectPath) : null;
     genResult = await ctx.engine.runCodingSession({
       cwd: ctx.projectPath,
       systemPrompt,
-      taskPrompt: ctx.requestText,
+      taskPrompt: coding ? buildCodingTaskPrompt(ctx) : ctx.requestText,
       model,
       sessionDir,
-      toolPolicy: role.execution === "session-readonly" ? "readonly" : "coding",
+      toolPolicy: coding ? "coding" : "readonly",
       role: stage.agent,
       attempt: retryIndex,
       signal: ctx.signal,
     });
-    artifactText = gitDiffHead(ctx.projectPath) ?? genResult.text;
-    artifactPath = `${stage.kind}/ (commit ${genResult.session_id ?? "n/a"})`;
+    if (coding) {
+      // The harness owns the commit; then the judge sees exactly what this
+      // attempt changed (baseSha..HEAD), never a stale pre-existing commit.
+      gitAutoCommitIfDirty(ctx.projectPath, `pp ${ctx.run_id} ${stage.kind} attempt ${retryIndex}`);
+      const rangeDiff = gitDiffRange(ctx.projectPath, baseSha);
+      zeroChange = !rangeDiff || rangeDiff.trim().length === 0;
+      artifactText = zeroChange ? genResult.text : rangeDiff!;
+      artifactPath = `${stage.kind}/ (commit ${zeroChange ? "none" : (gitHeadSha(ctx.projectPath) ?? "n/a")})`;
+    } else {
+      // Readonly sessions deliver a document, not a diff — the assistant text
+      // IS the artifact. (Previously this fed `git show HEAD` to the judge.)
+      artifactText = genResult.text;
+      artifactPath = `${stage.kind}/ (session ${genResult.session_id ?? "n/a"})`;
+    }
   } else {
     genResult = await ctx.engine.runAuthoringCompletion({
       model,
@@ -289,11 +400,21 @@ async function generate(
   emit(
     ctx,
     "attempt.completed",
-    { model: modelId, tokens_in: genResult.tokens_in, tokens_out: genResult.tokens_out, cost_usd: genResult.cost_usd },
+    {
+      model: modelId,
+      tokens_in: genResult.tokens_in,
+      tokens_out: genResult.tokens_out,
+      cost_usd: genResult.cost_usd,
+      stop_reason: genResult.stop_reason,
+      tool_call_count: genResult.tool_call_count,
+      files_changed: genResult.files_changed,
+      materialized_files: genResult.materialized_files,
+      zero_change: zeroChange,
+    },
     { stage_id, attempt_id: attempt.attempt_id },
   );
 
-  return { attempt_id: attempt.attempt_id, artifactText };
+  return { attempt_id: attempt.attempt_id, artifactText, artifactPath, zeroChange };
 }
 
 // ── judging ────────────────────────────────────────────────────────────────
@@ -437,6 +558,8 @@ export async function finalizePassed(
   stage: StageSpec,
   stage_id: string,
   winnerAttemptId: string,
+  /** The winning attempt's output — its artifactText is the attempt's real diff/document. */
+  winner?: { artifactText: string; artifactPath: string },
 ): Promise<StageOutcome> {
   await finalizeStage({ stage_id, winner_attempt_id: winnerAttemptId, status: "passed" });
   emit(ctx, "stage.finalized", { status: "passed", winner_attempt_id: winnerAttemptId }, { stage_id });
@@ -447,8 +570,10 @@ export async function finalizePassed(
   // smoke gate was already evaluated (with no code/diff artifact present, so it
   // passed), and tying the diff to the stage now lets VG-2 count it without
   // retriggering VG-5. Best-effort; a missing diff simply lets VG-2 surface.
+  // The archived diff is the WINNING ATTEMPT's baseSha..HEAD range (its
+  // artifactText), never a re-run of `git show HEAD`.
   if (stage.kind === "code") {
-    const diff = gitDiffHead(ctx.projectPath);
+    const diff = winner?.artifactText ?? gitDiffRange(ctx.projectPath, null);
     if (diff) {
       archiveArtifact({
         run_id: ctx.run_id,
@@ -458,6 +583,38 @@ export async function finalizePassed(
         relative_path: `code/diff-${stage_id}.patch`,
         bytes: diff,
       });
+    }
+  }
+
+  // Make the passed artifact available to downstream stages ("Approved
+  // upstream artifacts" prompt block) — this is how the code stage sees the
+  // approved spec instead of re-deriving the request from scratch.
+  if (winner) {
+    ctx.stageArtifacts.push({
+      kind: stage.kind,
+      agent: stage.agent,
+      path: winner.artifactPath,
+      text: winner.artifactText,
+    });
+
+    // Promote passed completion artifacts (spec, docs, ADRs, …) into the
+    // project tree at docs/pp/<run_id>/ so they're visible outside .harness
+    // even if a later stage surfaces. Committed immediately in a dedicated
+    // harness commit so the next attempt's baseSha..HEAD diff never sweeps
+    // them in. Best-effort — a skipped promotion never fails the stage.
+    // Review/forum runs are advisory and must leave the project tree
+    // untouched (zero commits), so they never promote.
+    if (ctx.mode !== "review" && stage.kind !== "code" && isAbsolute(winner.artifactPath)) {
+      const ext = winner.artifactPath.endsWith(".yaml") ? "yaml" : "md";
+      const promoted = promoteArtifact({
+        run_id: ctx.run_id,
+        source_abs_path: winner.artifactPath,
+        dest_name: `${stage.kind}-${stage.agent}.${ext}`,
+      });
+      if (promoted.status === "ok") {
+        gitAutoCommitIfDirty(ctx.projectPath, `pp ${ctx.run_id} promote ${stage.kind} artifact`);
+        emit(ctx, "run.context", { phase: "artifact-promotion", promoted_path: promoted.promoted_path }, { stage_id });
+      }
     }
   }
   return "passed";
@@ -485,6 +642,8 @@ export async function reflexion(
   parentAttemptId: string,
   initialTier: ClaudeTier,
   critique: string,
+  /** The rejected attempt's output, injected as "Your previous attempt" context. */
+  priorArtifactText?: string,
 ): Promise<StageOutcome> {
   const eligible = checkRetryEligible({ attempt_id: parentAttemptId, budget_override: false });
   if (!eligible.ok) {
@@ -502,13 +661,24 @@ export async function reflexion(
   reArchiveTierDecisions(ctx);
   emit(ctx, "reflexion.retry", { initial_tier: initialTier, retry_tier: esc.tier, critique_excerpt: critique.slice(0, 240) }, { stage_id });
 
-  const gen1 = await generate(ctx, stage, stage_id, esc.model_id, esc.tier, 1, parentAttemptId, [critique]);
+  const gen1 = await generate(ctx, stage, stage_id, esc.model_id, esc.tier, 1, parentAttemptId, [critique], priorArtifactText);
+
+  // Zero-change retry: still nothing on disk. Surface with the real reason —
+  // do not burn a judge call on an empty diff.
+  if (gen1.zeroChange) {
+    return surface(
+      ctx,
+      stage_id,
+      "code stage produced zero file changes after Reflexion ×1 (model emitted text instead of tool calls)",
+    );
+  }
+
   const judged1 = await judge(ctx, stage, stage_id, gen1.attempt_id, esc.model_id, gen1.artifactText, true);
   if (judged1 === "abort") return abortStage(ctx, stage_id, "judge tool failure on retry");
 
   if (judged1.outcome === "pass") {
     const settled = await driveReadiness(ctx, stage, stage_id, gen1.attempt_id);
-    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen1.attempt_id);
+    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen1.attempt_id, gen1);
     return surface(ctx, stage_id, settled.action === "surface" ? settled.reason : "retry still blocked by finalize readiness");
   }
 

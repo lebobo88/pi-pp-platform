@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, statSync, existsSync, readFileSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackedExeca } from "../mcp/cli-runner.js";
 import YAML from "yaml";
@@ -2634,8 +2634,20 @@ export function archiveArtifact(input: ArchiveArtifactInput): ArchiveArtifactOut
   if (!run) throw new Error(`run ${input.run_id} not found`);
 
   const dir = projectArtifactDir(run.project_path, input.run_id);
-  const absolute = join(dir, input.relative_path);
+  const absolute = resolve(join(dir, input.relative_path));
   const relPath = relative(run.project_path, absolute).replaceAll("\\", "/");
+
+  // Containment guard: an archive path must stay under .harness/<run_id>/.
+  // A relative_path with ".." (or an absolute path) escaping the artifact dir
+  // would write harness metadata into the project tree — refuse.
+  if (!isInside(absolute, dir)) {
+    throw new ArchiveArtifactPathError(
+      `archive_artifact rejected: relative_path "${input.relative_path}" resolves to ${absolute}, ` +
+      `which escapes the run artifact dir ${dir}. Archive paths must stay under .harness/<run_id>/.`,
+      absolute,
+      dir,
+    );
+  }
 
   // Path guard: refuse archives that resolve INSIDE an active candidate
   // worktree. Doing so caused the 2026-05-05 data-loss incident — the
@@ -2761,6 +2773,65 @@ export function archiveArtifact(input: ArchiveArtifactInput): ArchiveArtifactOut
   });
 
   return { status: "ok", artifact_id: id, absolute_path: absolute, sha256 };
+}
+
+export type PromoteArtifactInput = {
+  run_id: string;
+  /** Absolute path of the archived artifact under .harness/<run_id>/. */
+  source_abs_path: string;
+  /** Destination filename (e.g. "spec-spec-author.md"); sanitized here. */
+  dest_name: string;
+};
+
+export type PromoteArtifactOutput =
+  | { status: "ok"; promoted_path: string }
+  | { status: "skipped"; reason: string };
+
+/**
+ * Promote a passed stage's archived artifact into the project tree at
+ * `<project>/docs/pp/<run_id>/<dest_name>` so specs/docs are visible outside
+ * .harness even when a later stage surfaces. Guards: the source must live
+ * under the run's artifact dir; the destination is confined to docs/pp/.
+ * Best-effort by contract — callers treat "skipped" as non-fatal. Records the
+ * destination on the matching artifacts row (promoted_path, additive column).
+ */
+export function promoteArtifact(input: PromoteArtifactInput): PromoteArtifactOutput {
+  const run = db()
+    .prepare(`SELECT project_path FROM runs WHERE id = ?`)
+    .get(input.run_id) as { project_path: string } | undefined;
+  if (!run) return { status: "skipped", reason: `run ${input.run_id} not found` };
+
+  const artifactDir = projectArtifactDir(run.project_path, input.run_id);
+  const source = resolve(input.source_abs_path);
+  if (!isInside(source, artifactDir)) {
+    return { status: "skipped", reason: `source ${source} is not under the run artifact dir` };
+  }
+  if (!existsSync(source)) {
+    return { status: "skipped", reason: `source ${source} does not exist` };
+  }
+
+  const safeName = input.dest_name.replace(/[^\w.-]+/g, "-").replace(/^[.-]+/, "");
+  if (!safeName) return { status: "skipped", reason: `dest_name "${input.dest_name}" sanitizes to empty` };
+  const destDir = join(run.project_path, "docs", "pp", input.run_id);
+  const dest = resolve(join(destDir, safeName));
+  if (!isInside(dest, join(run.project_path, "docs", "pp"))) {
+    return { status: "skipped", reason: `destination ${dest} escapes docs/pp/` };
+  }
+
+  mkdirSync(destDir, { recursive: true });
+  writeFileSync(dest, readFileSync(source));
+
+  const promotedRel = relative(run.project_path, dest).replaceAll("\\", "/");
+  const sourceRel = relative(run.project_path, source).replaceAll("\\", "/");
+  try {
+    txImmediate(() => {
+      db()
+        .prepare(`UPDATE artifacts SET promoted_path = ? WHERE run_id = ? AND path = ?`)
+        .run(promotedRel, input.run_id, sourceRel);
+    });
+  } catch { /* row update is provenance only — the copy already landed */ }
+
+  return { status: "ok", promoted_path: promotedRel };
 }
 
 export type RunListPage = { items: unknown[]; next_cursor: string | null };

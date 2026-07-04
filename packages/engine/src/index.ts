@@ -16,6 +16,7 @@ export * from "./critique.js";
 export * from "./generate-completion.js";
 export * from "./generate-session.js";
 export * from "./tool-guards.js";
+export * from "./text-materializer.js";
 export * from "./session-store.js";
 export * from "./doctor.js";
 export * from "./fake.js";

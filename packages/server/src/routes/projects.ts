@@ -127,9 +127,9 @@ export function registerProjectRoutes(app: FastifyInstance): void {
 
   // ── Profile detect (DELTA) ──
   app.post(`${V1}/profiles/detect`, async (req, reply) => {
-    const body = (req.body ?? {}) as { project_path?: string };
+    const body = (req.body ?? {}) as { project_path?: string; request_text?: string };
     if (!body.project_path) return reply.code(422).send({ error: "validation failed", details: { project_path: "required" } });
-    return detectProfile(body.project_path);
+    return detectProfile(body.project_path, { requestText: body.request_text });
   });
 
   // ── Project detail (bare :path LAST so sub-resources match first) ──

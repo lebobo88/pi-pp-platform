@@ -13,6 +13,17 @@
  * (see tool-guards.ts) are the SOLE tool surface. `readonly` policy exposes only
  * read/grep/find/ls.
  *
+ * Tool forcing: openai-compat models (deepseek especially) sometimes answer a
+ * coding prompt with prose instead of tool calls — the session then ends after
+ * one turn having written nothing. For `coding` sessions on openai-compat APIs
+ * an inline extension injects `tool_choice: "required"` into each provider
+ * request until the first successful mutating tool call, we issue one
+ * in-session recovery prompt if a whole prompt() pass drove zero mutating
+ * calls, and as a last resort the text-materializer fallback parses
+ * ```lang:path fenced blocks out of the final text (PP_TEXT_MATERIALIZE_FALLBACK).
+ * A coding session that still changed nothing returns stop_reason
+ * "no_tool_calls" so the pilot can skip judging and retry/surface cleanly.
+ *
  * Completion: we await session.prompt() (which drives the full agent loop) and
  * also observe `agent_end` for the terminal turn. Usage is aggregated across
  * every assistant turn via getSessionStats().
@@ -25,10 +36,16 @@ import {
   type AuthStorage,
   type ModelRegistry,
   type AgentSessionEvent,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import type { Model, Api, ThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { buildGenResultFromTotals, type GenResult } from "./envelope.js";
 import { buildToolDefinitions, type ToolPolicy } from "./tool-guards.js";
+import {
+  extractFileBlocks,
+  materializeFiles,
+  textMaterializeFallbackEnabled,
+} from "./text-materializer.js";
 import { makeSessionRef } from "./session-store.js";
 import { platformDir } from "./auth.js";
 
@@ -52,12 +69,74 @@ export interface CodingSessionOpts {
   modelRegistry?: ModelRegistry;
 }
 
+/** Tool names whose successful execution means the working tree may have changed. */
+const MUTATING_TOOLS = new Set(["bash", "write", "edit"]);
+
+/**
+ * openai-compat APIs where (a) `tool_choice` is honored in the request payload
+ * and (b) models are known to sometimes answer coding prompts as prose instead
+ * of tool calls. Anthropic sessions are left untouched — their loop already
+ * drives tools reliably and `tool_choice: required` changes Claude semantics.
+ */
+function isOpenAiCompatApi(api: string): boolean {
+  return api === "openai-completions" || api === "openai-responses";
+}
+
+/**
+ * Default thinking level for openai-compat coding sessions. deepseek's
+ * reasoning mode ("high") is known to drop function calling; "low" maps to
+ * null in its thinkingLevelMap, i.e. plain chat mode where tools work.
+ * Override with PP_CODING_THINKING_LEVEL.
+ */
+function codingThinkingLevel(model: Model<Api>, explicit?: ThinkingLevel): ThinkingLevel | undefined {
+  if (explicit) return explicit;
+  if (!isOpenAiCompatApi(model.api)) return undefined;
+  const raw = process.env.PP_CODING_THINKING_LEVEL;
+  if (raw === "off") return undefined;
+  const allowed: ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh"];
+  if (raw && (allowed as string[]).includes(raw)) return raw as ThinkingLevel;
+  return "low";
+}
+
+const RECOVERY_PROMPT =
+  "Your previous reply contained NO tool calls, so nothing was written to disk and it will be " +
+  "discarded. Do it again now using ONLY the provided tools: call write/edit to create every file " +
+  "and bash to run commands. Do not describe the files or paste them as code blocks — emit tool calls.";
+
 export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResult> {
   if (!opts.authStorage || !opts.modelRegistry) {
     throw new Error("runCodingSession requires authStorage + modelRegistry (use engine.runCodingSession to inject them)");
   }
   const agentDir = platformDir();
   const ref = makeSessionRef(opts.sessionDir, opts.role ?? "coder", opts.attempt ?? 0);
+
+  // ── tool-forcing extension + tool-call accounting ─────────────────────────
+  // deepseek (and some other openai-compat models) answer coding prompts as
+  // prose unless tool_choice forces the issue. The extension injects
+  // `tool_choice: "required"` into every outgoing request until the first
+  // successful mutating tool call, then reverts to "auto" so the model can
+  // produce its final text turn.
+  let toolCallCount = 0;
+  let mutatingToolCalls = 0;
+  const forceToolChoice = opts.toolPolicy === "coding" && isOpenAiCompatApi(opts.model.api);
+  const toolForcingExtension: ExtensionFactory = (pi) => {
+    pi.on("before_provider_request", (event) => {
+      if (!forceToolChoice || mutatingToolCalls > 0) return undefined;
+      const payload = event.payload as Record<string, unknown> | null;
+      if (!payload || typeof payload !== "object") return undefined;
+      const tools = (payload as { tools?: unknown[] }).tools;
+      if (!Array.isArray(tools) || tools.length === 0) return undefined;
+      return { ...payload, tool_choice: "required" };
+    });
+  };
+
+  const trackToolEvents = (event: AgentSessionEvent): void => {
+    if (event.type === "tool_execution_start") toolCallCount++;
+    if (event.type === "tool_execution_end" && !event.isError && MUTATING_TOOLS.has(event.toolName)) {
+      mutatingToolCalls++;
+    }
+    opts.onEvent?.(event);
+  };
 
   const settingsManager = SettingsManager.create(opts.cwd, agentDir);
   const resourceLoader = new DefaultResourceLoader({
@@ -70,6 +149,7 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    extensionFactories: [toolForcingExtension],
   });
   await resourceLoader.reload();
 
@@ -81,7 +161,7 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     authStorage: opts.authStorage,
     modelRegistry: opts.modelRegistry,
     model: opts.model,
-    thinkingLevel: opts.thinkingLevel,
+    thinkingLevel: codingThinkingLevel(opts.model, opts.thinkingLevel),
     noTools: "all",
     customTools: buildToolDefinitions(opts.cwd, opts.toolPolicy),
     resourceLoader,
@@ -90,7 +170,7 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
   });
 
   let timedOut = false;
-  const unsubscribe = opts.onEvent ? session.subscribe(opts.onEvent) : () => {};
+  const unsubscribe = session.subscribe(trackToolEvents);
 
   const timer =
     opts.timeoutMs && opts.timeoutMs > 0
@@ -109,6 +189,17 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
   const t0 = Date.now();
   try {
     await session.prompt(opts.taskPrompt);
+    // One in-session recovery: a coding session that drove zero mutating tool
+    // calls wrote nothing to disk — tell the model plainly and let it try once
+    // more with full context. Intra-attempt, so Reflexion ×1 is untouched.
+    if (
+      opts.toolPolicy === "coding" &&
+      mutatingToolCalls === 0 &&
+      !timedOut &&
+      !opts.signal?.aborted
+    ) {
+      await session.prompt(RECOVERY_PROMPT);
+    }
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener("abort", onExternalAbort);
@@ -123,13 +214,46 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
   const session_file = session.sessionFile ?? ref.path;
   const session_id = session.sessionId;
 
-  const stop_reason = timedOut ? "timeout" : opts.signal?.aborted ? "aborted" : "stop";
-
   session.dispose();
+
+  // Last resort: the model narrated the change set as ```lang:path fenced
+  // blocks instead of calling tools. Materialize them through the same
+  // write-tool guards so the attempt still yields a judgeable diff.
+  let materialized_files = 0;
+  if (
+    opts.toolPolicy === "coding" &&
+    mutatingToolCalls === 0 &&
+    !timedOut &&
+    !opts.signal?.aborted &&
+    textMaterializeFallbackEnabled()
+  ) {
+    const blocks = extractFileBlocks(text);
+    if (blocks.length > 0) {
+      materialized_files = materializeFiles(opts.cwd, blocks).written.length;
+    }
+  }
+
+  const files_changed = mutatingToolCalls > 0 || materialized_files > 0;
+  const stop_reason = timedOut
+    ? "timeout"
+    : opts.signal?.aborted
+      ? "aborted"
+      : opts.toolPolicy === "coding" && !files_changed
+        ? "no_tool_calls"
+        : "stop";
 
   return buildGenResultFromTotals(
     opts.model,
     { tokens_in, tokens_out, cost_usd: stats.cost },
-    { text, wall_ms, session_id, session_file, stop_reason },
+    {
+      text,
+      wall_ms,
+      session_id,
+      session_file,
+      stop_reason,
+      tool_call_count: toolCallCount,
+      files_changed,
+      materialized_files,
+    },
   );
 }

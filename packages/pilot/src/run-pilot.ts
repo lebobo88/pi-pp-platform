@@ -27,6 +27,7 @@ import {
   getBuiltinProfile,
   recommendTeams,
   ensureAgentsAndClaudeMd,
+  ensureTaxonomyBlueprint,
   type TeamSpec,
   type Forum,
   type Scope,
@@ -81,7 +82,7 @@ export class RunPilot {
     // ── Phase 2 (early): profile bootstrap, before startRun snapshots it. ────
     // The heuristic scope + a written profile.yaml must exist before start_run
     // so the run row snapshots them. Neither step needs a run_id.
-    bootstrapProfile(o.projectPath);
+    bootstrapProfile(o.projectPath, o.requestText);
     const heuristic = heuristicTriage({ request_text: o.requestText });
     const scope: Scope = o.scopeOverride ?? heuristic.scope;
 
@@ -118,6 +119,7 @@ export class RunPilot {
       missabilityRequired: [],
       profile: null,
       team: undefined,
+      stageArtifacts: [],
       tierTrace: [],
       finalStatus: "complete",
     };
@@ -131,8 +133,9 @@ export class RunPilot {
       runProfilePhase(ctx);
       await runTaxonomyPhase(ctx);
 
-      // ── Phase 5: ensure AGENTS.md + seed tier_decisions.json. ──────────────
+      // ── Phase 5: ensure AGENTS.md + taxonomy blueprint + seed tier_decisions.
       ensureAgentsAndClaudeMd(ctx.projectPath);
+      ensureTaxonomyBlueprint(ctx.projectPath);
       reArchiveTierDecisions(ctx);
 
       // ── Phase 6: build the stage set and run it. ───────────────────────────
@@ -384,10 +387,10 @@ function forumStages(forum: Forum): StageSpec[] {
  * confident. Mirrors runProfilePhase but runs BEFORE start_run so the run row
  * snapshots the written profile. Best-effort — generic mode on any failure.
  */
-function bootstrapProfile(projectPath: string): void {
+function bootstrapProfile(projectPath: string, requestText?: string): void {
   try {
     if (loadProjectProfile(projectPath)) return;
-    const detection = detectProfile(projectPath);
+    const detection = detectProfile(projectPath, { requestText });
     if (detection.recommendation && (detection.confidence === "high" || detection.confidence === "medium")) {
       writeProjectProfile(projectPath, detection.recommendation, {
         source: "detected",

@@ -33,12 +33,22 @@ export interface GenResult {
   wall_ms: number;
   /** Session id for coding-session calls; null for single completions/critiques. */
   session_id: string | null;
-  /** pi stop reason ("stop" | "length" | ...) or an engine sentinel ("timeout", "aborted", "invalid_output"). */
+  /**
+   * pi stop reason ("stop" | "length" | ...) or an engine sentinel ("timeout",
+   * "aborted", "invalid_output", "no_tool_calls" — a coding session ended
+   * without a single tool call reaching disk and no fallback materialized files).
+   */
   stop_reason: string;
   /** Absolute path (or archive path) of the session/failure file when one exists. */
   session_file?: string;
   /** Raw pi usage breakdown, when available. */
   usage_detail?: Usage;
+  /** Coding sessions: total tool executions the model drove. */
+  tool_call_count?: number;
+  /** Coding sessions: true when a mutating tool (write/edit/bash) ran without error. */
+  files_changed?: boolean;
+  /** Coding sessions: files written by the text-materializer fallback (0 = fallback unused). */
+  materialized_files?: number;
 }
 
 /**
@@ -124,6 +134,9 @@ export function buildGenResultFromTotals<TApi extends Api>(
     stop_reason: string;
     usage_detail?: Usage;
     parsed?: unknown;
+    tool_call_count?: number;
+    files_changed?: boolean;
+    materialized_files?: number;
   },
 ): GenResult {
   const cost_usd =
@@ -141,5 +154,8 @@ export function buildGenResultFromTotals<TApi extends Api>(
     stop_reason: fields.stop_reason,
     session_file: fields.session_file,
     usage_detail: fields.usage_detail,
+    tool_call_count: fields.tool_call_count,
+    files_changed: fields.files_changed,
+    materialized_files: fields.materialized_files,
   };
 }

@@ -772,6 +772,17 @@ export interface SetBudgetCapsRequest {
   caps: BudgetCap[];
 }
 
+/** Request body for `POST /profiles/detect`. */
+export interface DetectProfileRequest {
+  project_path: string;
+  /**
+   * Optional user request text. Refines detection when the filesystem is
+   * inconclusive (e.g. a game-shaped request on an empty project routes to a
+   * game-dev-* profile instead of generic mode).
+   */
+  request_text?: string;
+}
+
 /**
  * Profile detection result — mirrors @pp/core `detectProfile` (`ProfileDetection`).
  * The server returns this from `POST /profiles/detect`.

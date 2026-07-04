@@ -5,6 +5,10 @@
  * missability inspector.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export type TaxonomySection = {
   id: string;            // "4.1" .. "4.16"
   title: string;
@@ -99,6 +103,32 @@ export type TaxonomyMapping = {
   missability_required: string[];          // check_ids the run must close
 };
 
+/**
+ * Game-shaped request detector — the single source of truth shared by the
+ * taxonomy mapper (adds GDD/a11y/perf sections) and profile detection (picks a
+ * game-dev-* profile when the filesystem gives no strong signal).
+ */
+export const GAME_REQUEST_RE =
+  /\b(game|gameplay|gamedev|engine|unity|unreal|godot|bevy|gamemaker|playcanvas|babylon|three\.js|level|enemy|boss|encounter|npc|mechanic|gdd|loot[-\s]?box|gacha|microtransaction|battle pass|season pass|rollback|netcode|determinism|navmesh|behavior tree|shader|nanite|lumen|world partition|gas|scriptable\s?object|addressables?|niagara|chaos|wwise|fmod|trc|lotcheck|cert|esrb|pegi|iarc|controller|joy[-\s]?con|save data|playtest)\b/i;
+
+export type RequestTextClassification = {
+  game: boolean;
+  /** Desktop webview shell named in the request, when any. */
+  desktopShell: "tauri" | "electron" | null;
+  /** Browser/webview delivery signals (canvas, webgl, pwa, …). */
+  web: boolean;
+};
+
+/** Classify a raw request text for profile/taxonomy routing. */
+export function classifyRequestText(text: string): RequestTextClassification {
+  const desktopShell = /\btauri\b/i.test(text) ? "tauri" : /\belectron\b/i.test(text) ? "electron" : null;
+  return {
+    game: GAME_REQUEST_RE.test(text),
+    desktopShell,
+    web: /\b(web|browser|canvas|webgl|webgpu|pwa|html5)\b/i.test(text),
+  };
+}
+
 export function heuristicMapping(opts: {
   request_text: string;
   diff_loc?: number;
@@ -147,7 +177,7 @@ export function heuristicMapping(opts: {
   // accessibility / build-release plan to the artifact set on top of whatever
   // the generic mapping already produced. The active profile (game-dev-*)
   // controls which engine gotcha-pack the engineer agent reads.
-  const isGame = /\b(game|gameplay|gamedev|engine|unity|unreal|godot|bevy|gamemaker|playcanvas|babylon|three\.js|level|enemy|boss|encounter|npc|mechanic|gdd|loot[-\s]?box|gacha|microtransaction|battle pass|season pass|rollback|netcode|determinism|navmesh|behavior tree|shader|nanite|lumen|world partition|gas|scriptable\s?object|addressables?|niagara|chaos|wwise|fmod|trc|lotcheck|cert|esrb|pegi|iarc|controller|joy[-\s]?con|save data|playtest)\b/i.test(text);
+  const isGame = GAME_REQUEST_RE.test(text);
   if (isGame) {
     add("4.3", "game-shaped request", "gdd", "mechanic_spec");
     add("4.4", "game-shaped request needs design + a11y", "art_bible", "accessibility_plan", "localization_plan");
@@ -250,3 +280,39 @@ export const COMPLETION_CHECKLIST = [
   "Deprecation and retirement are not left as 'future work'.",
   "If AI is involved, evals, permissions, and human review rules exist.",
 ];
+
+// ─── Taxonomy blueprint scaffolding ─────────────────────────────────────────
+
+const __taxonomyDirname = dirname(fileURLToPath(import.meta.url));
+// packages/core/{dist,src}/orchestrator/taxonomy.js → 4 levels up is the
+// workspace root where assets/taxonomy_blueprint.md lives (same pattern as
+// agents-library.ts / teams.ts).
+const TAXONOMY_REPO_ROOT = join(__taxonomyDirname, "..", "..", "..", "..");
+
+function builtinTaxonomyBlueprintPath(): string {
+  return process.env.PP_ASSETS_DIR
+    ? join(process.env.PP_ASSETS_DIR, "taxonomy_blueprint.md")
+    : join(TAXONOMY_REPO_ROOT, "assets", "taxonomy_blueprint.md");
+}
+
+export type EnsureTaxonomyBlueprintResult =
+  | { status: "created"; path: string }
+  | { status: "exists"; path: string }
+  | { status: "skipped"; reason: string };
+
+/**
+ * Scaffold the human-readable taxonomy blueprint into the project at
+ * `docs/taxonomy_blueprint.md` (ensure-if-absent, never overwrites). This is
+ * the canonical 16-section SDLC reference that PROJECT_MASTER.md name-drops —
+ * previously it lived only inside the harness repo and never appeared in any
+ * project tree.
+ */
+export function ensureTaxonomyBlueprint(projectPath: string): EnsureTaxonomyBlueprintResult {
+  const dest = join(projectPath, "docs", "taxonomy_blueprint.md");
+  if (existsSync(dest)) return { status: "exists", path: dest };
+  const source = builtinTaxonomyBlueprintPath();
+  if (!existsSync(source)) return { status: "skipped", reason: `builtin blueprint not found at ${source}` };
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, readFileSync(source));
+  return { status: "created", path: dest };
+}

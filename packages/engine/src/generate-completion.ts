@@ -22,6 +22,21 @@ export interface AuthoringCompletionOpts {
   complete?: LlmComplete;
 }
 
+/**
+ * Output budget for authoring completions. Without an explicit max_tokens the
+ * provider default applies (deepseek: ~4k), which TRUNCATES long artifacts —
+ * a full RFC-2119 PRD runs 8-16k tokens, and a `stop_reason: "length"` spec
+ * gets judged as incomplete. Capped by the model's own maxTokens.
+ */
+function authoringMaxTokens(model: Model<Api>): number {
+  const raw = Number(process.env.PP_AUTHORING_MAX_TOKENS);
+  // 64k default: reasoning models (deepseek) burn thinking tokens INSIDE the
+  // output budget, so a 16k-token PRD can need 2-3× that in max_tokens.
+  const requested = Number.isFinite(raw) && raw > 0 ? raw : 65_536;
+  const modelCap = (model as { maxTokens?: number }).maxTokens;
+  return modelCap && modelCap > 0 ? Math.min(requested, modelCap) : requested;
+}
+
 export async function runAuthoringCompletion(opts: AuthoringCompletionOpts): Promise<GenResult> {
   const complete = opts.complete ?? defaultComplete;
   const t0 = Date.now();
@@ -34,6 +49,7 @@ export async function runAuthoringCompletion(opts: AuthoringCompletionOpts): Pro
     signal: opts.signal,
     timeoutMs: opts.timeoutMs,
     reasoning: opts.thinkingLevel,
+    maxTokens: authoringMaxTokens(opts.model),
   });
   return buildGenResult(msg, opts.model, {
     wall_ms: Date.now() - t0,

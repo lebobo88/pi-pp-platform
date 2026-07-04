@@ -133,6 +133,12 @@ function applyMigrations(conn: Database.Database): void {
   if (!artifactCols.some(c => c.name === "evidence_ref")) {
     conn.exec("ALTER TABLE artifacts ADD COLUMN evidence_ref TEXT");
   }
+  // Artifact promotion (2026-07-04): when a passed stage's artifact is copied
+  // into the project tree (docs/pp/<run_id>/…) so specs are visible outside
+  // .harness, the destination is recorded here. NULL = never promoted.
+  if (!artifactCols.some(c => c.name === "promoted_path")) {
+    conn.exec("ALTER TABLE artifacts ADD COLUMN promoted_path TEXT");
+  }
   const artifactColsAfter = conn.prepare("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>;
   if (artifactColsAfter.some(c => c.name === "cell")) {
     conn.exec("CREATE INDEX IF NOT EXISTS idx_artifacts_cell ON artifacts(cell) WHERE cell IS NOT NULL");

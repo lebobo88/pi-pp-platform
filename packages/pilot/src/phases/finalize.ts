@@ -19,10 +19,15 @@ export function buildSummary(ctx: RunContext, stages: StageReport[]): string {
     .map((s) => `- ${s.kind}: passed`)
     .join("\n");
   const surfaced = stages.filter((s) => s.outcome !== "passed");
+  // "What's next" must reflect the run's terminal status: an aborted/surfaced
+  // run with an empty stages array used to claim "completed cleanly" right
+  // next to "(no stages passed)" — both fallbacks fired independently.
   const next =
     surfaced.length > 0
       ? surfaced.map((s) => `- ${s.kind}: ${s.outcome} — needs follow-up`).join("\n")
-      : "- No open follow-ups; the pipeline completed cleanly.";
+      : ctx.finalStatus === "complete"
+        ? "- No open follow-ups; the pipeline completed cleanly."
+        : `- Run ${ctx.finalStatus}: ${ctx.abortReason ?? "see stage outcomes / run events"}`;
 
   return [
     `# Run ${ctx.run_id}`,
