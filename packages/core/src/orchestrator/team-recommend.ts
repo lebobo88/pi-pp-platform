@@ -200,9 +200,10 @@ export function recommendTeams(opts: TeamRecommendOptions): TeamRecommendResult 
 
     // (3) Static keyword hints: +2 per distinct regex hit.
     for (const re of TEAM_KEYWORD_HINTS[t.name] ?? []) {
-      if (re.test(text)) {
+      const hit = text.match(re)?.[0];
+      if (hit) {
         score += 2;
-        reasons.push(`keyword hint /${re.source}/`);
+        reasons.push(`request mentions "${hit}"`);
       }
     }
 
@@ -211,7 +212,7 @@ export function recommendTeams(opts: TeamRecommendOptions): TeamRecommendResult 
     for (const tok of tokens) {
       if (haystack.includes(tok)) {
         score += 1;
-        reasons.push(`token "${tok}" overlaps team name/description`);
+        reasons.push(`"${tok}" matches the team's focus`);
       }
     }
 

@@ -267,7 +267,7 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
       {/* Shared autocomplete: the priced catalog + each configured provider's live model list. */}
       <datalist id={MODEL_DATALIST_ID}>
         {models.map((m) => (
-          <option key={m.id} value={m.id}>
+          <option key={`${m.vendor}/${m.id}`} value={m.id}>
             {m.vendor}
             {m.tier ? ` · ${m.tier}` : ""}
           </option>

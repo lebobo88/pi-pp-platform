@@ -29,7 +29,7 @@ export function RubricScoreTable({ scoreJson }: { scoreJson: string | null }) {
                   <span className="block h-full rounded-full" style={{ width: `${pct * 100}%`, background: tone }} />
                 </span>
               </td>
-              <td className={cn("mono tnum py-1 pl-2 text-right text-ink-1")}>{v}</td>
+              <td className={cn("mono tnum py-1 pl-2 text-right text-ink-1")}>{Number.isInteger(v) ? v : v.toFixed(2)}</td>
             </tr>
           );
         })}

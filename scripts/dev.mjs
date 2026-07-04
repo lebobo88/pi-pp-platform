@@ -27,27 +27,28 @@ function shutdown(code = 0) {
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-function run(cmd, args, env, name) {
+function run(cmd, args, env, name, { critical = true } = {}) {
   const child = spawn(cmd, args, { cwd: root, env: { ...process.env, ...env }, stdio: "inherit", shell: true });
   child.on("exit", (code) => {
     console.log(`[dev] ${name} exited (${code ?? "signal"})`);
-    shutdown(code ?? 0);
+    if (critical) shutdown(code ?? 0);
   });
   children.push(child);
   return child;
 }
 
 console.log("[dev] building @pp/server…");
-run("pnpm", ["-F", "@pp/server", "build"], {}, "server-build").on("exit", (code) => {
-  if (code !== 0) return; // exit already handled
+run("pnpm", ["-F", "@pp/server", "build"], {}, "server-build", { critical: false }).on("exit", (code) => {
+  if (code !== 0) return shutdown(code ?? 1);
   const dbDir = mkdtempSync(join(tmpdir(), "pp-dev-"));
-  console.log("[dev] starting fake-engine API on http://127.0.0.1:7878 …");
+  const port = process.env.PP_PORT ?? "7878";
+  console.log(`[dev] starting fake-engine API on http://127.0.0.1:${port} …`);
   run(
     "node",
     [join("packages", "server", "dist", "bin", "ppd.js")],
-    { PP_LLM: process.env.PP_LLM ?? "fake", PP_DB_PATH: join(dbDir, "dev.db"), PP_PORT: "7878", PP_UI_DIST: "" },
+    { PP_LLM: process.env.PP_LLM ?? "fake", PP_DB_PATH: join(dbDir, "dev.db"), PP_PORT: port, PP_UI_DIST: "" },
     "ppd",
   );
   console.log("[dev] starting Vite (HMR) on http://localhost:5273 …");
-  run("pnpm", ["-F", "@pp/ui", "dev"], {}, "vite");
+  run("pnpm", ["-F", "@pp/ui", "dev"], { PP_DAEMON_ORIGIN: `http://127.0.0.1:${port}` }, "vite");
 });

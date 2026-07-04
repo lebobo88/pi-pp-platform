@@ -160,6 +160,7 @@ priority: 5
   writeFileSync(join(userDir, "judge-policy.md"), skillMd(`
 name: judge-policy
 description: user-scope override
+priority: 7
 `), "utf8");
   // User-only skill in the DIRECTORY form must be discovered by listSkills too.
   mkdirSync(join(userDir, "zz-user-only"), { recursive: true });
@@ -185,6 +186,38 @@ description: user-only dir-form skill
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(userDir, { recursive: true, force: true });
+    rmSync(join(FAKE_HOME, ".claude"), { recursive: true, force: true });
+  }
+});
+
+await record("no-shadow rule: a frontmatter-less user copy never demotes a curated builtin", async () => {
+  const userDir = join(FAKE_HOME, ".claude", "skills");
+  // Plain Claude Code skill (no pp frontmatter) sharing a curated builtin's id —
+  // e.g. the dev machine's ~/.claude/skills/financial-frameworks. The builtin's
+  // injection metadata must survive.
+  mkdirSync(join(userDir, "financial-frameworks"), { recursive: true });
+  writeFileSync(join(userDir, "financial-frameworks", "SKILL.md"), skillMd(`
+name: financial-frameworks
+description: plain claude-code copy without pp keys
+`), "utf8");
+  try {
+    const resolved = getSkill({ id: "financial-frameworks", project_path: PROJECT });
+    assert.equal(resolved.origin, "builtin", "builtin wins over the frontmatter-less user copy");
+    assert.equal(resolved.injection, "generator", "curated injection metadata preserved");
+
+    const listed = listSkills({ project_path: PROJECT }).find((s) => s.id === "financial-frameworks");
+    assert.equal(listed.origin, "builtin");
+    assert.equal(listed.injection, "generator");
+
+    // A frontmatter-less copy with NO builtin counterpart still resolves normally.
+    writeFileSync(join(userDir, "zz-no-builtin.md"), skillMd(`
+name: zz-no-builtin
+description: user-only, no pp keys, no builtin twin
+`), "utf8");
+    const solo = getSkill({ id: "zz-no-builtin", project_path: PROJECT });
+    assert.equal(solo.origin, "user");
+    assert.equal(solo.injection, "none");
+  } finally {
     rmSync(join(FAKE_HOME, ".claude"), { recursive: true, force: true });
   }
 });

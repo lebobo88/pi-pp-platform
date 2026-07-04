@@ -3,7 +3,7 @@ import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const DAEMON_ORIGIN = "http://127.0.0.1:7878";
+const DAEMON_ORIGIN = process.env.PP_DAEMON_ORIGIN ?? "http://127.0.0.1:7878";
 
 // Test config lives in vitest.config.ts — it uses vitest's own (vite@5) config
 // factory, kept separate so this file can stay bound to vite@6's plugin types.

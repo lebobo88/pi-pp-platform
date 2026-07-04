@@ -4,7 +4,11 @@
  * plus injection metadata describing which generator stages they apply to.
  * Resolution mirrors teams.ts / agents-library.ts:
  * project `.claude/skills` → user `~/.claude/skills` → built-in assets/skills
- * (PP_ASSETS_DIR override), first-resolution wins. Both flat `<id>.md` files
+ * (PP_ASSETS_DIR override), first-resolution wins — with one carve-out: a
+ * project/user copy that carries NO pp skill frontmatter (no injection /
+ * applies_to_* / priority / max_chars keys, i.e. a plain Claude Code skill
+ * that happens to share an id) does not shadow a curated built-in; the
+ * built-in wins so its injection metadata survives. Both flat `<id>.md` files
  * AND `<id>/SKILL.md` directories are accepted at every level (Claude Code
  * ships both shapes). Resolved skills are cached in the `skills` SQLite table;
  * `getSkill` always re-reads from disk to honor edits (same as team_get).
@@ -113,6 +117,22 @@ function toSummary(spec: SkillSpec): SkillSummary {
   return { id, name, description, origin, injection, applies_to_stages, applies_to_agents, applies_to_profiles, priority };
 }
 
+/**
+ * True when the frontmatter carries any pp skill key. Copies without one are
+ * plain Claude Code skills; they never shadow a curated built-in of the same id.
+ */
+function hasPpSkillFrontmatter(fm: FlatFrontmatter): boolean {
+  return (
+    fm.injection !== undefined ||
+    fm.applies_to_stages !== undefined ||
+    fm.applies_to_agents !== undefined ||
+    fm.applies_to_profiles !== undefined ||
+    fm.applies_to_gate_types !== undefined ||
+    fm.priority !== undefined ||
+    fm.max_chars !== undefined
+  );
+}
+
 /** `<dir>/<id>.md` (flat) or `<dir>/<id>/SKILL.md` (directory form). */
 function skillPathIn(dir: string, id: string): string | null {
   const flat = join(dir, `${id}.md`);
@@ -124,6 +144,9 @@ function skillPathIn(dir: string, id: string): string | null {
 
 export function listSkills(opts: { project_path?: string } = {}): SkillSummary[] {
   const seen = new Map<string, SkillSummary>();
+  // Non-builtin entries with no pp frontmatter only hold their slot until a
+  // curated built-in of the same id shows up (see module doc).
+  const provisional = new Set<string>();
   for (const { dir, origin } of skillsDirCandidates(opts.project_path)) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir)) {
@@ -140,10 +163,12 @@ export function listSkills(opts: { project_path?: string } = {}): SkillSummary[]
           if (!statSync(join(dir, entry)).isDirectory() || !existsSync(path)) continue;
         } catch { continue; }
       }
-      if (seen.has(id)) continue;          // first-resolution wins
+      if (seen.has(id) && !(origin === "builtin" && provisional.has(id))) continue; // first-resolution wins
       try {
         const { frontmatter, body } = parseFrontmatter(readFileSync(path, "utf8"));
         seen.set(id, toSummary(toSpec(id, origin, frontmatter, body)));
+        if (origin !== "builtin" && !hasPpSkillFrontmatter(frontmatter)) provisional.add(id);
+        else provisional.delete(id);
       } catch { /* ignore */ }
     }
   }
@@ -153,17 +178,28 @@ export function listSkills(opts: { project_path?: string } = {}): SkillSummary[]
 export function getSkill(opts: { id: string; project_path?: string }): SkillSpec | null {
   // Ids come off the wire — reject anything that could escape the skill dirs.
   if (!/^[\w.-]+$/.test(opts.id)) return null;
+  // A frontmatter-less project/user copy is held back in case a curated
+  // built-in exists (same rule as listSkills).
+  let provisional: { origin: SkillOrigin; text: string; frontmatter: FlatFrontmatter; body: string } | null = null;
   for (const { dir, origin } of skillsDirCandidates(opts.project_path)) {
     const path = skillPathIn(dir, opts.id);
     if (!path) continue;
     try {
       const text = readFileSync(path, "utf8");
       const { frontmatter, body } = parseFrontmatter(text);
+      if (origin !== "builtin" && !hasPpSkillFrontmatter(frontmatter)) {
+        provisional ??= { origin, text, frontmatter, body };
+        continue;
+      }
       cacheSkillRow(opts.id, origin, text);
       return toSpec(opts.id, origin, frontmatter, body);
     } catch {
       continue;
     }
+  }
+  if (provisional) {
+    cacheSkillRow(opts.id, provisional.origin, provisional.text);
+    return toSpec(opts.id, provisional.origin, provisional.frontmatter, provisional.body);
   }
   return null;
 }
