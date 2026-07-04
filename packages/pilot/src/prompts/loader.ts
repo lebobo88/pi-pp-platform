@@ -15,7 +15,6 @@
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLAUDE_TIER_MODELS, type ClaudeTier } from "@pp/core";
 
@@ -57,8 +56,14 @@ export type RoleFrontmatter = {
   tools?: string;
 };
 
-/** Which layer of the override chain a role prompt resolved from. */
-export type RolePromptOrigin = "project" | "user" | "builtin";
+/**
+ * Which layer of the override chain a role prompt resolved from. There is
+ * deliberately NO user (`~/.claude/agents`) layer: unlike skills, role
+ * prompts carry no discriminating frontmatter, so any Claude Code user agent
+ * sharing a role name (AgentSmith installs engineer.md, architect.md, … at
+ * user scope) would silently replace pp's vetted generator prompts.
+ */
+export type RolePromptOrigin = "project" | "builtin";
 
 export type RolePrompt = {
   role: string;
@@ -71,7 +76,7 @@ export type RolePrompt = {
   execution: ExecutionMode;
   /** The prompt body with Claude-Code-specific procedure stripped. */
   cleanedBody: string;
-  /** project `.claude/agents` → user `~/.claude/agents` → builtin agents-src. */
+  /** project `.claude/agents` → builtin agents-src (no user layer). */
   origin: RolePromptOrigin;
 };
 
@@ -197,8 +202,11 @@ function assetsDir(...parts: string[]): string {
  *   1. `<projectPath>/.claude/agents/<role>.md` — project override (written
  *      by an evolution commit on a `resource:pp.stage-prompt.*` proposal,
  *      or authored by hand)
- *   2. `~/.claude/agents/<role>.md`             — user override
- *   3. `assets/agents-src/<role>.md`            — repo builtin
+ *   2. `assets/agents-src/<role>.md`            — repo builtin
+ *
+ * There is deliberately NO `~/.claude/agents` layer (see RolePromptOrigin):
+ * a Claude Code user agent sharing a role name must never replace a vetted
+ * generator prompt. Evolution commits write project scope only.
  *
  * Without `opts.projectPath` the project layer is skipped; fixtures with no
  * override files resolve to the builtin exactly as before.
@@ -208,7 +216,6 @@ export function loadRolePrompt(role: string, opts: { projectPath?: string } = {}
   if (opts.projectPath) {
     candidates.push({ path: join(opts.projectPath, ".claude", "agents", `${role}.md`), origin: "project" });
   }
-  candidates.push({ path: join(homedir(), ".claude", "agents", `${role}.md`), origin: "user" });
   candidates.push({ path: join(agentsSrcDir(), `${role}.md`), origin: "builtin" });
 
   const found = candidates.find((c) => existsSync(c.path));

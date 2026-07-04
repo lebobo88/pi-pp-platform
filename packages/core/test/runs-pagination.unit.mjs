@@ -146,6 +146,18 @@ await record("default limit 50 / max 500 preserved", async () => {
   assert.equal(clamped.items.length, 12, "oversized limit clamps instead of erroring");
 });
 
+await record("non-finite limit falls back to the default (GET /runs?limit=abc must not 500)", async () => {
+  // Number("abc") → NaN used to reach the SQL LIMIT bind as NULL → SQLite
+  // datatype mismatch. Non-finite values now take the default instead.
+  const nan = runs.listRuns({ limit: Number("abc") });
+  assert.equal(nan.items.length, 12, "NaN limit behaves like the default");
+  assert.equal(nan.next_cursor, null);
+  const inf = runs.listRuns({ limit: Infinity });
+  assert.equal(inf.items.length, 12, "Infinity limit behaves like the default");
+  const frac = runs.listRuns({ limit: 2.5 });
+  assert.equal(frac.items.length, 2, "fractional limit truncates to an integer");
+});
+
 console.log();
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

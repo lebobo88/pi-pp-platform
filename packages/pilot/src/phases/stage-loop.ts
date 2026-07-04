@@ -63,20 +63,24 @@ const ARTIFACT_KIND_BY_KIND: Record<string, string> = {
 /** Default total budget (chars) for skill bodies injected into one prompt. */
 const SKILLS_BUDGET_CHARS_DEFAULT = 24_000;
 
-type SkillsSelection = {
+export type SkillsSelection = {
   injected: Array<{ id: string; name: string; body: string }>;
   skipped: string[];
 };
 
 /**
- * Select + budget the skills for a generator stage. The core selector returns
- * priority-ordered specs but does NOT truncate bodies — the injector enforces
- * both the per-skill max_chars and the total PP_SKILLS_BUDGET_CHARS budget
- * (default 24000) here. Deterministic: skills are taken in selector order
- * (priority asc, id asc); the first one that no longer fits exhausts the
- * budget and everything after it is skipped.
+ * Select + budget the skills for a generator stage (shared with best-of.ts so
+ * candidate prompts carry the same skills a single-attempt stage would). The
+ * core selector returns priority-ordered specs but does NOT truncate bodies —
+ * the injector enforces both the per-skill max_chars and the total
+ * PP_SKILLS_BUDGET_CHARS budget (default 24000) here. Deterministic: skills
+ * are taken in selector order (priority asc, id asc); the first one that no
+ * longer fits exhausts the budget and everything after it is skipped.
+ * Explicit team-yaml ids that fail to resolve are reported as skipped — this
+ * is where stale stage.skills references surface (the team loader does not
+ * validate them).
  */
-function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSelection {
+export function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSelection {
   const specs = selectSkillsForStage({
     stage_kind: stage.kind,
     agent: stage.agent,
@@ -99,6 +103,10 @@ function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSelection {
     }
     remaining -= body.length;
     injected.push({ id: spec.id, name: spec.name, body });
+  }
+  // Unresolvable explicit ids (never selected, so never budgeted).
+  for (const id of stage.skills ?? []) {
+    if (!specs.some((s) => s.id === id) && !skipped.includes(id)) skipped.push(id);
   }
   return { injected, skipped };
 }

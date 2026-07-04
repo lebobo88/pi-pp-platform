@@ -7,7 +7,9 @@
 //    real bucket (zero fall into "other")
 //  - agentTeamIndex correctness for feature-team's stage generators
 //  - getAgent detail (frontmatter-stripped body, tier derivation, teams)
-//  - precedence: project override → user → built-in
+//  - precedence: project override → built-in; the user layer (~/.claude/agents)
+//    is deliberately IGNORED (role prompts have no discriminating frontmatter,
+//    so a Claude Code user agent must never shadow a vetted prompt)
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
@@ -21,10 +23,9 @@ process.env.PP_HOME = SUITE_DIR;
 process.env.EIGHTS_SKIP_AUDIT_CHECK = "1";
 process.env.PP_SKIP_CLI_VERSIONS = "1";
 
-// Isolate the user scope: the developer machine may have ~/.claude/agents
-// installed (AgentSmith), which would shadow the built-ins under test. Both
-// teams.ts (USER_TEAMS_DIR, bound at import) and agents-library.ts (homedir()
-// per call) read the home dir, so this must happen BEFORE the dist imports.
+// Isolate the user scope: teams.ts (USER_TEAMS_DIR, bound at import) still
+// reads the home dir, and the no-user-layer test below needs a home dir it
+// owns, so this must happen BEFORE the dist imports.
 const FAKE_HOME = mkdtempSync(join(tmpdir(), "pp-agents-home-"));
 process.env.USERPROFILE = FAKE_HOME;
 process.env.HOME = FAKE_HOME;
@@ -159,7 +160,7 @@ await record("getAgent returns a frontmatter-stripped body, tier, and teams", as
   }
 });
 
-await record("resolution precedence: project overrides user overrides built-in", async () => {
+await record("resolution precedence: project overrides built-in; the user layer is ignored", async () => {
   const { getAgent, listAgents } = await importDist("orchestrator/agents-library.js");
   const project = mkdtempSync(join(tmpdir(), "pp-agents-proj-"));
   const projectAgentsDir = join(project, ".claude", "agents");
@@ -169,8 +170,10 @@ await record("resolution precedence: project overrides user overrides built-in",
   try {
     writeFileSync(join(projectAgentsDir, "engineer.md"),
       "---\nname: engineer-custom\ndescription: project-scope override\nmodel: haiku\n---\n\nOverride body.\n", "utf8");
-    writeFileSync(join(userAgentsDir, "engineer.md"),
-      "---\nname: engineer-user\ndescription: user-scope override\n---\n\nUser body.\n", "utf8");
+    // A ~/.claude/agents copy (what AgentSmith installs on real machines)
+    // must NEVER shadow a vetted prompt — the user layer does not exist.
+    writeFileSync(join(userAgentsDir, "architect.md"),
+      "---\nname: architect-user\ndescription: user-scope impostor\n---\n\nUser body.\n", "utf8");
     writeFileSync(join(userAgentsDir, "zz-user-only.md"),
       "---\nname: zz-user-only\ndescription: user-only extra\n---\n\nUser-only body.\n", "utf8");
 
@@ -180,13 +183,15 @@ await record("resolution precedence: project overrides user overrides built-in",
     assert.equal(overridden.tier, "haiku");
     assert.equal(overridden.body.trim(), "Override body.");
 
-    const userScope = getAgent({ id: "engineer" });   // no project → user wins
-    assert.equal(userScope.origin, "user");
-    assert.equal(userScope.name, "engineer-user");
+    const architect = getAgent({ id: "architect", project_path: project });
+    assert.equal(architect.origin, "builtin", "user copy never shadows the builtin");
+    assert.notEqual(architect.name, "architect-user");
+    const architectNoProject = getAgent({ id: "architect" });   // no project → builtin, still not user
+    assert.equal(architectNoProject.origin, "builtin");
 
     const agents = listAgents({ project_path: project });
     assert.equal(agents.find((a) => a.id === "engineer").origin, "project");
-    assert.equal(agents.find((a) => a.id === "zz-user-only").origin, "user");
+    assert.equal(agents.find((a) => a.id === "zz-user-only"), undefined, "user-only agents are not listed");
     assert.equal(agents.find((a) => a.id === "ceo").origin, "builtin");
   } finally {
     rmSync(project, { recursive: true, force: true });

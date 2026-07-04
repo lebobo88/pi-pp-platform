@@ -7,7 +7,6 @@ export const qk = {
   project: (path: string) => ["projects", path] as const,
   projectDoc: (path: string, doc: string) => ["projects", path, "doc", doc] as const,
 
-  runs: (filter?: unknown) => ["runs", filter ?? {}] as const,
   runsInfinite: (filter?: unknown) => ["runs", "infinite", filter ?? {}] as const,
   run: (runId: string) => ["runs", "detail", runId] as const,
   runReplay: (runId: string) => ["runs", "replay", runId] as const,

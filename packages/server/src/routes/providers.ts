@@ -76,13 +76,14 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
   });
 
   app.post(`${V1}/providers/:vendor/models/refresh`, async (req, reply) => {
-    // Re-fetch the live model list for a dynamic provider (static providers
-    // return their built-in list unchanged).
+    // Re-fetch the live model list for a dynamic provider. `refreshed` is
+    // honest: false when the provider is static or the live fetch failed
+    // (the static built-in list is returned in both cases).
     const vendor = (req.params as { vendor: string }).vendor;
     const known = listPiModels(vendor).length > 0 || visibleProviders(storage).includes(vendor);
     if (!known) return reply.code(404).send({ error: "unknown provider" });
-    const models = await refreshPiModels(vendor);
-    return { provider: vendor, refreshed: true, models: models.map((m) => m.id) };
+    const { models, refreshed } = await refreshPiModels(vendor);
+    return { provider: vendor, refreshed, models: models.map((m) => m.id) };
   });
 
   app.post(`${V1}/providers/:vendor/test`, async (req, reply) => {

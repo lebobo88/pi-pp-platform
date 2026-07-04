@@ -1,10 +1,13 @@
 /**
  * A5 — role-prompt override chain.
  *
- * loadRolePrompt resolves project `.claude/agents/<role>.md` → user
- * `~/.claude/agents/<role>.md` → builtin assets/agents-src, first hit wins,
- * and reports the layer via `origin`. The project layer is what an evolution
- * commit on a `resource:pp.stage-prompt.*` proposal writes.
+ * loadRolePrompt resolves project `.claude/agents/<role>.md` → builtin
+ * assets/agents-src, first hit wins, and reports the layer via `origin`. The
+ * project layer is what an evolution commit on a `resource:pp.stage-prompt.*`
+ * proposal writes. There is deliberately NO user (~/.claude/agents) layer:
+ * role prompts carry no discriminating frontmatter, so a Claude Code user
+ * agent sharing a role name (AgentSmith installs engineer.md etc. at user
+ * scope) must never silently replace a vetted generator prompt.
  *
  * Also pins the caller wiring: a run's generator prompt is built from the
  * project override when one exists (stage-loop passes ctx.projectPath).
@@ -20,10 +23,8 @@ import { RunPilot, EventBus } from "../src/index.js";
 import { loadRolePrompt } from "../src/prompts/loader.js";
 import { makeTempProject, makeScriptedEngine } from "./helpers.js";
 
-// Isolate the user scope (dev machines have ~/.claude/agents installed via
-// AgentSmith, which would shadow the builtins under test) — same pattern as
-// skills-injection.test.ts. The vitest config already fakes the home dir for
-// all workers; this per-file fake gives the user-layer test a dir it owns.
+// Fake the home dir so the no-user-layer test below owns a ~/.claude/agents
+// it can write impostor files into — same pattern as skills-injection.test.ts.
 const FAKE_HOME = mkdtempSync(join(tmpdir(), "pp-pilot-agents-home-"));
 const SAVED_ENV = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
 
@@ -68,14 +69,16 @@ describe("loadRolePrompt override chain", () => {
     expect(role.execution).toBe("completion");
   });
 
-  it("the user layer is consulted after project, before builtin", () => {
+  it("a ~/.claude/agents copy is IGNORED — no user layer in the chain", () => {
     const projectPath = mkdtempSync(join(tmpdir(), "pp-agents-proj-"));
+    // What AgentSmith installs at user scope on real machines: same role name,
+    // arbitrary body. It must never replace the vetted builtin prompt.
     writeAgent(FAKE_HOME, "docs-author", "USER-OVERRIDE-PROMPT-MARKER");
-    const userScoped = loadRolePrompt("docs-author", { projectPath });
-    expect(userScoped.origin).toBe("user");
-    expect(userScoped.cleanedBody).toContain("USER-OVERRIDE-PROMPT-MARKER");
+    const role = loadRolePrompt("docs-author", { projectPath });
+    expect(role.origin).toBe("builtin");
+    expect(role.cleanedBody).not.toContain("USER-OVERRIDE-PROMPT-MARKER");
 
-    // Project beats user when both exist.
+    // A project override still beats the builtin (the user copy stays inert).
     writeAgent(FAKE_HOME, "engineer", "USER-ENGINEER-MARKER");
     writeAgent(projectPath, "engineer", "PROJECT-ENGINEER-MARKER");
     const both = loadRolePrompt("engineer", { projectPath });

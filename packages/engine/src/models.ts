@@ -156,19 +156,31 @@ export function providersWithCredential(storage: AuthStorage, candidates?: strin
   return out;
 }
 
+/** Result of `refreshPiModels`: the model list plus whether a live refresh ran. */
+export interface PiModelRefreshResult {
+  models: PiModelInfo[];
+  /** True only when the provider supports live discovery AND the fetch succeeded. */
+  refreshed: boolean;
+}
+
 /**
  * Best-effort live model refresh for a dynamic provider (fetches the latest
  * model list from the endpoint when a credential is present). Returns the
- * refreshed model list, or the static list when the provider is static / offline.
+ * refreshed model list with `refreshed: true`, or the static list with
+ * `refreshed: false` when the provider is static / offline.
  */
-export async function refreshPiModels(provider: string): Promise<PiModelInfo[]> {
+export async function refreshPiModels(provider: string): Promise<PiModelRefreshResult> {
+  let refreshed = false;
   try {
     const prov = models().getProvider(provider) as
       | { refreshModels?: () => Promise<unknown> }
       | undefined;
-    if (prov?.refreshModels) await prov.refreshModels();
+    if (prov?.refreshModels) {
+      await prov.refreshModels();
+      refreshed = true;
+    }
   } catch {
     /* refresh unsupported / offline — fall back to the static catalog */
   }
-  return listPiModels(provider);
+  return { models: listPiModels(provider), refreshed };
 }

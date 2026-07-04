@@ -100,6 +100,8 @@ await record("getSkill returns the full spec (body, version, max_chars, defaults
 await record("path traversal ids must not resolve", async () => {
   assert.equal(getSkill({ id: "../teams/feature-team", project_path: PROJECT }), null);
   assert.equal(getSkill({ id: "..", project_path: PROJECT }), null);
+  assert.equal(getSkill({ id: "...", project_path: PROJECT }), null, "pure-dot ids never resolve (dir form would escape)");
+  assert.equal(getSkill({ id: ".", project_path: PROJECT }), null);
   assert.equal(getSkill({ id: "a/b", project_path: PROJECT }), null);
 });
 
@@ -219,6 +221,71 @@ description: user-only, no pp keys, no builtin twin
     assert.equal(solo.injection, "none");
   } finally {
     rmSync(join(FAKE_HOME, ".claude"), { recursive: true, force: true });
+  }
+});
+
+await record("list/detail agreement: a curated user copy replaces a frontmatter-less project copy in BOTH", async () => {
+  // Project ships a plain Claude Code copy (no pp keys); user ships the
+  // curated copy. The single resolver must give the same answer to listSkills,
+  // getSkill AND selectSkillsForStage: user origin, injection:generator.
+  const projectDir = join(PROJECT, ".claude", "skills");
+  const userDir = join(FAKE_HOME, ".claude", "skills");
+  mkdirSync(projectDir, { recursive: true });
+  mkdirSync(userDir, { recursive: true });
+  writeFileSync(join(projectDir, "zz-shared.md"), skillMd(`
+name: zz-shared
+description: plain project copy without pp keys
+`), "utf8");
+  writeFileSync(join(userDir, "zz-shared.md"), skillMd(`
+name: zz-shared
+description: curated user copy
+injection: generator
+applies_to_stages: code
+applies_to_agents: engineer
+`), "utf8");
+  try {
+    const detail = getSkill({ id: "zz-shared", project_path: PROJECT });
+    assert.equal(detail.origin, "user", "detail: curated user copy wins over the provisional project copy");
+    assert.equal(detail.injection, "generator");
+
+    const listed = listSkills({ project_path: PROJECT }).find((s) => s.id === "zz-shared");
+    assert.equal(listed.origin, "user", "list agrees with detail");
+    assert.equal(listed.injection, "generator");
+
+    const selected = selectSkillsForStage({ stage_kind: "code", agent: "engineer", project_path: PROJECT });
+    assert.ok(selected.some((s) => s.id === "zz-shared"), "selection uses the curated copy's metadata");
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(join(FAKE_HOME, ".claude"), { recursive: true, force: true });
+  }
+});
+
+await record("within one dir the flat <id>.md beats <id>/SKILL.md regardless of readdir order", async () => {
+  const projectDir = join(PROJECT, ".claude", "skills");
+  // "aa-both" sorts the DIRECTORY entry first in readdir; the flat file must
+  // still win (skillPathIn's preference, now honored by listSkills too).
+  mkdirSync(join(projectDir, "aa-both"), { recursive: true });
+  writeFileSync(join(projectDir, "aa-both", "SKILL.md"), skillMd(`
+name: aa-both
+description: dir form
+injection: generator
+priority: 20
+`, "DIR BODY.\n"), "utf8");
+  writeFileSync(join(projectDir, "aa-both.md"), skillMd(`
+name: aa-both
+description: flat form
+injection: generator
+priority: 10
+`, "FLAT BODY.\n"), "utf8");
+  try {
+    const detail = getSkill({ id: "aa-both", project_path: PROJECT });
+    assert.equal(detail.priority, 10, "flat copy resolved");
+    assert.equal(detail.body.trim(), "FLAT BODY.");
+    const listed = listSkills({ project_path: PROJECT }).find((s) => s.id === "aa-both");
+    assert.equal(listed.description, "flat form", "list prefers the flat copy too");
+    assert.equal(listed.priority, 10);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
   }
 });
 

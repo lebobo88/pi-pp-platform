@@ -36,6 +36,7 @@ import {
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { generationModelIdForTier } from "../generation-model.js";
 import { loadRolePrompt, renderSystemPrompt } from "../prompts/loader.js";
+import { selectStageSkills } from "./stage-loop.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -106,6 +107,20 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
 
   const role = loadRolePrompt(stage.agent, { projectPath: ctx.projectPath });
 
+  // Skill injection (A1b): same selection + budgeting as the single-attempt
+  // stage loop, so a stage with skills promoted to best-of keeps them. Selected
+  // once per stage (every candidate gets the identical skills block); the
+  // observability event fires once per stage, not per candidate.
+  const skills = selectStageSkills(ctx, stage);
+  if (skills.injected.length > 0 || skills.skipped.length > 0) {
+    emit(ctx, "run.context", {
+      phase: "skills",
+      stage_kind: stage.kind,
+      injected: skills.injected.map((s) => s.id),
+      skipped: skills.skipped,
+    });
+  }
+
   // ── Generate every candidate (each in its own worktree, rotated model/seed).
   const cand: Cand[] = [];
   for (const c of candidates) {
@@ -125,6 +140,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       profileName: ctx.profileName,
       requestText: ctx.requestText,
       execution: "session-coding",
+      skills: skills.injected.map((s) => ({ name: s.name, body: s.body })),
     });
     const genProvider = providerForModel(rot.model_id);
     if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {

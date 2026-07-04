@@ -374,6 +374,10 @@ export type SkillInjection = "generator" | "judge" | "none";
  * project `.claude/skills` → user `~/.claude/skills` → built-in assets/skills,
  * first-resolution wins. Both flat `<id>.md` files and `<id>/SKILL.md`
  * directories are accepted at every level.
+ *
+ * Carve-out: a project/user copy without pp skill frontmatter is a plain
+ * Claude Code skill — it never shadows a curated built-in of the same id
+ * (the curated skill still wins).
  */
 export interface SkillSummary {
   /** Skill slug — the filename without `.md` (or the `<id>/SKILL.md` dirname). */
@@ -718,6 +722,11 @@ export interface ProviderTestResult {
  */
 export interface ProviderModelsRefreshResponse {
   provider: string;
+  /**
+   * True only when a LIVE discovery actually ran (the provider supports
+   * dynamic model refresh and the fetch succeeded). False when the provider
+   * is static or the refresh failed — `models` then carries the built-in list.
+   */
   refreshed: boolean;
   models: string[];
 }
@@ -1082,6 +1091,8 @@ export const apiPaths = {
 
   runs: `${API_BASE}/runs`,
   run: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}`,
+  /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
+   *  the bearer as `?token=` — EventSource cannot send headers. */
   runEvents: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
   runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
@@ -1139,7 +1150,8 @@ export const apiPaths = {
   /** Fetch a file/artifact body by its (project-relative) path. */
   content: (path: string) => `${API_BASE}/content?path=${encodeURIComponent(path)}`,
 
-  /** Global SSE stream. */
+  /** Global SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
+   *  the bearer as `?token=` — EventSource cannot send headers. */
   events: `${API_BASE}/events`,
 } as const;
 

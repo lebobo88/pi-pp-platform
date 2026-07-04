@@ -1,13 +1,17 @@
 /**
  * Agents library. Lists and resolves the agent prompt files that define the
- * platform's sub-agent roster. Resolution mirrors teams.ts:
- * project → user → built-in (assets/agents-src, PP_ASSETS_DIR override).
+ * platform's sub-agent roster. Resolution:
+ * project `.claude/agents` → built-in (assets/agents-src, PP_ASSETS_DIR
+ * override). There is deliberately NO user (`~/.claude/agents`) layer:
+ * unlike skills, role prompts carry no discriminating frontmatter, so any
+ * Claude Code user agent sharing a role name (AgentSmith installs
+ * engineer.md, architect.md, … at user scope) would silently replace pp's
+ * vetted generator prompts. Evolution commits write project scope only.
  * Read-only: unlike teams there is no DB cache — prompts are re-read from
  * disk on every call to honor edits.
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLAUDE_TIER_MODELS, isClaudeTier, type ClaudeTier } from "../config.js";
@@ -19,7 +23,8 @@ export const AGENT_CATEGORIES = [
 ] as const;
 export type AgentCategory = typeof AGENT_CATEGORIES[number];
 
-export type AgentOrigin = "project" | "user" | "builtin";
+/** No "user" layer — see the module doc. */
+export type AgentOrigin = "project" | "builtin";
 
 export type AgentSummary = {
   /** Role slug — the prompt filename without `.md`. */
@@ -58,7 +63,6 @@ function builtinAgentsDir(): string {
 export function agentsDirCandidates(projectPath?: string): Array<{ dir: string; origin: AgentOrigin }> {
   const candidates: Array<{ dir: string; origin: AgentOrigin }> = [];
   if (projectPath) candidates.push({ dir: join(projectPath, ".claude", "agents"), origin: "project" });
-  candidates.push({ dir: join(homedir(), ".claude", "agents"), origin: "user" });
   candidates.push({ dir: builtinAgentsDir(), origin: "builtin" });
   return candidates;
 }

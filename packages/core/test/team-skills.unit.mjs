@@ -2,9 +2,11 @@
 //
 // Covers:
 //  - stage.skills parses through getTeam (yaml list of ids)
-//  - a resolvable skill id (project scope) loads with NO warning
-//  - an unresolvable id warns via console.warn but does NOT hard-fail the team
-//    (warn-only validation; the harness tolerates extra/unknown yaml fields)
+//  - getTeam does NOT resolve skill ids: no console.warn and no hard-fail even
+//    for an unresolvable id. Resolution moved off the read path entirely
+//    (getSkill writes the SQLite cache — a per-call write on every team_get
+//    risked SQLITE_BUSY under a live run); stale ids surface at injection
+//    time via the stage loop's run.context {phase:"skills"} skipped list.
 
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -81,7 +83,7 @@ stages:
   }
 });
 
-test("an unresolvable skill id warns but the team still loads (warn-only)", () => {
+test("an unresolvable skill id neither warns nor fails — validation is off the read path", () => {
   const project = makeProject();
   try {
     writeFileSync(
@@ -101,9 +103,7 @@ stages:
     const { result, warnings } = withWarnCapture(() => getTeam({ name: "stale-team", project_path: project }));
     assert.ok(result, "team loads despite the stale skill reference");
     assert.deepEqual(result.team.stages[0].skills, ["no-such-skill"], "field passes through untouched");
-    assert.equal(warnings.length, 1, `exactly one warning, got: ${warnings.join(" | ")}`);
-    assert.ok(warnings[0].includes("no-such-skill"), "warning names the offending id");
-    assert.ok(warnings[0].includes('stage "code"'), "warning names the stage");
+    assert.deepEqual(warnings, [], `no warning on the getTeam read path, got: ${warnings.join(" | ")}`);
   } finally {
     rmSync(project, { recursive: true, force: true });
   }

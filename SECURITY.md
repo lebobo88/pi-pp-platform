@@ -27,5 +27,21 @@ Things worth knowing when deploying:
 - **Budgets and kill switches** (`PP_DISABLE_<PROVIDER>`, budget caps with
   tripwires) bound spend, not security.
 
+## SSE `?token=` tradeoff
+
+`EventSource` cannot send headers, so the two SSE streams accept the bearer as
+a `?token=` query parameter. That puts the token in stream URLs, where it can
+end up in access logs, browser history, and HAR captures — keep those private,
+and prefer `Authorization: Bearer` header auth for every non-SSE client (only
+the two `/events` endpoints honor `?token=` at all).
+
+## Local trust model
+
+Evolution commits and `.harness/missability-overrides.json` are project-scoped
+operator overrides: they change the prompts, rubrics, and gate checks used by
+future runs in that project. Anything with write access to a project directory
+can therefore influence how later runs behave — treat registered project
+directories (and anything you allow to write into them) as trusted inputs.
+
 See [docs/DEPLOY.md](docs/DEPLOY.md) for the hardened/containerized deployment
 path.

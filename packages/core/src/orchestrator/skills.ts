@@ -5,13 +5,17 @@
  * Resolution mirrors teams.ts / agents-library.ts:
  * project `.claude/skills` → user `~/.claude/skills` → built-in assets/skills
  * (PP_ASSETS_DIR override), first-resolution wins — with one carve-out: a
- * project/user copy that carries NO pp skill frontmatter (no injection /
+ * non-builtin copy that carries NO pp skill frontmatter (no injection /
  * applies_to_* / priority / max_chars keys, i.e. a plain Claude Code skill
- * that happens to share an id) does not shadow a curated built-in; the
- * built-in wins so its injection metadata survives. Both flat `<id>.md` files
- * AND `<id>/SKILL.md` directories are accepted at every level (Claude Code
- * ships both shapes). Resolved skills are cached in the `skills` SQLite table;
- * `getSkill` always re-reads from disk to honor edits (same as team_get).
+ * that happens to share an id) is only PROVISIONAL: it is replaced by the
+ * next copy of the same id that has pp frontmatter or is builtin, so curated
+ * injection metadata always survives. Both flat `<id>.md` files AND
+ * `<id>/SKILL.md` directories are accepted at every level (Claude Code ships
+ * both shapes); within one dir the flat file wins. listSkills / getSkill /
+ * selectSkillsForStage all share ONE resolver (resolveAllSkills) so list and
+ * detail can never disagree; every call re-reads from disk to honor edits
+ * (same as team_get). Resolved skills are cached in the `skills` SQLite table
+ * on the getSkill path only.
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -142,66 +146,71 @@ function skillPathIn(dir: string, id: string): string | null {
   return null;
 }
 
-export function listSkills(opts: { project_path?: string } = {}): SkillSummary[] {
-  const seen = new Map<string, SkillSummary>();
-  // Non-builtin entries with no pp frontmatter only hold their slot until a
-  // curated built-in of the same id shows up (see module doc).
+type ResolvedSkill = { spec: SkillSpec; md_text: string };
+
+/**
+ * THE resolver — the single source of truth shared by listSkills / getSkill /
+ * selectSkillsForStage. Walks the three layers once (project → user →
+ * builtin); within one dir the flat `<id>.md` wins over `<id>/SKILL.md`
+ * (skillPathIn's preference, regardless of readdir order). One shadowing
+ * rule: first resolution wins, EXCEPT a non-builtin copy with no pp skill
+ * frontmatter is provisional — it is replaced by the next copy of the same
+ * id that has pp frontmatter or is builtin (a frontmatter-less copy never
+ * shadows a curated/builtin copy).
+ */
+function resolveAllSkills(project_path?: string): Map<string, ResolvedSkill> {
+  const resolved = new Map<string, ResolvedSkill>();
   const provisional = new Set<string>();
-  for (const { dir, origin } of skillsDirCandidates(opts.project_path)) {
+  for (const { dir, origin } of skillsDirCandidates(project_path)) {
     if (!existsSync(dir)) continue;
+    // Collect the ids present in this dir (both shapes), then resolve each
+    // through skillPathIn so the flat file is preferred within the dir.
+    const ids = new Set<string>();
     for (const entry of readdirSync(dir)) {
-      let id: string;
-      let path: string;
       if (entry.endsWith(".md")) {
-        id = entry.replace(/\.md$/, "");
-        path = join(dir, entry);
+        ids.add(entry.replace(/\.md$/, ""));
       } else {
-        // Directory form: <id>/SKILL.md.
-        id = entry;
-        path = join(dir, entry, "SKILL.md");
         try {
-          if (!statSync(join(dir, entry)).isDirectory() || !existsSync(path)) continue;
-        } catch { continue; }
+          if (statSync(join(dir, entry)).isDirectory() && existsSync(join(dir, entry, "SKILL.md"))) ids.add(entry);
+        } catch { /* ignore */ }
       }
-      if (seen.has(id) && !(origin === "builtin" && provisional.has(id))) continue; // first-resolution wins
+    }
+    for (const id of ids) {
+      const path = skillPathIn(dir, id);
+      if (!path) continue;
       try {
-        const { frontmatter, body } = parseFrontmatter(readFileSync(path, "utf8"));
-        seen.set(id, toSummary(toSpec(id, origin, frontmatter, body)));
-        if (origin !== "builtin" && !hasPpSkillFrontmatter(frontmatter)) provisional.add(id);
-        else provisional.delete(id);
+        const md_text = readFileSync(path, "utf8");
+        const { frontmatter, body } = parseFrontmatter(md_text);
+        const curated = origin === "builtin" || hasPpSkillFrontmatter(frontmatter);
+        if (resolved.has(id)) {
+          // First resolution wins unless the held entry is provisional and
+          // this copy is curated (pp frontmatter or builtin).
+          if (!provisional.has(id) || !curated) continue;
+        }
+        resolved.set(id, { spec: toSpec(id, origin, frontmatter, body), md_text });
+        if (curated) provisional.delete(id);
+        else provisional.add(id);
       } catch { /* ignore */ }
     }
   }
-  return [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
+  return resolved;
+}
+
+export function listSkills(opts: { project_path?: string } = {}): SkillSummary[] {
+  return [...resolveAllSkills(opts.project_path).values()]
+    .map((r) => toSummary(r.spec))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function getSkill(opts: { id: string; project_path?: string }): SkillSpec | null {
   // Ids come off the wire — reject anything that could escape the skill dirs.
-  if (!/^[\w.-]+$/.test(opts.id)) return null;
-  // A frontmatter-less project/user copy is held back in case a curated
-  // built-in exists (same rule as listSkills).
-  let provisional: { origin: SkillOrigin; text: string; frontmatter: FlatFrontmatter; body: string } | null = null;
-  for (const { dir, origin } of skillsDirCandidates(opts.project_path)) {
-    const path = skillPathIn(dir, opts.id);
-    if (!path) continue;
-    try {
-      const text = readFileSync(path, "utf8");
-      const { frontmatter, body } = parseFrontmatter(text);
-      if (origin !== "builtin" && !hasPpSkillFrontmatter(frontmatter)) {
-        provisional ??= { origin, text, frontmatter, body };
-        continue;
-      }
-      cacheSkillRow(opts.id, origin, text);
-      return toSpec(opts.id, origin, frontmatter, body);
-    } catch {
-      continue;
-    }
-  }
-  if (provisional) {
-    cacheSkillRow(opts.id, provisional.origin, provisional.text);
-    return toSpec(opts.id, provisional.origin, provisional.frontmatter, provisional.body);
-  }
-  return null;
+  // Require at least one word character so pure-dot ids ("..", "...") — which
+  // the dir form would join into an escape — never resolve.
+  if (!/^[\w.-]+$/.test(opts.id) || !/\w/.test(opts.id)) return null;
+  const resolved = resolveAllSkills(opts.project_path).get(opts.id);
+  if (!resolved) return null;
+  cacheSkillRow(opts.id, resolved.spec.origin, resolved.md_text);
+  return resolved.spec;
 }
 
 /** Empty list = unconstrained; "*" matches everything; else exact membership. */
@@ -215,7 +224,9 @@ function appliesTo(list: string[], value: string | undefined): boolean {
  * always included (regardless of injection/scoping — the caller asked for
  * them); otherwise a skill is selected when injection === "generator" AND
  * every non-empty applies_to_* list matches the stage context. Sorted
- * priority asc then id asc so injection order is deterministic.
+ * priority asc then id asc so injection order is deterministic. Filters the
+ * resolved specs in memory — one disk walk, no SQLite cache writes (this
+ * runs per stage on the generation hot path).
  */
 export function selectSkillsForStage(opts: {
   stage_kind: string;
@@ -225,16 +236,15 @@ export function selectSkillsForStage(opts: {
   project_path?: string;
   explicit?: string[];
 }): SkillSpec[] {
+  const resolved = resolveAllSkills(opts.project_path);
   const picked = new Map<string, SkillSpec>();
   for (const id of opts.explicit ?? []) {
-    const skill = getSkill({ id, project_path: opts.project_path });
+    const skill = resolved.get(id)?.spec;
     if (skill) picked.set(skill.id, skill);
   }
-  for (const summary of listSkills({ project_path: opts.project_path })) {
-    if (picked.has(summary.id)) continue;
-    if (summary.injection !== "generator") continue;
-    const skill = getSkill({ id: summary.id, project_path: opts.project_path });
-    if (!skill) continue;
+  for (const { spec: skill } of resolved.values()) {
+    if (picked.has(skill.id)) continue;
+    if (skill.injection !== "generator") continue;
     if (!appliesTo(skill.applies_to_stages, opts.stage_kind)) continue;
     if (!appliesTo(skill.applies_to_agents, opts.agent)) continue;
     if (!appliesTo(skill.applies_to_gate_types, opts.gate_type)) continue;

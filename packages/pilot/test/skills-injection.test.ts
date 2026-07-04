@@ -19,7 +19,7 @@ import { join } from "node:path";
 import type { Engine } from "@pp/engine";
 import type { VerdictOutcome } from "@pp/core";
 import { RunPilot, EventBus, type PilotEvent } from "../src/index.js";
-import { makeTempProject, makeScriptedEngine } from "./helpers.js";
+import { makeTempProject, makeScriptedEngine, makeBestOfEngine } from "./helpers.js";
 
 // Isolate the user skill scope: dev machines have ~/.claude/skills installed
 // (AgentSmith), which shadows the builtins and could leak injection:generator
@@ -41,6 +41,7 @@ afterAll(() => {
 
 afterEach(() => {
   delete process.env.PP_SKILLS_BUDGET_CHARS;
+  delete process.env.PP_ALLOW_BEST_OF_WITHOUT_JUDGE;
 });
 
 const REQUEST = "Add a greeting utility function to the project.";
@@ -183,6 +184,69 @@ describe("Skill injection — budget enforcement", () => {
       stage_kind: "spec",
       injected: ["first"],
       skipped: ["second"],
+    });
+  });
+});
+
+describe("Skill injection — best-of candidates", () => {
+  it("every candidate prompt carries the stage's skills; the event fires once per stage", async () => {
+    process.env.PP_ALLOW_BEST_OF_WITHOUT_JUDGE = "1";
+    const projectPath = makeTempProject();
+    writeSkill(
+      projectPath,
+      "best-of-skill",
+      "name: Best Of Skill\ndescription: best-of injection fixture\ninjection: none",
+      "BEST-OF-SKILL-BODY-MARKER: keep candidate diffs minimal.\n",
+    );
+
+    const prompts: string[] = [];
+    const base = makeBestOfEngine();
+    const engine: Engine = {
+      ...base,
+      runCodingSession: async (o) => {
+        prompts.push(o.systemPrompt);
+        return base.runCodingSession(o);
+      },
+    };
+    const bus = new EventBus();
+    const events: PilotEvent[] = [];
+    bus.subscribe((e) => events.push(e));
+
+    const pilot = new RunPilot({
+      projectPath,
+      requestText: REQUEST,
+      mode: "best_of",
+      n: 3,
+      engine,
+      bus,
+      stagesOverride: [
+        { kind: "code", gate_type: "code_style", agent: "engineer", bestOf: 3, skills: ["best-of-skill"] },
+      ],
+    });
+    await pilot.execute();
+    // The code stage itself passed (run-level gates may still surface the
+    // run, same as the e2e best-of suite — irrelevant to injection).
+    expect(
+      events.some((e) => e.type === "stage.finalized" && e.data?.status === "passed"),
+    ).toBe(true);
+
+    // All 3 candidate coding sessions rendered with the skills block —
+    // best-of must not silently drop a promoted stage's skills.
+    expect(prompts.length).toBe(3);
+    for (const prompt of prompts) {
+      expect(prompt).toContain("## Applicable skills");
+      expect(prompt).toContain("### Skill: Best Of Skill");
+      expect(prompt).toContain("BEST-OF-SKILL-BODY-MARKER");
+    }
+
+    // Exactly ONE observability event for the stage, not one per candidate.
+    const skillEvts = skillsEvents(events);
+    expect(skillEvts.length).toBe(1);
+    expect(skillEvts[0]!.data).toMatchObject({
+      phase: "skills",
+      stage_kind: "code",
+      injected: ["best-of-skill"],
+      skipped: [],
     });
   });
 });

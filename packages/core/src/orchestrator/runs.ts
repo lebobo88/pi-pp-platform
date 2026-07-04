@@ -2796,7 +2796,10 @@ export function listRuns(filter: { project_path?: string; status?: RunStatus; li
     }
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const limit = Math.max(1, Math.min(filter.limit ?? 50, 500));
+  // limit comes off the wire (Number("abc") → NaN, which better-sqlite3 binds
+  // as NULL → SQLite datatype mismatch). Non-finite → default, then clamp.
+  const requested = Number.isFinite(filter.limit) ? Math.trunc(filter.limit as number) : 50;
+  const limit = Math.max(1, Math.min(requested, 500));
   // Fetch limit+1 to detect whether another page exists without a COUNT(*).
   const rows = db()
     .prepare(`SELECT id, project_path, request_text, team, mode, status, started_at, finished_at FROM runs ${whereSql} ORDER BY started_at DESC, id DESC LIMIT ?`)

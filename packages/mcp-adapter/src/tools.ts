@@ -672,7 +672,7 @@ export const TOOLS: ToolDef[] = [
 
   // ── Skills (full) ──
   { name: "list_skills", availability: "full",
-    description: "List all skills (project → user → builtin, first-resolution wins; flat <id>.md or <id>/SKILL.md). Returns SkillSummary[]: {id,name,description,origin,injection,applies_to_stages,applies_to_agents,applies_to_profiles,priority}.",
+    description: "List all skills (project → user → builtin, first-resolution wins; flat <id>.md or <id>/SKILL.md). Carve-out: a project/user copy without pp skill frontmatter is a plain Claude Code skill and never shadows a curated built-in of the same id. Returns SkillSummary[]: {id,name,description,origin,injection,applies_to_stages,applies_to_agents,applies_to_profiles,priority}.",
     schema: ListSkillsSchema, handler: (a) => listSkills(ListSkillsSchema.parse(a)) },
   { name: "get_skill", availability: "full",
     description: "Resolve one skill by id (project → user → builtin). Returns the summary plus {body,version,max_chars,applies_to_gate_types}, or null.",

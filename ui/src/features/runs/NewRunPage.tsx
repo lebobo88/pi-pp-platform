@@ -72,17 +72,25 @@ export function NewRunPage() {
   const recommend = useRecommendTeams();
 
   // Fire the recommender on entering step 2 with valid step-1 data. Memoized
-  // on (project_path, request_text) in a ref so unchanged inputs never refetch.
+  // on (project_path, request_text) in a ref so unchanged inputs never refetch
+  // after a success; a failure clears the key so re-entering step 2 retries.
   const recommendKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (state.step !== 2 || !stepValid(state, 1)) return;
     const key = JSON.stringify([state.projectPath, state.requestText]);
     if (recommendKeyRef.current === key) return;
-    recommendKeyRef.current = key;
-    recommend.mutate({
-      request_text: state.requestText.trim(),
-      project_path: state.projectPath.trim(),
-    });
+    recommendKeyRef.current = key; // set eagerly so the in-flight call never double-fires
+    recommend.mutate(
+      {
+        request_text: state.requestText.trim(),
+        project_path: state.projectPath.trim(),
+      },
+      {
+        onError: () => {
+          if (recommendKeyRef.current === key) recommendKeyRef.current = null;
+        },
+      },
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.step, state.projectPath, state.requestText]);
 

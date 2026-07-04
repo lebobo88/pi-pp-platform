@@ -31,7 +31,10 @@ server exclusively through the wire contract.
    changes (`CREATE TABLE IF NOT EXISTS`).
 4. **Asset resolution order** is project (`<project>/.claude/...`) → user
    (`~/.claude/...`) → builtin (`assets/...`) for teams, skills, agents, and
-   rubrics — preserve it when touching loaders.
+   rubrics — preserve it when touching loaders. Two deliberate exceptions:
+   (a) a skill copy without pp skill frontmatter never shadows a curated
+   built-in of the same id; (b) pilot role prompts and the agents library
+   resolve project → builtin only — no user layer.
 5. Tests that reach doctor/run-start paths need `PP_SKIP_CLI_VERSIONS=1`.
 6. `pnpm -r build && pnpm -r typecheck && pnpm -r test` must be green before a
    change is considered done.

@@ -35,12 +35,14 @@ describe("dynamic provider catalog", () => {
     }
   });
 
-  it("POST /providers/:vendor/models/refresh returns the refreshed model ids", async () => {
+  it("POST /providers/:vendor/models/refresh returns model ids with an honest refreshed flag", async () => {
     const r = await app.inject({ method: "POST", url: "/api/v1/providers/anthropic/models/refresh" });
     expect(r.statusCode).toBe(200);
     const body = r.json() as { provider: string; refreshed: boolean; models: string[] };
     expect(body.provider).toBe("anthropic");
-    expect(body.refreshed).toBe(true);
+    // anthropic is a static pi provider (no live refreshModels), so no live
+    // refresh ran — `refreshed` is honestly false and the built-in list returns.
+    expect(body.refreshed).toBe(false);
     expect(body.models).toContain("claude-opus-4-7");
   });
 
