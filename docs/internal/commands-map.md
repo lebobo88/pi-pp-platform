@@ -1,5 +1,7 @@
 # /pp:* command → platform surface map (CMD1)
 
+> **Internal notes** — maintainer/migration reference, not user documentation.
+
 pair-programmer exposed its lifecycle as 19 Claude-Code `/pp:*` slash commands.
 The pi platform replaces the Claude-Code host, so each command maps onto one of
 three in-platform surfaces:

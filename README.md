@@ -1,63 +1,79 @@
 # pi-pp-platform
 
+[![CI](https://github.com/lebobo88/pi-pp-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/lebobo88/pi-pp-platform/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen.svg)](package.json)
+
 **Pair-programmer, re-hosted on the pi runtime.** This is a faithful port of the
 `pair-programmer` multi-agent code-generation harness that
 runs entirely on [`@earendil-works/pi-*`](https://www.npmjs.com/package/@earendil-works/pi-ai)
 **0.80.3** — with **zero dependence on the Claude Code, Gemini, Codex, or Copilot
-CLIs**. Generation and cross-**provider** judging happen through the pi model APIs
+CLIs**. Generation and cross-provider judging happen through the pi model APIs
 instead of shelling out to vendor CLIs, and the whole platform is driven from a
 web UI plus a small set of local binaries.
 
-> Status: pre-1.0. Milestones M1–M8 are complete. Since then: a **dynamic
-> provider/model catalog** (configure keys + models for any of pi's ~35
-> providers — OpenAI, Anthropic, Google, DeepSeek, xAI, Mistral, Groq, …, sourced
-> live from pi), a **hardened + containerized deploy** path
-> ([`docs/DEPLOY.md`](docs/DEPLOY.md)), a **real live end-to-end validation**
-> harness ([`docs/VALIDATION.md`](docs/VALIDATION.md)), a real Playwright
-> browser-validation drive, and CI. See [milestone status](#milestone-status).
-
-## Providers & models (dynamic catalog)
-
-Providers, their models, and pricing are sourced **live from pi's builtin
-catalog (~35 providers)** — nothing is hand-maintained. A governance catalog
-(`packages/core/catalog.json` + a `~/.pi-pp-platform/catalog.json` override)
-controls which providers are enabled, the generation ladders, and the judge
-pool. In the UI's **Providers & Models** page you can add a key for any provider
-(stored write-only), pick any provider/model as a **generator** or **judge**,
-and the model catalog + pricing populate automatically. Cross-provider judging
-only ever routes to providers you've keyed.
-
-> Coding stages need a model that reliably calls file-editing tools (Claude,
-> OpenAI/codex, and similar). Authoring/spec/design stages work with any capable
-> model; some models answer conversationally and won't produce a diff for
-> agentic coding.
-
-## What it is
-
 - **Same harness, new runtime.** The orchestration state machine, rubrics,
   gates, taxonomy, best-of-N, TDD/validator gates, missability checks, and
-  master-plan patching are ported wholesale from pair-programmer into
-  `@pp/core`. Behavior and invariants are preserved (Reflexion ×1, cross-vendor
-  judging, the fable-tier capability gate, …).
-- **No sub-CLIs.** The old codex/gemini/copilot CLI bridges are gone. `@pp/engine`
-  wraps the pi model + coding-agent APIs directly and ships deterministic fakes
-  for offline/dev runs.
+  master-plan patching are ported wholesale into `@pp/core`. Behavior and
+  invariants are preserved (Reflexion ×1, cross-vendor judging, capability
+  gates, …).
+- **No sub-CLIs.** `@pp/engine` wraps the pi model + coding-agent APIs directly
+  and ships deterministic fakes for offline/dev runs.
 - **A real product surface.** A Fastify control-plane server (`ppd`) exposes a
   typed REST + SSE API, and a React SPA gives you project management, a run
   launch wizard, a live run view, provider key management, budgets, evolution
   review, and system health.
 
+## Features
+
+- **Four run modes** — `single`, `team` (26 specialized team pipelines),
+  `best_of` (2–8 parallel candidates, winner picked by Borda-count judging),
+  and `review` (10 governance forums: framing, scope, design, architecture,
+  threat, …).
+- **Cross-provider judging** — generated work is gated by judges from a
+  *different* vendor, with Reflexion ×1 retry, re-gate, and abort controls.
+- **Budgets with tripwires** — per-run/day/model cost tracking, tripwire
+  downgrades, and hard caps; doctor probes (with optional critique smoke test)
+  and reproducible replay bundles.
+- **7-tab library** — Teams (26), Agents (75 role prompts with categories and
+  team cross-references), Skills (17 — a first-class registry with
+  project → user → builtin resolution and budgeted prompt injection), Rubrics
+  (27), Profiles (16), Forums (10), Taxonomy (16 SDLC sections).
+- **Profile auto-detection + team recommendation** — the harness detects the
+  right project profile from the repo, and a deterministic scorer recommends a
+  team; the launch wizard preselects it with confidence and reasons.
+- **Dynamic 35-provider catalog** — providers, models, and verified pricing
+  sourced from pi's builtin catalog; add a key for any provider and use it as
+  generator or judge. Pricing mirrors are generated, not hand-maintained.
+- **Evolution (autogenesis)** — the harness proposes improvements to its own
+  rubrics/teams/profiles; approved proposals commit as project-scoped
+  overrides with snapshots, rollback, and an audit trail.
+- **Auth** — optional `PP_API_TOKEN` bearer auth with a UI token gate and
+  tokenized SSE; provider keys are stored write-only.
+- **MCP adapter** — a `pp_harness`-compatible stdio server (63 full / 17 stub
+  tools) so external MCP hosts can read and drive the harness.
+
+## Screenshots
+
+| Dashboard | Live run |
+| --- | --- |
+| ![Dashboard](docs/images/dashboard.png) | ![Live run view](docs/images/run-live.png) |
+
+| Launch wizard (team recommendation) | Library (75 agent prompts) |
+| --- | --- |
+| ![Run wizard with team recommendation](docs/images/wizard.png) | ![Agents library](docs/images/library.png) |
+
 ## Architecture
 
 ```mermaid
 flowchart TD
-  UI["@pp/ui — React SPA<br/>(launch wizard, live run view, keys, budgets)"]
+  UI["@pp/ui — React SPA<br/>(launch wizard, live run view, library, keys, budgets)"]
   SERVER["@pp/server — ppd<br/>Fastify REST /api/v1 + 2 SSE streams @ 127.0.0.1:7878"]
   PILOT["@pp/pilot — ppp<br/>RunPilot: 9-phase lifecycle driver"]
   ENGINE["@pp/engine<br/>pi-ai / pi-coding-agent runtime + fakes"]
   CORE["@pp/core<br/>state machine · rubrics · gates · taxonomy · SQLite"]
-  MCP["@pp/mcp-adapter — pp-mcp<br/>pp_harness-compatible MCP stdio server"]
-  ASSETS["assets/<br/>26 teams · 27 rubrics · 16 profiles · 75 agent prompts"]
+  MCP["@pp/mcp-adapter — pp-mcp<br/>pp_harness-compatible MCP stdio server (63 full / 17 stub tools)"]
+  ASSETS["assets/<br/>26 teams · 75 agents · 17 skills · 27 rubrics · 16 profiles"]
 
   UI -->|"/api/v1 + SSE"| SERVER
   SERVER --> PILOT
@@ -71,10 +87,7 @@ flowchart TD
 Dependency direction is **server → pilot → engine → core**. Only `@pp/engine`
 imports the pi packages, so everything above it is engine-agnostic. The
 `@pp/mcp-adapter` is a side door: it exposes the harness read/record surface to
-external MCP hosts (the Hydra gateway, TheEights, any MCP client) without going
-through the server.
-
-## Packages
+external MCP hosts without going through the server.
 
 | Path | Package | Role | Binary |
 | --- | --- | --- | --- |
@@ -84,8 +97,8 @@ through the server.
 | `packages/server` | `@pp/server` | Fastify REST `/api/v1` + two SSE streams on `127.0.0.1:7878` | `ppd` |
 | `packages/mcp-adapter` | `@pp/mcp-adapter` | pp_harness-compatible MCP stdio server over `@pp/core` | `pp-mcp` |
 | `ui` | `@pp/ui` | React 18 + Vite 6 + Tailwind v4 SPA (served by `ppd`) | — |
-| `shared` | — | `api-types.ts` — the hand-maintained wire contract shared by server + UI | — |
-| `assets` | — | Ported teams, rubrics, profiles, agent prompts, taxonomy blueprint | — |
+| `shared` | — | `api-types.ts` — the wire contract shared by server + UI | — |
+| `assets` | — | Teams, agents, skills, rubrics, profiles, taxonomy blueprint, provider catalog | — |
 
 ## Quickstart
 
@@ -94,26 +107,17 @@ through the server.
 pnpm install
 
 # 2. Build everything
-pnpm -r build
+pnpm build
 
 # 3a. Demo mode — real UI + real server driven by the fake engine (no API keys):
-#     builds ui + server and boots ppd with PP_LLM=fake so you can launch a run
-#     end to end offline.
 pnpm demo            # → http://127.0.0.1:7878
 
-# 3b. UI-only mock mode — the in-browser mock daemon serves fixtures and replays
-#     a scripted, animated run (no server):
+# 3b. UI-only mock mode — in-browser mock daemon replays a scripted, animated run:
 VITE_MOCK=1 pnpm -F @pp/ui dev      # → http://localhost:5273
 
-# 3c. Full server (serves the built UI when PP_UI_DIST points at ui/dist):
+# 3c. Full server (serves the built UI):
 pnpm start           # builds, then boots ppd on http://127.0.0.1:7878
 ```
-
-Provider API keys can be set from the UI (**Providers & Models → Set key**,
-write-only) for any of pi's ~35 providers, or through the engine's credential
-store / env vars. Cross-provider judging needs ≥2 keyed providers; with one it
-surfaces gates for human review, and with none it still runs in demo/mock mode
-(see [INSTALL.md](docs/INSTALL.md#provider-keys)).
 
 Additional run modes:
 
@@ -124,41 +128,48 @@ pnpm validate:live  # REAL end-to-end: gen (one provider) + judge (another). Nee
 docker compose up   # containerized (see docs/DEPLOY.md)
 ```
 
-The `ppp` binary (`@pp/pilot`) drives a run from the command line; `ppd`
-(`@pp/server`) hosts the API + UI. See [docs/INSTALL.md](docs/INSTALL.md) for the
-full setup and [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for a screen-by-screen
-tour and the run-lifecycle explainer.
+Provider API keys can be set from the UI (**Providers & Models → Set key**,
+write-only) for any of pi's 35 providers, or through the engine's credential
+store / env vars. Cross-provider judging needs ≥2 keyed providers; with one it
+surfaces gates for human review, and with none it still runs in demo/mock mode
+(see [INSTALL.md](docs/INSTALL.md#provider-keys)).
 
-Run **control** (launch / abort / retry / gate) is live over REST via the
-in-process `RunSupervisor` (concurrency cap, FIFO queue, budget tripwires), and
-the pilot's event bus is bridged to SSE so the run view animates in real time.
+## Providers & models
 
-## Milestone status
+Providers, their models, and pricing are sourced from **pi's builtin catalog
+(35 providers)** — OpenAI, Anthropic, Google, DeepSeek, xAI, Mistral, Groq, and
+more. A governance catalog (`packages/core/catalog.json` + a
+`~/.pi-pp-platform/catalog.json` override) controls which providers are
+enabled, the generation ladders, and the judge pool; the pricing mirrors
+(`prices.json`) are **generated** by `scripts/generate-catalog-providers.mjs`
+and verified against published pricing. Any keyed provider can serve as a
+**generator** or **judge**, with per-provider model refresh from the UI.
+Cross-provider judging only ever routes to providers you've keyed.
 
-| Milestone | Scope | Commit | State |
-| --- | --- | --- | --- |
-| M1 | Scaffold workspace; port daemon as `@pp/core` | `4d58719` | ✅ done |
-| M2 | `@pp/engine` — pi generate/critique/doctor + fakes | `11a3059` | ✅ done |
-| M3 | `@pp/pilot` — RunPilot 9-phase lifecycle + `ppp` | `4f55439` | ✅ done |
-| M4 | Best-of-N + teams (26) + forums (10) + TDD/validator gates | `9699abb` | ✅ done |
-| M5a–b | UI foundation + read-only feature screens + animated run view | `b467fe2` / `59cf230` | ✅ done |
-| M5c | `@pp/server` — REST/SSE foundation, schema v8, key mgmt | `10974b9` | ✅ done |
-| M5d | Run-control live — `RunSupervisor` (concurrency/abort/budget), retry/gate, SSE bridge | `4fdf549` | ✅ done |
-| M5e–g | UI↔server contract reconciliation; live-daemon smoke; demo/start + maxParamLength | `302bb7f` / `01cdafb` / `18ceaac` | ✅ done |
-| M5i | Full-run UI E2E against the live daemon (wizard→run→SSE→abort) | `9618604` | ✅ done |
-| M6 / M6.1 | UI control plane — wizard, run actions, keys, evolution, caps | `2a1d2a7` / `ffb0ec0` | ✅ done |
-| M7 | Hooks parity (29), autogenesis wiring, visual/browser, prompt port (75) | `e192fb2` / `f52fca9` | ✅ done |
-| M7a | `@pp/mcp-adapter` — pp_harness MCP server | `6594efc` | ✅ done |
-| M8a–b | Parity matrix + audit scaffold; ecosystem guard; docs | `1efc912` / `da85f68` | ✅ done |
-| M8 | Parity audit close-out + final docs sweep | — | ✅ done |
-| — | Dynamic provider/model catalog (35 providers, catalog-sourced) | — | ✅ done |
-| — | Hardened + containerized deploy (`serve`, Dockerfile, compose, DEPLOY.md) | — | ✅ done |
-| — | Live validation (`validate:live`) + real Playwright browser drive + CI | — | ✅ done |
+> Coding stages need a model that reliably calls file-editing tools (Claude,
+> OpenAI, and similar). Authoring/spec/design stages work with any capable
+> model; some models answer conversationally and won't produce a diff for
+> agentic coding.
 
-(Commit refs are from `git log`. The platform is now beyond the original M1–M8
-port: see the top-of-file status note for the provider-catalog, deploy, and
-validation work.)
+## Documentation
+
+| Doc | What it covers |
+| --- | --- |
+| [docs/INSTALL.md](docs/INSTALL.md) | Full setup — prerequisites, provider keys, environment variables |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Screen-by-screen tour and the run-lifecycle explainer |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Hardened + containerized deployment (Dockerfile, compose, token gate) |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | Live end-to-end validation harness (`pnpm validate:live`) |
+| [docs/DEMO.md](docs/DEMO.md) | Offline demo walkthrough with the fake engine |
+
+## Status
+
+Status: pre-1.0.
+
+## Contributing & Security
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). To report a
+vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-License: TBD by owner.
+[MIT](LICENSE).

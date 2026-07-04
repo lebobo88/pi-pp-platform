@@ -1,5 +1,7 @@
 # pi 0.80.3 API contract (verified against installed packages, 2026-07-02)
 
+> **Internal notes** — maintainer/migration reference, not user documentation.
+
 Verified by installing `@earendil-works/pi-{coding-agent,ai,agent-core}@0.80.3` and probing the real exports.
 The local RLMpi checkout (`@mariozechner/*@0.67.68`) is an OLDER API — differences below are authoritative for 0.80.3.
 

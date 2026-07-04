@@ -44,22 +44,45 @@ VITE_MOCK=1 pnpm -F @pp/ui dev      # in-browser mock daemon, http://localhost:5
 
 ## Provider keys
 
-The harness talks to three model vendors (Anthropic, OpenAI, Google) through the
-pi APIs. **Live runs require at least one provider key; cross-vendor judging
-requires two, and full parity requires all three.** Without any keys the platform
-still works fully in **demo/mock mode** (the deterministic fake engine).
+All **35 providers** from pi's builtin model catalog are enabled — Anthropic,
+OpenAI, Google, DeepSeek, xAI, Mistral, Groq, OpenRouter, and the rest of pi's
+provider set. Any keyed provider can serve as a generator or judge. **Live runs
+require at least one provider key; cross-vendor judging requires keys for two
+different vendors.** Without any keys the platform still works fully in
+**demo/mock mode** (the deterministic fake engine).
 
-Set keys from the UI (**Providers & Models → Set key**). Keys are **write-only**:
-they are sent to the daemon once and never returned — the UI only ever shows a
-masked fingerprint. The engine persists them via its credential store
-(`AuthStorage`) at `%USERPROFILE%\.pi-pp-platform\auth.json` (Windows) /
+Set keys from the UI (**Providers & Models → Add a provider / Set key** — each
+provider's card shows its env-key hint). Keys are **write-only**: they are sent
+to the daemon once and never returned — the UI only ever shows a masked
+fingerprint. The engine persists them via its credential store (`AuthStorage`)
+at `%USERPROFILE%\.pi-pp-platform\auth.json` (Windows) /
 `~/.pi-pp-platform/auth.json` (POSIX). **Delete** a key from the same card.
+
+### Provider catalog & pricing (maintainers)
+
+The provider/pricing config is layered:
+
+- **`packages/core/catalog.json`** (mirrored to `assets/catalog.json`) is the
+  **authoritative** governance layer: enabled providers, generation ladders,
+  the judge pool, and curated per-model pricing. Edit this file.
+- **`prices.json`** files are **generated** mirrors of the catalog's
+  per-provider pricing — never edit them by hand.
+- After editing the catalog, regenerate everything with:
+
+  ```bash
+  node scripts/generate-catalog-providers.mjs [--date YYYY-MM-DD]
+  ```
+
+  The script merges every provider pi ships into the catalog as an enabled
+  entry (models/pricing for uncurated providers come dynamically from pi's
+  catalog at runtime), preserves the curated blocks verbatim, and rewrites both
+  `prices.json` files as exact mirrors.
 
 **What you get with how many keys:**
 
 | Configured vendors | Effect |
 | --- | --- |
-| All 3 (OpenAI + Google + Anthropic) | Full **cross-vendor** judging on every gate; best quality signal. |
+| 3 or more | Full **cross-vendor** judging on every gate; best quality signal. |
 | 2 | Cross-vendor judging still works (the judge just needs a *different* vendor than the generator). |
 | 1 | Same-vendor gates (code-style/docs/lint) still run, but **cross-vendor gates** (spec/design/security/contract) have no eligible independent judge — those runs **surface** for human review instead of self-certifying. |
 | 0 | Only mock mode (`VITE_MOCK=1`) and the deterministic engine fakes are usable. |
@@ -67,9 +90,12 @@ masked fingerprint. The engine persists them via its credential store
 **Vendor kill switches** disable a vendor even if a key is present — useful to
 force a degradation path or work around an outage:
 
-- `PP_DISABLE_OPENAI=1`
-- `PP_DISABLE_GOOGLE=1` (alias: `PP_DISABLE_GEMINI=1`)
-- `PP_DISABLE_ANTHROPIC=1`
+- `PP_DISABLE_<PROVIDER>=1` works for any catalog provider — e.g.
+  `PP_DISABLE_OPENAI=1`, `PP_DISABLE_GOOGLE=1`, `PP_DISABLE_ANTHROPIC=1`,
+  `PP_DISABLE_MISTRAL=1`.
+- `PP_DISABLE_GEMINI=1` is a **separate global Gemini switch** (not an alias of
+  `PP_DISABLE_GOOGLE`): judge routing honors it in addition to the per-provider
+  kill switch.
 
 ## Environment reference
 
@@ -80,14 +106,16 @@ All configuration is via `PP_*` environment variables. Values verified against
 | --- | --- | --- |
 | `PP_HOME` | `~` | Root for harness state; state lives in `$PP_HOME/.pair-programmer/`. |
 | `PP_DB_PATH` | `~/.pair-programmer/state.db` | SQLite database path (overrides the default under the root dir). |
-| `PP_PORT` | `7878` | Server listen port (host is always `127.0.0.1`). |
-| `PP_API_TOKEN` | _(unset)_ | Bearer token for `/api/v1`. The server enforces loopback-only regardless; a token adds defense-in-depth. |
+| `PP_PORT` | `7878` | Server listen port. |
+| `PP_HOST` | `127.0.0.1` | Bind host. Binding a non-loopback host **requires** `PP_API_TOKEN` — `ppd` refuses to start otherwise. |
+| `PP_API_TOKEN` | _(unset)_ | Bearer token for `/api/v1` (see [API token & the UI](#api-token--the-ui)). |
+| `PP_SKILLS_BUDGET_CHARS` | `24000` | Total character budget for skill bodies injected into one generator prompt (each skill is also capped by its own `max_chars`; over-budget skills are skipped deterministically). |
 | `PP_UI_DIST` | _(unset)_ | Path to `ui/dist`; when set, `ppd` serves the built SPA. |
 | `PP_ECOSYSTEM` | _off_ | Enables ecosystem (Hydra / TheEights / Constitution) subprocess writes. **Default off** — standalone runs never touch the ecosystem. |
 | `PP_PLATFORM_DIR` | _(derived)_ | Platform install dir override. |
 | `PP_ASSETS_DIR` | _(bundled)_ | Override the `assets/` location (teams, rubrics, profiles, prompts). |
 | `PP_REPO_ROOT` | _(derived)_ | Repo root override. |
-| `PP_DISABLE_OPENAI` / `PP_DISABLE_GOOGLE` / `PP_DISABLE_GEMINI` / `PP_DISABLE_ANTHROPIC` | _off_ | Per-vendor kill switches. |
+| `PP_DISABLE_<PROVIDER>` (e.g. `PP_DISABLE_OPENAI`) | _off_ | Per-provider kill switches. `PP_DISABLE_GEMINI` is a separate global Gemini switch, distinct from `PP_DISABLE_GOOGLE`. |
 | `PP_DISABLE_NPX_VALIDATORS` | _off_ | Disable `npx`-based artifact validators (offline/locked-down environments). |
 | `PP_ALLOW_DESTRUCTIVE` | _off_ | Permit destructive operations that are otherwise blocked. |
 | `PP_ALLOW_SMOKE_FAILED_WINNER` | _off_ | Allow merging a best-of winner whose runtime smoke test failed. |
@@ -99,6 +127,21 @@ All configuration is via `PP_*` environment variables. Values verified against
 | `PP_EIGHTS_DAEMON` | _(unset)_ | TheEights daemon endpoint (only relevant when `PP_ECOSYSTEM` is on). |
 | `PP_LLM` | `pi` | Set to `fake` to use the deterministic fake engine (demo mode / offline). Any other value uses the real pi engine. |
 | `PP_MAX_CONCURRENT_RUNS` | `2` | Max simultaneous runs the `RunSupervisor` executes; extra runs are FIFO-queued and emit a `run.queued` event, then start when a slot frees. |
+
+### API token & the UI
+
+When `PP_API_TOKEN` is set, every request except `GET /healthz` must carry
+`Authorization: Bearer <token>` (compared in constant time). Two UI-facing
+details:
+
+- **UI token gate** — the first 401 raises a non-dismissable prompt in the SPA;
+  paste the token once and the UI stores it locally, attaches it as a bearer
+  header to every request, and refetches. Manage the stored token later from
+  **System → API access** (masked to the last 4 characters; Change / Clear).
+- **SSE `?token=`** — `EventSource` cannot send headers, so the two SSE
+  endpoints (`GET /api/v1/events` and `GET /api/v1/runs/:id/events`) — and only
+  those — also accept the token as a `?token=` query parameter. The UI appends
+  it automatically.
 
 ## MCP registration (`@pp/mcp-adapter`)
 

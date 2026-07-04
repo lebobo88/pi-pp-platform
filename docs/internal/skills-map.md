@@ -1,5 +1,7 @@
 # pair-programmer skills → pilot policy map (SK1)
 
+> **Internal notes** — maintainer/migration reference, not user documentation.
+
 pair-programmer encoded 8 harness skills as Claude-Code skill markdown that the
 driver read at session start. In the pi platform there is no skill-loading host;
 each skill's behavior is folded into pilot code (policies/guards) and/or injected

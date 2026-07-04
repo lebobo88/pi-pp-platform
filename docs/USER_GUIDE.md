@@ -13,15 +13,31 @@ what actually happens when you launch a run.
 ## The app shell
 
 A fixed left sidebar lists the eight sections — **Dashboard, Projects, Runs,
-Providers & Models, Budgets, Evolution, Library, System**. The top bar has a
-project picker (scopes the Runs list), a daemon health dot, a day-budget
-mini-meter, and a **New run** button. All ids, costs, tokens, and durations
-render in a tabular monospace so columns line up.
+Providers & Models, Budgets, Evolution, Library, System**. The sidebar
+**collapses** to an icon rail: click the chevron at the bottom, or press
+**`[`** anywhere outside a text field (collapsed items show their label as a
+tooltip). The top bar has a **searchable project picker** (a popover with an
+autofocused filter input and a keyboard-navigable list; it scopes the Runs
+list), a daemon health dot, a day-budget mini-meter, and a **New run** button.
+All ids, costs, tokens, and durations render in a tabular monospace so columns
+line up. Every route except the Dashboard is code-split, so screens load
+on demand.
+
+If the daemon is started with `PP_API_TOKEN` set, the first 401 raises a
+non-dismissable **API token** prompt: paste the token once and the UI stores it
+locally, sends it as a bearer header on every request (and as `?token=` on the
+SSE streams — `EventSource` can't set headers), and refetches everything. A
+wrong token simply re-prompts with an inline error. You can change or clear the
+stored token later from **System → API access**.
 
 ## Dashboard
 
 Your at-a-glance operations view:
 
+- **Get started checklist** — shown only while the harness has zero runs: three
+  live steps (add a provider key → register a project → launch your first run).
+  The checkmarks observe the real queries, and the "New run" step stays disabled
+  until a provider is configured and a project is registered.
 - **Surfaced-runs banner** — a persistent warning strip when any run finished in
   the `surfaced` state (needs human review); each chip links to the run.
 - **Active runs strip** — running/pending runs with a live pulsing status dot and
@@ -57,10 +73,19 @@ A four-step wizard with a left stepper. You can jump back to any completed step.
 1. **Request** — pick the project (its profile chip shows; a missing profile
    links you to bootstrap it) and write the request. A rough token count updates
    as you type.
-2. **Mode & team** — choose a mode:
+2. **Mode & team** — entering this step fires the deterministic **team
+   recommender** (`POST /teams/recommend` — pure heuristics over the request
+   text, triage signals, and the project profile; no model calls). An advisory
+   banner shows the top pick with its **confidence** (high/medium/low) and the
+   per-rule **reasons**; outside team mode a one-click **"Use team mode with
+   <team>"** button switches for you. Then choose a mode:
    - **Single** — one generator, one judge, Reflexion ×1 on failure.
    - **Team** — a specialized multi-stage pipeline. The searchable **team picker**
      dims teams whose `profiles_compatible` list excludes the project's profile.
+     Recommended teams sort to the top with a `recommended · <confidence>`
+     badge, and the top pick is **preselected** ("Preselected by the
+     recommender — pick any other team to override"); a manual pick is never
+     clobbered by a re-run of the recommender.
    - **Best-of-N** — a slider for N (2–8) with a per-candidate model/seed preview;
      Borda picks the winner.
    - **Review** — a governance-forum pipeline (pick a forum).
@@ -68,11 +93,26 @@ A four-step wizard with a left stepper. You can jump back to any completed step.
    hints), **tier cap/floor** selects, and a **cost estimate** (a min–max USD
    range from the stage count × tier ladder × prices) shown against your
    remaining day budget, with a warning if the estimate would exceed it.
+   - **Major-scope nudge:** picking **major** scope (or a recommender verdict
+     that the request is major) while not in team mode raises a warning strip —
+     "Major scope requires a team pipeline — switch to team mode?" — with a
+     one-click switch (carrying the recommended team when there is one) and a
+     Dismiss.
    - **Best-of rule:** tier cap/floor are **disabled** in best-of mode — the
      daemon rejects them there (candidates rotate tiers by design), so the wizard
      mirrors that constraint rather than letting you submit a request that 422s.
-4. **Review & launch** — a summary; **Launch run** dispatches it and takes you to
-   the live run view.
+4. **Review & launch** — a summary (team runs also show the **team source** —
+   `recommended (<confidence>)` vs `manual`); **Launch run** dispatches it and
+   takes you to the live run view.
+
+## Runs (the history list)
+
+Run history across all projects, scoped by the top-bar project picker and a
+status filter. The list is **cursor-paginated**: the UI requests pages of 25
+from the server's `{items, next_cursor}` envelope, and a **Load more** button
+below the table fetches the next page until it reads "End of history". Column-header
+sorting only activates once every page is loaded (sorting a partial page would
+mislead). Click a row to open the run.
 
 ## The live run view
 
@@ -105,24 +145,39 @@ elapsed time, and a **run budget meter** with 80%/100% ticks. Running runs get a
 
 ## Providers & Models
 
-A card per vendor shows CLI/credential/login status and a **masked** key
-fragment. Key management is **write-only**:
+All **35 providers** from pi's builtin catalog are enabled — any of them can be
+keyed and used as a generator or judge. The page has:
 
-- **Set / Replace key** — a password field; the key is sent once and never
-  returned. Only a masked fragment (e.g. `sk-ant-…4f9c`) is shown afterward.
-- **Test** — a live credential/model-resolution probe; the result (model, latency)
-  shows inline.
-- **Remove** — deletes the stored credential (confirm required); the vendor
-  becomes unconfigured.
+- **Add a provider** — a picker over every provider that doesn't yet have a
+  card, captioned with its display name and env-key hint (e.g.
+  `DEEPSEEK_API_KEY`); pick one and **Set key** to bring it online.
+- A **search box** that filters the provider cards by name, display name, or
+  env-key hint, and two groups: **Configured** (keyed) above **Available**.
+- A card per provider with its status (ready / degraded / unconfigured), a
+  **masked** key fragment, and its env-key hint. Key management is
+  **write-only**:
+  - **Set / Replace key** — a password field; the key is sent once and never
+    returned. Only a masked fragment (e.g. `sk-ant-…4f9c`) is shown afterward.
+  - **Test** — a live credential/model-resolution probe; the result (model,
+    latency) shows inline.
+  - **Refresh models** — re-fetches the provider's live model list
+    (`POST /providers/:vendor/models/refresh`); the result feeds the
+    ladder/judge autocomplete and the priced catalog. A toast reports how many
+    model ids came back (or that the static fallback was used).
+  - **Remove** — deletes the stored credential (confirm required); the vendor
+    becomes unconfigured.
 
-Below the cards, two editors persist to harness settings:
+Below the cards, two editors persist to harness settings. Every model-id input
+on the page shares one **autocomplete** fed by the priced catalog plus each
+configured provider's live model list:
 
-- **Tier ladder** — map each Claude tier (fable/opus/sonnet/haiku) to a model.
-  Only models from configured providers are offered; `fable` is capability-gated
-  and never auto-escalated to.
-- **Judge pool** — an ordered list of judge models. If all judges share one
-  vendor, a warning flags that cross-vendor gates (spec/design/security/contract)
-  will have no eligible judge.
+- **Generation ladders** — map each tier (fable/opus/sonnet/haiku) of each
+  named ladder to a model id; `fable` is capability-gated and never
+  auto-escalated to.
+- **Judge pool** — an ordered list of judge models (type an id and pick from the
+  suggestions; unknown ids are rejected). If all judges share one provider, a
+  warning flags that cross-vendor gates (spec/design/security/contract) will
+  have no eligible judge.
 
 A priced **model catalog** table lists every model and its per-1M-token cost.
 
@@ -135,34 +190,101 @@ A priced **model catalog** table lists every model and its per-1M-token cost.
 
 ## Evolution
 
-Autogenesis proposals (self-evolving rubrics/teams/profiles), filterable by
+Autogenesis proposals (self-evolving rubrics/prompts/checks), filterable by
 status. Each card shows a **P1/P2/P3** priority band (from recurrence count), the
-evidence, and the affected resource. **Review** opens a dialog to
-approve / reject / commit / rollback. **High-risk rule:** approving a proposal
-that mutates a regulated-standard rubric (OWASP, WCAG, SLSA, NIST) requires typing
-an exact confirmation phrase (e.g. `APPROVE OWASP`) — a fat-fingered approval of a
-security/accessibility/supply-chain rubric is impossible.
+evidence, and the affected resource. **Review** opens a dialog whose actions
+follow the proposal's lifecycle: **approve / reject** while pending, **commit**
+once approved, **rollback** once committed.
 
-> The autogenesis analyzer (heuristic pattern-mining over recurring rubric
-> false-positives / drift) generates these proposals. Approve/reject resolve
-> locally; **commit/rollback** dispatch to TheEights and require the ecosystem
-> bridge (`PP_ECOSYSTEM=1`), so those buttons are disabled until it is enabled.
+- **Commit is reviewer-authored.** The autogenesis analyzer only *detects*
+  recurring drift — it authors no patch. The commit dialog has a content editor
+  where you write the actual replacement body; the server rejects a commit
+  without it (422 `content_required`). Committing writes the body to the
+  proposal's **project-scoped override** (rubrics →
+  `<project>/.claude/rubrics/`, stage prompts → `<project>/.claude/agents/`,
+  missability checks → `<project>/.harness/missability-overrides.json`) — a
+  proposal can never write outside the project's override roots.
+- **Rollback is real.** Before a commit, the pre-existing target is snapshotted
+  under `<project>/.harness/evolution/<proposal_id>/before/`; rollback restores
+  the snapshot (or deletes the override if the target didn't exist before).
+  Every commit/rollback is recorded in an audit table (target + snapshot paths,
+  before/after content hashes).
+- **High-risk rule:** any mutation of a regulated-standard rubric (OWASP, WCAG,
+  SLSA, NIST) — approve, commit, *or* rollback — requires typing an exact
+  confirmation phrase (e.g. `APPROVE OWASP`); a fat-fingered change to a
+  security/accessibility/supply-chain rubric is impossible. Only reject skips
+  the phrase.
+
+> Commits and rollbacks are **local** — no ecosystem needed. When a proposal was
+> echoed by TheEights at propose time (it shows an `eights:` id on the card),
+> the commit/rollback is mirrored there fire-and-forget; an unreachable daemon
+> never blocks the local write.
 
 ## Library
 
-- **Teams** — cards for every built-in team (stage-kind chips, origin badge);
-  a detail drawer shows the full stage → gate → judge-tier pipeline.
-- **Rubrics** — the standard-aligned judging rubrics; select one to read its body.
-- **Profiles** — each profile's resolved spec and its `extends` chain.
+Seven tabs, each with a live count badge on the active tab:
+
+- **Teams** (26) — cards for every built-in team (stage-kind chips, origin
+  badge); a detail drawer shows the full stage → gate → judge-tier pipeline.
+- **Agents** (75) — the role prompts that team and forum stages dispatch, in a
+  searchable master-detail browser **grouped by category**. The detail pane
+  shows the prompt body, category/tier/model chips, and **"used by"
+  cross-references** — every team that dispatches the agent, linked back to the
+  Teams tab. Selection deep-links via `?id=`.
+- **Skills** (17 built-in) — a first-class **skill registry**: frontmatter
+  markdown files carrying reusable domain knowledge (judge policy, artifact
+  conventions, executive frameworks…). Resolution is layered — project
+  `.claude/skills/` → user `~/.claude/skills/` → built-in `assets/skills/`,
+  first match wins — and both flat `<id>.md` files and `<id>/SKILL.md`
+  directories are accepted. Each skill's detail shows its **injection target**
+  and `applies_to_*` scoping chips (stage kinds / profiles; empty or `*` =
+  applies everywhere). See "Skill injection" below for what this does at run
+  time.
+- **Rubrics** (27) — the standard-aligned judging rubrics; select one to read
+  its body.
+- **Profiles** (16) — each profile's resolved spec and its `extends` chain.
+- **Forums** (10) — the governance-review forums, as a card grid; a drawer shows
+  each forum's pipeline stage by stage (generator agent — linked to the Agents
+  tab — gate type, judge tier, rubric) plus its required missability checks.
+- **Taxonomy** (16) — the taxonomy sections as a flat table: id, title, default
+  artifact kinds, and the master-plan section each maps to.
+
+### Skill injection
+
+Skills whose frontmatter says `injection: generator` are automatically injected
+into the **generator prompt** of every stage whose kind / agent / gate type /
+profile matches their `applies_to_*` lists, rendered as an
+`## Applicable skills` block (one `### Skill: <name>` section each). Team yamls
+can also request skills **by name**: a stage's `skills:` list is always injected
+into that stage's generator prompt, regardless of the skill's own
+injection/scoping (unresolvable ids warn at team load and are skipped at
+injection — never fatal).
+
+Injection is budgeted and deterministic: skills are taken in priority order
+(then id order), each body is truncated to its `max_chars` (default 6000), and
+a total per-prompt budget of `PP_SKILLS_BUDGET_CHARS` characters (default
+24000) is enforced — the first skill that no longer fits exhausts the budget
+and everything after it is skipped.
 
 ## System
 
+Two tabs — **Doctor** and **Janitor** — plus the API access card:
+
 - **Doctor** — the health report: a provider matrix (CLI / API key / logged-in /
   configured / degraded), model-resolution smoke results, CLI versions, and
-  browser-engine availability. **Re-run doctor** refreshes it.
-- **Janitor** — the housekeeping report (swept items, reclaimed bytes). **Dry run**
-  previews; **Execute** (confirm required) deletes abandoned worktrees, stale
-  logs, and temp caches.
+  browser-engine availability. **Re-run doctor** refreshes it; an optional
+  **"include critique smoke test"** checkbox makes the re-run actually call each
+  keyed vendor (off by default — the smoke test costs a few tokens per vendor).
+- **API access** — the stored UI token, masked to its last 4 characters.
+  **Change** opens a paste-a-token dialog; **Clear** drops it (a token-guarded
+  daemon will 401 and the token prompt reappears). The token rides as a bearer
+  header on every request and as `?token=` on the SSE streams.
+- **Janitor** — the housekeeping report. **Dry run** computes the full sweep
+  plan *without touching anything* and reports the candidates; **Execute**
+  (confirm required) performs the sweep. Both show per-entry **byte and age
+  accounting** — a table of every swept path with its kind (worktree / branch /
+  lock / run), size, and age — plus the totals (items swept, bytes reclaimed).
+  Executed reports are persisted, so the last sweep is always visible.
 
 ---
 
@@ -180,7 +302,10 @@ When you launch a run, `RunPilot` drives a **9-phase lifecycle**. In user terms:
    16-section taxonomy, which determines the artifacts the run must produce.
 4. **Stage loop** — the core. For each stage the harness:
    - **generates** an artifact with a chosen producer + Claude **tier** (the tier
-     resolver honors your cap/floor, the profile policy, and per-stage pins);
+     resolver honors your cap/floor, the profile policy, and per-stage pins).
+     Matching **skills** from the registry (plus any the team yaml names for the
+     stage) are injected into the generator prompt, budgeted by
+     `PP_SKILLS_BUDGET_CHARS` — see [Skill injection](#skill-injection);
    - **judges** it against the stage's rubric. Gate strictness drives whether the
      judge must be **cross-vendor** — spec / design / security / contract gates
      (and every gate under the `enterprise` profile, or any prompt mentioning

@@ -27,8 +27,8 @@ pnpm start
 
 Starts the server with the **real pi engine** on the **default DB**
 (`~/.pair-programmer/state.db`). Configure provider API keys first (via the UI's
-Providers screen, or the `pi` auth flow) so live runs can reach Anthropic /
-OpenAI / Google.
+Providers screen, or the `pi` auth flow) so live runs can reach your configured
+vendors (any of the 35 supported providers).
 
 ## Environment overrides
 
@@ -38,7 +38,7 @@ OpenAI / Google.
 | `PP_UI_DIST` | `ui/dist` | built SPA directory to serve |
 | `PP_DB_PATH` | temp (demo) / `~/.pair-programmer/state.db` (start) | SQLite path |
 | `PP_LLM` | `fake` (demo) / `pi` (start) | engine mode |
-| `PP_API_TOKEN` | unset | when set, all routes except `GET /healthz` require `Authorization: Bearer <token>` |
+| `PP_API_TOKEN` | unset | when set, all routes except `GET /healthz` require `Authorization: Bearer <token>` (SSE endpoints also accept `?token=`; the UI prompts once and stores it) |
 | `PP_MAX_CONCURRENT_RUNS` | `2` | live-run concurrency (extras queue) |
 
 The server binds loopback only and never returns raw provider keys (only masked
