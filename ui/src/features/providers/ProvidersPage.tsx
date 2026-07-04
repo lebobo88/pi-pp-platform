@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelInfo, ProviderStatus, ProviderTestResult, HarnessSettings } from "@shared/api-types";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  apiPaths,
+  type ModelInfo,
+  type ProviderStatus,
+  type ProviderTestResult,
+  type ProviderModels,
+  type ProviderModelsRefreshResponse,
+  type InstallableProvider,
+  type HarnessSettings,
+} from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
@@ -9,16 +19,51 @@ import { EmptyState } from "@/components/EmptyState";
 import { StatusChip, StatusDot } from "@/components/StatusChip";
 import { KeyValue } from "@/components/KeyValue";
 import { Pill, TierChip } from "@/features/common/chips";
-import { useProviders, useModels, useAvailableProviders } from "@/api/queries/providers";
+import { useProviders, useModels, useAvailableProviders, useProviderModels, providerModelsKey } from "@/api/queries/providers";
 import { useSettings } from "@/api/queries/system";
 import { useSetProviderKey, useTestProvider, useDeleteProviderKey } from "@/api/mutations/providers";
 import { useSaveSettings } from "@/api/mutations/misc";
+import { api } from "@/api/client";
+import { qk } from "@/api/queryKeys";
 import { toast } from "@/stores/uiStore";
 import { formatUsd, formatDuration } from "@/lib/format";
+
+/** POST /providers/:vendor/models/refresh — re-fetch a provider's live model list. */
+function useRefreshProviderModels(vendor: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<ProviderModelsRefreshResponse>(apiPaths.providerModelsRefresh(vendor)),
+    onSuccess: (r) => {
+      // Seed the ladder/judge autocomplete cache and re-derive the priced catalog.
+      qc.setQueryData(providerModelsKey(vendor), { provider: r.provider, models: r.models } satisfies ProviderModels);
+      void qc.invalidateQueries({ queryKey: qk.models });
+    },
+  });
+}
 
 export function ProvidersPage() {
   const { data: providers, isLoading } = useProviders();
   const { data: models } = useModels();
+  const { data: available } = useAvailableProviders();
+  const [query, setQuery] = useState("");
+
+  // env_key_hint / display_name captions come from the installable-provider set.
+  const hintFor = useMemo(
+    () => new Map<string, InstallableProvider>((available ?? []).map((a) => [a.id, a])),
+    [available],
+  );
+  const q = query.trim().toLowerCase();
+  const filtered = (providers ?? []).filter((p) => {
+    if (!q) return true;
+    const hint = hintFor.get(p.vendor);
+    return (
+      p.vendor.toLowerCase().includes(q) ||
+      (hint?.display_name.toLowerCase().includes(q) ?? false) ||
+      (hint?.env_key_hint?.toLowerCase().includes(q) ?? false)
+    );
+  });
+  const configuredList = filtered.filter((p) => p.configured);
+  const availableList = filtered.filter((p) => !p.configured);
 
   const modelColumns: Column<ModelInfo>[] = [
     { key: "id", header: "Model", render: (m) => m.id, sortValue: (m) => m.id, mono: true },
@@ -35,11 +80,23 @@ export function ProvidersPage() {
       {isLoading ? (
         <EmptyState title="Loading providers…" compact />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {(providers ?? []).map((p) => (
-            <ProviderCard key={p.vendor} provider={p} />
-          ))}
-        </div>
+        <>
+          <input
+            data-testid="provider-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search providers… (name or env key)"
+            className="w-full max-w-sm rounded-sm border border-line-2 bg-bg-2 px-2 py-1.5 text-[12px] text-ink-1 outline-none focus:border-accent"
+          />
+          {filtered.length === 0 ? (
+            <EmptyState title="No providers match" description="Try a different search." compact />
+          ) : (
+            <>
+              <ProviderGroup label="Configured" providers={configuredList} hintFor={hintFor} />
+              <ProviderGroup label="Available" providers={availableList} hintFor={hintFor} />
+            </>
+          )}
+        </>
       )}
 
       <SettingsPanel providers={providers ?? []} models={models ?? []} />
@@ -54,6 +111,32 @@ export function ProvidersPage() {
         />
       </Card>
     </Page>
+  );
+}
+
+/* ── Provider grid, grouped Configured above Available ─────────────────── */
+
+function ProviderGroup({
+  label,
+  providers,
+  hintFor,
+}: {
+  label: string;
+  providers: ProviderStatus[];
+  hintFor: Map<string, InstallableProvider>;
+}) {
+  if (providers.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] uppercase tracking-wide text-ink-3" data-testid={`provider-group-${label.toLowerCase()}`}>
+        {label} <span className="mono tnum">({providers.length})</span>
+      </h2>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {providers.map((p) => (
+          <ProviderCard key={p.vendor} provider={p} envKeyHint={hintFor.get(p.vendor)?.env_key_hint ?? null} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -104,29 +187,72 @@ function AddProviderPicker({ configured }: { configured: Set<string> }) {
 
 /* ── Tier ladder + judge pool ──────────────────────────────────────────── */
 
+/** Datalist id shared by every ladder/judge model-id input on the page. */
+const MODEL_DATALIST_ID = "pp-model-ids";
+
+/** Options for one provider's live model list (GET /providers/:vendor/models). */
+function ProviderModelOptions({ vendor, exclude }: { vendor: string; exclude: Set<string> }) {
+  const { data } = useProviderModels(vendor);
+  return (
+    <>
+      {(data?.models ?? [])
+        .filter((id) => !exclude.has(id))
+        .map((id) => (
+          <option key={id} value={id}>
+            {vendor}
+          </option>
+        ))}
+    </>
+  );
+}
+
 function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; models: ModelInfo[] }) {
   const { data: settings } = useSettings();
   const save = useSaveSettings();
+  const qc = useQueryClient();
   const [draft, setDraft] = useState<HarnessSettings | null>(null);
+  const [judgeDraft, setJudgeDraft] = useState("");
   useEffect(() => {
     if (settings) setDraft(settings);
   }, [settings]);
 
-  const configuredVendors = useMemo(
-    () => new Set(providers.filter((p) => p.configured).map((p) => p.vendor)),
+  const configuredVendorList = useMemo(
+    () => providers.filter((p) => p.configured).map((p) => p.vendor),
     [providers],
   );
-  const availableModels = useMemo(
-    () => models.filter((m) => configuredVendors.has(m.vendor)),
-    [models, configuredVendors],
-  );
-  const vendorOf = (id: string) => models.find((m) => m.id === id)?.vendor ?? "?";
+  const catalogIds = useMemo(() => new Set(models.map((m) => m.id)), [models]);
+
+  /** Provider for a model id: priced catalog first, then each provider's live list. */
+  const vendorFor = (id: string): string | null => {
+    const m = models.find((x) => x.id === id);
+    if (m) return m.vendor;
+    for (const v of configuredVendorList) {
+      const pm = qc.getQueryData<ProviderModels>(providerModelsKey(v));
+      if (pm?.models.includes(id)) return v;
+    }
+    return null;
+  };
 
   if (!draft) return null;
 
-  const modelOptions = availableModels.length ? availableModels : models;
   const judgeProviders = new Set(draft.judge_pool.map((j) => j.provider));
   const crossVendorOk = judgeProviders.size >= 2;
+
+  const addJudge = () => {
+    const id = judgeDraft.trim();
+    if (!id) return;
+    if (draft.judge_pool.some((j) => j.model === id)) {
+      setJudgeDraft("");
+      return;
+    }
+    const provider = vendorFor(id);
+    if (!provider) {
+      toast({ tone: "error", title: "Unknown model id", message: "pick a model from the suggestions (or refresh the provider's models)" });
+      return;
+    }
+    setDraft({ ...draft, judge_pool: [...draft.judge_pool, { provider, model: id }] });
+    setJudgeDraft("");
+  };
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
   const commit = () =>
@@ -138,8 +264,21 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Shared autocomplete: the priced catalog + each configured provider's live model list. */}
+      <datalist id={MODEL_DATALIST_ID}>
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.vendor}
+            {m.tier ? ` · ${m.tier}` : ""}
+          </option>
+        ))}
+        {configuredVendorList.map((v) => (
+          <ProviderModelOptions key={v} vendor={v} exclude={catalogIds} />
+        ))}
+      </datalist>
+
       <Card title="Generation ladders" actions={SaveBtn}>
-        <p className="mb-2 text-[11px] text-ink-3">Map each tier of a generation ladder to a model. Any provider's models can back a ladder; only models from configured providers are offered.</p>
+        <p className="mb-2 text-[11px] text-ink-3">Map each tier of a generation ladder to a model id. Suggestions come from the priced catalog plus each configured provider's live model list (Refresh models on a provider card re-fetches it).</p>
         <div className="space-y-3">
           {Object.entries(draft.ladders).map(([ladderName, tiers]) => (
             <div key={ladderName} className="space-y-2">
@@ -147,17 +286,17 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
               {Object.entries(tiers).map(([tier, modelId]) => (
                 <div key={tier} className="flex items-center gap-2">
                   <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
-                  <select
+                  <input
+                    list={MODEL_DATALIST_ID}
                     value={modelId}
+                    spellCheck={false}
+                    autoComplete="off"
+                    data-testid={`ladder-${ladderName}-${tier}`}
                     onChange={(e) =>
                       setDraft({ ...draft, ladders: { ...draft.ladders, [ladderName]: { ...tiers, [tier]: e.target.value } } })
                     }
                     className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
-                  >
-                    {modelOptions.map((m) => (
-                      <option key={m.id} value={m.id}>{m.id}</option>
-                    ))}
-                  </select>
+                  />
                   {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
                 </div>
               ))}
@@ -186,22 +325,22 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
           ))}
         </ul>
         <div className="mt-2 flex items-center gap-2">
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              const id = e.target.value;
-              if (id && !draft.judge_pool.some((j) => j.model === id)) {
-                setDraft({ ...draft, judge_pool: [...draft.judge_pool, { provider: vendorOf(id), model: id }] });
-              }
-              e.target.value = "";
+          <input
+            list={MODEL_DATALIST_ID}
+            value={judgeDraft}
+            spellCheck={false}
+            autoComplete="off"
+            data-testid="judge-model-input"
+            onChange={(e) => setJudgeDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addJudge();
             }}
+            placeholder="add judge model id…"
             className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
-          >
-            <option value="">add judge model…</option>
-            {models.filter((m) => !draft.judge_pool.some((j) => j.model === m.id)).map((m) => (
-              <option key={m.id} value={m.id}>{m.id}</option>
-            ))}
-          </select>
+          />
+          <Button size="sm" disabled={!judgeDraft.trim()} onClick={addJudge} data-testid="judge-model-add">
+            Add
+          </Button>
         </div>
         {!crossVendorOk && (
           <p className="mt-2 text-[11px] text-warn">All judges share a single provider — cross-vendor gates (spec/design/security/contract) will have no eligible judge.</p>
@@ -211,11 +350,12 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
   );
 }
 
-function ProviderCard({ provider }: { provider: ProviderStatus }) {
+function ProviderCard({ provider, envKeyHint = null }: { provider: ProviderStatus; envKeyHint?: string | null }) {
   const tone = provider.degraded ? "warn" : provider.configured ? "pass" : "dim";
   const [keyOpen, setKeyOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const test = useTestProvider(provider.vendor);
+  const refresh = useRefreshProviderModels(provider.vendor);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
 
   return (
@@ -228,10 +368,11 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
         rows={[
           { label: "api key", value: provider.has_api_key ? (provider.masked_key ?? "set") : "—", mono: true },
           { label: "configured", value: provider.configured ? "yes" : "no" },
+          ...(envKeyHint ? [{ label: "env key", value: envKeyHint, mono: true }] : []),
         ]}
       />
 
-      <div className="mt-3 flex items-center gap-2 border-t border-line-1 pt-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line-1 pt-2">
         <Button size="sm" onClick={() => setKeyOpen(true)}>{provider.has_api_key ? "Replace key" : "Set key"}</Button>
         <Button
           size="sm"
@@ -245,6 +386,25 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
           }
         >
           {test.isPending ? "Testing…" : "Test"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={refresh.isPending}
+          data-testid={`refresh-models-${provider.vendor}`}
+          onClick={() =>
+            refresh.mutate(undefined, {
+              onSuccess: (r) =>
+                toast({
+                  tone: "success",
+                  title: `${provider.vendor} models refreshed`,
+                  message: `${r.models.length} model id${r.models.length === 1 ? "" : "s"}${r.refreshed ? "" : " (static fallback)"}`,
+                }),
+              onError: (e) => toast({ tone: "error", title: "Refresh failed", message: e instanceof Error ? e.message : "" }),
+            })
+          }
+        >
+          {refresh.isPending ? "Refreshing…" : "Refresh models"}
         </Button>
         {provider.has_api_key && (
           <Button size="sm" variant="danger" onClick={() => setDeleteOpen(true)}>Remove</Button>

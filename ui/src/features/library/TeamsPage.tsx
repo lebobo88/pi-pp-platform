@@ -16,7 +16,7 @@ export function TeamsPage() {
 
   return (
     <Page title="Library" description="Specialized team pipelines (project → user → built-in).">
-      <LibraryTabs active="teams" />
+      <LibraryTabs active="teams" count={teams?.length} />
       {isLoading ? (
         <EmptyState title="Loading teams…" compact />
       ) : (

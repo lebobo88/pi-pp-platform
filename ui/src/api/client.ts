@@ -4,6 +4,7 @@
  * 422 carries per-field validation errors in `details`.
  */
 import type { ApiError } from "@shared/api-types";
+import { getApiToken, markUnauthorized } from "@/stores/authStore";
 
 export class ApiClientError extends Error {
   readonly status: number;
@@ -32,6 +33,7 @@ export interface RequestOptions {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+  const token = getApiToken();
   let res: Response;
   try {
     res = await fetch(path, {
@@ -39,6 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown, opts: Re
       headers: {
         Accept: "application/json",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...opts.headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -49,6 +52,9 @@ async function request<T>(method: string, path: string, body?: unknown, opts: Re
     const message = err instanceof Error ? err.message : "Network request failed";
     throw new ApiClientError(0, message);
   }
+
+  // Flag missing/bad token so the TokenGate can prompt, then throw as usual.
+  if (res.status === 401) markUnauthorized();
 
   const raw = await res.text();
   let parsed: unknown = undefined;

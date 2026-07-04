@@ -9,7 +9,7 @@ export const mockProjectDetails: Record<string, ProjectDetail> = {
     constitution: { present: true, sha: "cst_88ac41", updated_at: "2026-06-20T10:00:00.000Z", sections: null },
     agents_md: { present: true, sha: "agm_2231", updated_at: "2026-07-01T14:14:00.000Z", sections: 6 },
     master_plan: { present: true, sha: "mp_5590", updated_at: "2026-07-01T14:14:05.000Z", sections: 20 },
-    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/acme-checkout"),
+    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/acme-checkout").slice(0, 5),
   },
   "C:/AiAppDeployments/orbit-api": {
     ...mockProjects[1]!,
@@ -17,7 +17,7 @@ export const mockProjectDetails: Record<string, ProjectDetail> = {
     constitution: { present: true, sha: "cst_7712", updated_at: "2026-06-11T09:00:00.000Z", sections: null },
     agents_md: { present: true, sha: "agm_9931", updated_at: "2026-06-29T09:58:00.000Z", sections: 6 },
     master_plan: { present: true, sha: "mp_1180", updated_at: "2026-06-29T09:58:12.000Z", sections: 20 },
-    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/orbit-api"),
+    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/orbit-api").slice(0, 5),
   },
   "C:/AiAppDeployments/pi-pp-platform": {
     ...mockProjects[2]!,
@@ -25,7 +25,7 @@ export const mockProjectDetails: Record<string, ProjectDetail> = {
     constitution: { present: false, sha: null, updated_at: null, sections: null },
     agents_md: { present: true, sha: "agm_0007", updated_at: "2026-06-30T22:15:00.000Z", sections: 6 },
     master_plan: { present: true, sha: "mp_0007", updated_at: "2026-06-30T22:15:00.000Z", sections: 20 },
-    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/pi-pp-platform"),
+    recent_runs: mockRunSummaries.filter((r) => r.project_path === "C:/AiAppDeployments/pi-pp-platform").slice(0, 5),
   },
 };
 

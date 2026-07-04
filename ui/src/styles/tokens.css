@@ -6,6 +6,13 @@
  * border-line-1, text-accent, …).
  */
 :root {
+  /*
+   * Dark-only today. A future light theme will re-declare these tokens (and
+   * color-scheme) under a `[data-theme="light"]` selector on <html>; keeping
+   * color-scheme with the tokens means themes swap in one place.
+   */
+  color-scheme: dark;
+
   /* Surfaces — deepest to raised */
   --bg-0: #0a0c10;
   --bg-1: #10141b;

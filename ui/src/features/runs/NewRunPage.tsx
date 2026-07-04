@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import type { RunMode, ClaudeTier, ModelInfo, TeamSpec, Forum } from "@shared/api-types";
+import type {
+  RunMode,
+  ClaudeTier,
+  ModelInfo,
+  TeamSpec,
+  Forum,
+  TeamRecommendResponse,
+  TeamRecommendation,
+} from "@shared/api-types";
 import { RUN_MODE, CLAUDE_TIERS } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
@@ -13,6 +21,7 @@ import { useProfiles, useTeams, useForums } from "@/api/queries/library";
 import { useModels } from "@/api/queries/providers";
 import { useBudgets, useCaps } from "@/api/queries/budgets";
 import { useStartRun } from "@/api/mutations/runs";
+import { useRecommendTeams } from "@/api/mutations/recommend";
 import { toast } from "@/stores/uiStore";
 import { ApiClientError } from "@/api/client";
 import { formatUsd, formatTokens, estimateTokens } from "@/lib/format";
@@ -29,7 +38,9 @@ import {
   type WizardState,
   type WizardStep,
   type ScopeOverride,
+  type TeamSource,
 } from "./wizard/wizardReducer";
+import { RecommendationBanner } from "./wizard/RecommendationBanner";
 import { estimateRunCost, defaultStageCount, type TierPrice } from "./wizard/costEstimator";
 
 const STEP_TITLES: Record<WizardStep, string> = {
@@ -58,6 +69,34 @@ export function NewRunPage() {
   const { data: caps } = useCaps();
   const { data: budgets } = useBudgets();
   const startRun = useStartRun();
+  const recommend = useRecommendTeams();
+
+  // Fire the recommender on entering step 2 with valid step-1 data. Memoized
+  // on (project_path, request_text) in a ref so unchanged inputs never refetch.
+  const recommendKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.step !== 2 || !stepValid(state, 1)) return;
+    const key = JSON.stringify([state.projectPath, state.requestText]);
+    if (recommendKeyRef.current === key) return;
+    recommendKeyRef.current = key;
+    recommend.mutate({
+      request_text: state.requestText.trim(),
+      project_path: state.projectPath.trim(),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step, state.projectPath, state.requestText]);
+
+  const recommendation: TeamRecommendResponse | null = recommend.data ?? null;
+  const topRecommendation = recommendation?.recommendations[0] ?? null;
+
+  // Preselect the top team while in team mode. The reducer guards on
+  // teamSource, so a manual pick is never clobbered and re-runs are no-ops.
+  useEffect(() => {
+    if (topRecommendation && state.mode === "team") {
+      dispatch({ type: "applyRecommendation", team: topRecommendation.team });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topRecommendation, state.mode]);
 
   // Default the forum to a real one once /forums loads.
   useEffect(() => {
@@ -97,9 +136,10 @@ export function NewRunPage() {
 
   const today = new Date().toISOString().slice(0, 10);
   const daySpend = budgets?.find((b) => b.scope === `day:${today}`)?.cost_usd ?? budgets?.find((b) => b.scope.startsWith("day:"))?.cost_usd ?? 0;
-  const dayCap = caps?.find((c) => c.scope === "day")?.limit_usd ?? 8;
-  const dayRemaining = Math.max(0, dayCap - daySpend);
-  const overCap = estimate.maxUsd > dayRemaining;
+  // No fabricated cap: when the server reports no day cap, show that honestly.
+  const dayCap = caps?.find((c) => c.scope === "day")?.limit_usd ?? null;
+  const dayRemaining = dayCap == null ? null : Math.max(0, dayCap - daySpend);
+  const overCap = dayRemaining != null && estimate.maxUsd > dayRemaining;
 
   const launch = () => {
     startRun.mutate(toStartRequest(state), {
@@ -142,8 +182,11 @@ export function NewRunPage() {
               forums={forums ?? []}
               projectProfile={projectProfile}
               models={models ?? []}
+              recommendation={recommendation}
+              recommendLoading={recommend.isPending}
               onMode={(m) => dispatch({ type: "mode", mode: m })}
-              onTeam={(t) => set({ team: t })}
+              onTeam={(t) => dispatch({ type: "teamManual", team: t })}
+              onUseTeamMode={() => dispatch({ type: "suggestMode", mode: "team" })}
               onForum={(f) => set({ forum: f })}
               onN={(n) => set({ n })}
             />
@@ -156,15 +199,25 @@ export function NewRunPage() {
               estimate={estimate}
               dayRemaining={dayRemaining}
               overCap={overCap}
+              suggestTeamMode={!!recommendation?.suggest_team_mode}
+              suggestedTeam={topRecommendation?.team ?? null}
               onScope={(s) => set({ scope: s })}
               onProfile={(p) => set({ profile: p })}
               onTierCap={(t) => set({ tierCap: t })}
               onTierFloor={(t) => set({ tierFloor: t })}
+              onSwitchToTeamMode={() => dispatch({ type: "suggestMode", mode: "team" })}
+              onDismissSuggestion={() => dispatch({ type: "dismissModeSuggestion" })}
             />
           )}
 
           {state.step === 4 && (
-            <StepReview state={state} stageCount={stageCount} estimate={estimate} overCap={overCap} />
+            <StepReview
+              state={state}
+              stageCount={stageCount}
+              estimate={estimate}
+              overCap={overCap}
+              recommendation={recommendation}
+            />
           )}
 
           <div className="flex items-center justify-between">
@@ -296,8 +349,11 @@ function StepMode({
   forums,
   projectProfile,
   models,
+  recommendation,
+  recommendLoading,
   onMode,
   onTeam,
+  onUseTeamMode,
   onForum,
   onN,
 }: {
@@ -306,13 +362,23 @@ function StepMode({
   forums: Forum[];
   projectProfile: string | null;
   models: ModelInfo[];
+  recommendation: TeamRecommendResponse | null;
+  recommendLoading: boolean;
   onMode: (m: RunMode) => void;
   onTeam: (t: string) => void;
+  onUseTeamMode: (team: string) => void;
   onForum: (f: string) => void;
   onN: (n: number) => void;
 }) {
   return (
     <>
+      <RecommendationBanner
+        loading={recommendLoading}
+        response={recommendation}
+        mode={state.mode}
+        onUseTeamMode={onUseTeamMode}
+      />
+
       <Card title="Mode">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {RUN_MODE.map((m) => (
@@ -332,7 +398,14 @@ function StepMode({
 
       {state.mode === "team" && (
         <Card title="Team">
-          <TeamPicker teams={teams} projectProfile={projectProfile} selected={state.team} onSelect={onTeam} />
+          <TeamPicker
+            teams={teams}
+            projectProfile={projectProfile}
+            selected={state.team}
+            teamSource={state.teamSource}
+            recommendations={recommendation?.recommendations ?? []}
+            onSelect={onTeam}
+          />
         </Card>
       )}
 
@@ -379,17 +452,30 @@ function TeamPicker({
   teams,
   projectProfile,
   selected,
+  teamSource,
+  recommendations,
   onSelect,
 }: {
   teams: TeamSpec[];
   projectProfile: string | null;
   selected: string;
+  teamSource: TeamSource;
+  recommendations: TeamRecommendation[];
   onSelect: (name: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const filtered = teams.filter(
-    (t) => t.name.toLowerCase().includes(query.toLowerCase()) || (t.description ?? "").toLowerCase().includes(query.toLowerCase()),
-  );
+  const recByTeam = new Map(recommendations.map((r) => [r.team, r]));
+  const rank = (t: TeamSpec) => {
+    const i = recommendations.findIndex((r) => r.team === t.name);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const filtered = teams
+    .filter(
+      (t) => t.name.toLowerCase().includes(query.toLowerCase()) || (t.description ?? "").toLowerCase().includes(query.toLowerCase()),
+    )
+    // Recommended teams surface first (in recommendation order); the sort is
+    // stable, so everything else keeps its catalog order.
+    .sort((a, b) => rank(a) - rank(b));
   const compatible = (t: TeamSpec) =>
     !projectProfile || !t.profiles_compatible || t.profiles_compatible.length === 0 || t.profiles_compatible.includes(projectProfile);
 
@@ -401,9 +487,13 @@ function TeamPicker({
         placeholder="Search teams…"
         className="mb-2 w-full rounded-sm border border-line-2 bg-bg-2 px-2 py-1.5 text-[12px] text-ink-1 outline-none focus:border-accent"
       />
+      {teamSource === "recommended" && selected && (
+        <p className="mb-2 text-[11px] text-ink-3">Preselected by the recommender — pick any other team to override.</p>
+      )}
       <div className="grid max-h-72 grid-cols-1 gap-2 overflow-auto sm:grid-cols-2">
         {filtered.map((t) => {
           const ok = compatible(t);
+          const rec = recByTeam.get(t.name);
           return (
             <button
               key={t.name}
@@ -417,7 +507,10 @@ function TeamPicker({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[12px] font-medium text-ink-1">{t.name}</span>
-                {t.origin && <Pill>{t.origin}</Pill>}
+                <span className="flex items-center gap-1">
+                  {rec && <Pill tone="accent">recommended · {rec.confidence}</Pill>}
+                  {t.origin && <Pill>{t.origin}</Pill>}
+                </span>
               </div>
               <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-3">{t.description}</p>
               <div className="mt-1 flex flex-wrap gap-1">
@@ -437,18 +530,25 @@ function TeamPicker({
 }
 
 function CandidatePreview({ n, models }: { n: number; models: ModelInfo[] }) {
-  const rotation = ["claude-opus-4-7", "claude-sonnet-4-6", "gpt-5.4", "gemini-2.5-pro"];
-  const known = new Set(models.map((m) => m.id));
-  const pick = (i: number) => {
-    const id = rotation[i % rotation.length]!;
-    return known.has(id) ? id : models[i % Math.max(1, models.length)]?.id ?? id;
-  };
+  // Derive the rotation from the fetched catalog: one model per distinct
+  // vendor (catalog order), cycled across candidates. No hardcoded ids.
+  const seen = new Set<string>();
+  const rotation: string[] = [];
+  for (const m of models) {
+    if (!seen.has(m.vendor)) {
+      seen.add(m.vendor);
+      rotation.push(m.id);
+    }
+  }
+  if (rotation.length === 0) {
+    return <p className="mt-3 text-[11px] text-ink-3">candidate models resolve at launch</p>;
+  }
   return (
     <div className="mt-3 space-y-1">
       {Array.from({ length: n }).map((_, i) => (
         <div key={i} className="flex items-center justify-between rounded-sm bg-bg-2 px-2 py-1 text-[11px]">
           <span className="text-ink-3">candidate {i + 1}</span>
-          <span className="mono text-ink-1">{pick(i)}</span>
+          <span className="mono text-ink-1">{rotation[i % rotation.length]}</span>
           <span className="mono text-ink-3">seed {String(i + 1).padStart(2, "0")}</span>
         </div>
       ))}
@@ -464,22 +564,32 @@ function StepOptions({
   estimate,
   dayRemaining,
   overCap,
+  suggestTeamMode,
+  suggestedTeam,
   onScope,
   onProfile,
   onTierCap,
   onTierFloor,
+  onSwitchToTeamMode,
+  onDismissSuggestion,
 }: {
   state: WizardState;
   profiles: string[];
   estimate: { minUsd: number; maxUsd: number };
-  dayRemaining: number;
+  dayRemaining: number | null;
   overCap: boolean;
+  suggestTeamMode: boolean;
+  suggestedTeam: string | null;
   onScope: (s: ScopeOverride) => void;
   onProfile: (p: string) => void;
   onTierCap: (t: ClaudeTier | "") => void;
   onTierFloor: (t: ClaudeTier | "") => void;
+  onSwitchToTeamMode: () => void;
+  onDismissSuggestion: () => void;
 }) {
   const tiersDisabled = tierControlsDisabled(state.mode);
+  const showModeSuggestion =
+    (state.scope === "major" || suggestTeamMode) && state.mode !== "team" && !state.dismissedModeSuggestion;
   return (
     <>
       <Card title="Scope override">
@@ -498,6 +608,23 @@ function StepOptions({
         </div>
         <p className="mt-2 text-[11px] text-ink-3">{SCOPE_HINT[state.scope]}</p>
       </Card>
+
+      {showModeSuggestion && (
+        <div
+          data-testid="team-mode-nudge"
+          className="rounded-md border border-[color-mix(in_srgb,var(--warn)_45%,transparent)] bg-bg-2 p-2.5"
+        >
+          <p className="text-[12px] text-warn">Major scope requires a team pipeline — switch to team mode?</p>
+          <div className="mt-2 flex items-center gap-2">
+            <Button size="sm" onClick={onSwitchToTeamMode} data-testid="nudge-switch">
+              {suggestedTeam ? `Switch to team mode — ${suggestedTeam}` : "Switch to team mode"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDismissSuggestion} data-testid="nudge-dismiss">
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Card title="Profile & tier caps">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -519,7 +646,11 @@ function StepOptions({
       <Card title="Estimated cost">
         <div className="flex items-baseline justify-between">
           <span className="mono text-[15px] text-ink-1">{formatUsd(estimate.minUsd)} – {formatUsd(estimate.maxUsd)}</span>
-          <span className="text-[11px] text-ink-3">day remaining: <span className="mono">{formatUsd(dayRemaining)}</span></span>
+          {dayRemaining != null ? (
+            <span className="text-[11px] text-ink-3">day remaining: <span className="mono">{formatUsd(dayRemaining)}</span></span>
+          ) : (
+            <span className="text-[11px] text-ink-3">no day cap set</span>
+          )}
         </div>
         {overCap && (
           <p className="mt-2 text-[11px] text-fail">Estimated max exceeds the remaining day budget — the run may trip the cap and downgrade or block.</p>
@@ -553,16 +684,24 @@ function StepReview({
   stageCount,
   estimate,
   overCap,
+  recommendation,
 }: {
   state: WizardState;
   stageCount: number;
   estimate: { minUsd: number; maxUsd: number };
   overCap: boolean;
+  recommendation: TeamRecommendResponse | null;
 }) {
+  const appliedRec = recommendation?.recommendations.find((r) => r.team === state.team) ?? null;
+  const teamSourceLabel =
+    state.teamSource === "recommended"
+      ? `recommended${appliedRec ? ` (${appliedRec.confidence})` : ""}`
+      : "manual";
   const rows: [string, string][] = [
     ["project", state.projectPath],
     ["mode", state.mode === "best_of" ? `best-of ${state.n}` : state.mode],
     ...(state.mode === "team" ? [["team", state.team] as [string, string]] : []),
+    ...(state.mode === "team" ? [["team source", teamSourceLabel] as [string, string]] : []),
     ...(state.mode === "review" ? [["forum", state.forum] as [string, string]] : []),
     ["scope", state.scope],
     ["profile", state.profile || "auto-detect"],

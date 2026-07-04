@@ -59,9 +59,7 @@
 */
 
 @layer base {
-  :root {
-    color-scheme: dark;
-  }
+  /* color-scheme lives with the tokens in tokens.css (:root). */
 
   html,
   body,

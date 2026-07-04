@@ -12,30 +12,45 @@ import { useRuns } from "@/api/queries/runs";
 import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatElapsed, formatRelative, shortId, basename } from "@/lib/format";
 
+/** Server page size — small enough that "Load more" is exercised on real history. */
+const PAGE_SIZE = 25;
+
 export function RunsPage() {
   const navigate = useNavigate();
   const activeProject = useUiStore((s) => s.activeProjectPath);
   const [status, setStatus] = useState<RunStatus | "">("");
 
-  const { data: runs, isLoading } = useRuns({
+  const {
+    data: runs,
+    isLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useRuns({
     project_path: activeProject ?? undefined,
     status: status || undefined,
+    limit: PAGE_SIZE,
   });
 
+  // Client-side sorting over a partial page would mislead (rows beyond the
+  // cursor are missing), so headers only sort once all pages are loaded.
+  const sortable = !hasNextPage;
+  const sortVal = <V extends string | number>(fn: (r: RunSummary) => V) => (sortable ? fn : undefined);
+
   const columns: Column<RunSummary>[] = [
-    { key: "id", header: "Run", render: (r) => shortId(r.id, 14), sortValue: (r) => r.id, mono: true, width: 130 },
+    { key: "id", header: "Run", render: (r) => shortId(r.id, 14), sortValue: sortVal((r) => r.id), mono: true, width: 130 },
     {
       key: "request",
       header: "Request",
       render: (r) => <span className="line-clamp-1 text-ink-1">{r.request_text}</span>,
-      sortValue: (r) => r.request_text,
+      sortValue: sortVal((r) => r.request_text),
     },
-    { key: "project", header: "Project", render: (r) => basename(r.project_path), sortValue: (r) => r.project_path, mono: true, width: 130 },
-    { key: "mode", header: "Mode", render: (r) => <ModeChip mode={r.mode} />, sortValue: (r) => r.mode, width: 90 },
-    { key: "status", header: "Status", render: (r) => <RunStatusChip status={r.status} />, sortValue: (r) => r.status, width: 110 },
-    { key: "cost", header: "Cost", render: (r) => formatUsd(r.cost_usd), sortValue: (r) => r.cost_usd ?? 0, mono: true, align: "right", width: 80 },
-    { key: "dur", header: "Duration", render: (r) => formatElapsed(r.started_at, r.finished_at), sortValue: (r) => Date.parse(r.finished_at ?? new Date().toISOString()) - Date.parse(r.started_at), mono: true, align: "right", width: 90 },
-    { key: "started", header: "Started", render: (r) => formatRelative(r.started_at), sortValue: (r) => r.started_at, mono: true, align: "right", width: 110 },
+    { key: "project", header: "Project", render: (r) => basename(r.project_path), sortValue: sortVal((r) => r.project_path), mono: true, width: 130 },
+    { key: "mode", header: "Mode", render: (r) => <ModeChip mode={r.mode} />, sortValue: sortVal((r) => r.mode), width: 90 },
+    { key: "status", header: "Status", render: (r) => <RunStatusChip status={r.status} />, sortValue: sortVal((r) => r.status), width: 110 },
+    { key: "cost", header: "Cost", render: (r) => formatUsd(r.cost_usd), sortValue: sortVal((r) => r.cost_usd ?? 0), mono: true, align: "right", width: 80 },
+    { key: "dur", header: "Duration", render: (r) => formatElapsed(r.started_at, r.finished_at), sortValue: sortVal((r) => Date.parse(r.finished_at ?? new Date().toISOString()) - Date.parse(r.started_at)), mono: true, align: "right", width: 90 },
+    { key: "started", header: "Started", render: (r) => formatRelative(r.started_at), sortValue: sortVal((r) => r.started_at), mono: true, align: "right", width: 110 },
   ];
 
   return (
@@ -75,10 +90,14 @@ export function RunsPage() {
         )}
       </Card>
 
-      {/* Cursor pagination stub — later agents wire the real cursor. */}
       <div className="mt-3 flex justify-center">
-        <Button size="sm" variant="ghost" disabled title="Pagination arrives with the server cursor">
-          Load more
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!hasNextPage || isFetchingNextPage}
+          onClick={() => fetchNextPage()}
+        >
+          {isLoading || isFetchingNextPage ? "Loading…" : hasNextPage ? "Load more" : "End of history"}
         </Button>
       </div>
     </Page>

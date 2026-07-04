@@ -6,6 +6,7 @@ import {
   canLaunch,
   toStartRequest,
   tierControlsDisabled,
+  N_MAX,
   type WizardState,
 } from "./wizardReducer";
 import { estimateRunCost, defaultStageCount } from "./costEstimator";
@@ -66,6 +67,56 @@ describe("wizardReducer", () => {
     expect(bestReq.n).toBe(5);
     expect(bestReq.tier_cap).toBeUndefined(); // dropped in best-of
     expect("tier_cap" in bestReq).toBe(false);
+  });
+
+  it("keeps the best-of ceiling at 8 (server-accepted max)", () => {
+    expect(N_MAX).toBe(8);
+    expect(stepValid(fill({ mode: "best_of", n: 8 }), 2)).toBe(true);
+    expect(stepValid(fill({ mode: "best_of", n: 9 }), 2)).toBe(false);
+  });
+});
+
+describe("team recommendation state", () => {
+  it("applies a recommendation to an empty team and marks the source", () => {
+    const s = wizardReducer(fill({ mode: "team" }), { type: "applyRecommendation", team: "bug-fix-team" });
+    expect(s.team).toBe("bug-fix-team");
+    expect(s.teamSource).toBe("recommended");
+  });
+
+  it("never overwrites a manual pick", () => {
+    let s = wizardReducer(fill({ mode: "team" }), { type: "teamManual", team: "ux-team" });
+    expect(s.teamSource).toBe("manual");
+    s = wizardReducer(s, { type: "applyRecommendation", team: "bug-fix-team" });
+    expect(s.team).toBe("ux-team");
+    expect(s.teamSource).toBe("manual");
+  });
+
+  it("a newer recommendation may replace an earlier one; a manual pick flips the source", () => {
+    let s = wizardReducer(fill({ mode: "team" }), { type: "applyRecommendation", team: "feature-team" });
+    s = wizardReducer(s, { type: "applyRecommendation", team: "bug-fix-team" });
+    expect(s.team).toBe("bug-fix-team");
+    expect(s.teamSource).toBe("recommended");
+    s = wizardReducer(s, { type: "teamManual", team: "bug-fix-team" });
+    expect(s.teamSource).toBe("manual");
+  });
+
+  it("re-applying the same recommendation is a no-op (same state object)", () => {
+    const s1 = wizardReducer(fill({ mode: "team" }), { type: "applyRecommendation", team: "feature-team" });
+    const s2 = wizardReducer(s1, { type: "applyRecommendation", team: "feature-team" });
+    expect(s2).toBe(s1);
+  });
+
+  it("nudge dismissal sticks until a manual mode change re-arms it", () => {
+    let s = wizardReducer(initialWizardState, { type: "dismissModeSuggestion" });
+    expect(s.dismissedModeSuggestion).toBe(true);
+    s = wizardReducer(s, { type: "mode", mode: "best_of" });
+    expect(s.dismissedModeSuggestion).toBe(false);
+  });
+
+  it("suggestMode switches mode and jumps to step 2", () => {
+    const s = wizardReducer(fill({ step: 3, mode: "single" }), { type: "suggestMode", mode: "team" });
+    expect(s.mode).toBe("team");
+    expect(s.step).toBe(2);
   });
 });
 

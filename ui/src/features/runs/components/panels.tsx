@@ -151,7 +151,7 @@ export function MissabilityPanel({ runId }: { runId: string }) {
 
 /* ── Budget (run scope) ────────────────────────────────────────────────── */
 
-export function RunBudgetPanel({ tree }: { tree: RunTree }) {
+export function RunBudgetPanel({ tree, capUsd }: { tree: RunTree; capUsd: number | null }) {
   const totals = runTotals(tree);
   const byModel = costBreakdown(tree, "model");
   const byTier = costBreakdown(tree, "tier");
@@ -166,7 +166,14 @@ export function RunBudgetPanel({ tree }: { tree: RunTree }) {
   return (
     <div className="space-y-3">
       <Card title="Run total">
-        <Meter value={totals.costUsd} max={3} readout={`${formatUsd(totals.costUsd)} / ${formatUsd(3)}`} label="Run budget" ticks={[{ at: 0.8, tone: "warn" }, { at: 1, tone: "fail" }]} />
+        {capUsd != null ? (
+          <Meter value={totals.costUsd} max={capUsd} readout={`${formatUsd(totals.costUsd)} / ${formatUsd(capUsd)}`} label="Run budget" ticks={[{ at: 0.8, tone: "warn" }, { at: 1, tone: "fail" }]} />
+        ) : (
+          <div className="flex items-baseline justify-between gap-2" title="No run cap configured">
+            <span className="text-[11px] text-ink-3">Run spend</span>
+            <span className="mono tnum text-[12px] text-ink-1">{formatUsd(totals.costUsd)}</span>
+          </div>
+        )}
         <div className="mt-2 text-[12px] text-ink-2">
           <span className="mono tnum">{formatTokens(totals.tokensIn)}</span> in ·{" "}
           <span className="mono tnum">{formatTokens(totals.tokensOut)}</span> out

@@ -1,9 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
 import {
   apiPaths,
   type RunSummary,
+  type RunListResponse,
   type RunTree,
   type RunStatus,
   type ReplayBundle,
@@ -13,22 +14,45 @@ import {
 export interface RunsFilter {
   project_path?: string;
   status?: RunStatus;
+  /** Page size — the server caps at 500 and defaults to 50. */
   limit?: number;
 }
 
-function runsUrl(filter: RunsFilter): string {
+function runsUrl(filter: RunsFilter, cursor?: string): string {
   const params = new URLSearchParams();
   if (filter.project_path) params.set("project_path", filter.project_path);
   if (filter.status) params.set("status", filter.status);
   if (filter.limit != null) params.set("limit", String(filter.limit));
+  if (cursor) params.set("cursor", cursor);
   const qs = params.toString();
   return qs ? `${apiPaths.runs}?${qs}` : apiPaths.runs;
 }
 
+/**
+ * Normalize a page body. The server ships the `{items, next_cursor}` envelope;
+ * keep a defensive wrap so a legacy bare array still renders (as a single page).
+ */
+function toPage(res: RunListResponse | RunSummary[]): RunListResponse {
+  return Array.isArray(res) ? { items: res, next_cursor: null } : res;
+}
+
+/**
+ * Cursor-paginated run listing over `GET /runs`.
+ *
+ * `data` is the flattened `RunSummary[]` across all loaded pages (so existing
+ * consumers keep reading a plain list); the infinite-query controls
+ * (`hasNextPage` / `fetchNextPage` / `isFetchingNextPage`) ride along for
+ * pagination-aware screens. A `["runs"]` prefix invalidation refetches every
+ * loaded page.
+ */
 export function useRuns(filter: RunsFilter = {}) {
-  return useQuery({
-    queryKey: qk.runs(filter),
-    queryFn: ({ signal }) => api.get<RunSummary[]>(runsUrl(filter), { signal }),
+  return useInfiniteQuery({
+    queryKey: qk.runsInfinite(filter),
+    queryFn: async ({ signal, pageParam }) =>
+      toPage(await api.get<RunListResponse | RunSummary[]>(runsUrl(filter, pageParam), { signal })),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    select: (data) => data.pages.flatMap((p) => p.items),
   });
 }
 

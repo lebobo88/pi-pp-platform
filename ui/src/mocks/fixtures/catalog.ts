@@ -43,6 +43,49 @@ export const mockProjects: Project[] = [
   },
 ];
 
+/**
+ * Deterministic run-history tail (all older than the hand-written rows) so the
+ * cursor-paginated `GET /runs` envelope has multiple pages to serve in mock
+ * mode. Every value derives from the index — no randomness, stable across runs.
+ */
+const HIST_PROJECTS = [
+  "C:/AiAppDeployments/acme-checkout",
+  "C:/AiAppDeployments/orbit-api",
+  "C:/AiAppDeployments/pi-pp-platform",
+] as const;
+const HIST_REQUESTS = [
+  "Add optimistic UI to the cart quantity stepper.",
+  "Harden the webhook retry queue against duplicate delivery.",
+  "Refactor the pricing service to the new money type.",
+  "Write contract tests for the invoices list endpoint.",
+  "Tighten CSP headers and document the exceptions.",
+  "Add a changelog entry generator to the release script.",
+  "Profile and fix the slow dashboard aggregate query.",
+  "Migrate feature flags to the typed config loader.",
+  "Draft the ADR for background-job idempotency keys.",
+] as const;
+
+function genRunHistory(count: number): RunSummary[] {
+  const newest = Date.UTC(2026, 5, 27, 12, 0, 0); // 2026-06-27T12:00Z, older than every hand-written row
+  const out: RunSummary[] = [];
+  for (let i = 0; i < count; i++) {
+    const started = new Date(newest - i * 7 * 3_600_000);
+    const finished = new Date(started.getTime() + (9 + (i % 4) * 6) * 60_000);
+    out.push({
+      id: `run_hist${String(i).padStart(3, "0")}`,
+      project_path: HIST_PROJECTS[i % HIST_PROJECTS.length]!,
+      request_text: HIST_REQUESTS[i % HIST_REQUESTS.length]!,
+      team: i % 3 === 0 ? "feature-team" : i % 3 === 1 ? "bug-fix-team" : null,
+      mode: i % 3 === 2 ? "single" : "team",
+      status: i % 9 === 5 ? "crashed" : "complete",
+      started_at: started.toISOString(),
+      finished_at: finished.toISOString(),
+      cost_usd: Math.round((0.08 + (i % 7) * 0.11) * 100) / 100,
+    });
+  }
+  return out;
+}
+
 export const mockRunSummaries: RunSummary[] = [
   {
     id: MOCK_RUN_ID,
@@ -88,6 +131,7 @@ export const mockRunSummaries: RunSummary[] = [
     finished_at: "2026-06-30T22:19:03.000Z",
     cost_usd: 0.88,
   },
+  ...genRunHistory(36),
 ];
 
 // The pi runtime has no sub-CLIs: cli_installed/cli_version/logged_in/degraded
@@ -157,29 +201,71 @@ export const mockJanitor: JanitorReport = {
   ],
 };
 
-/** Governance forums — mirror @pp/core forums.ts (id/title/description/produces). */
+/** Governance forums — mirror @pp/core forums.ts. The real GET /forums list
+ * returns the summary subset; the detail (GET /forums/:id) adds `stages`.
+ * The mock serves these full objects for both routes. */
 export const mockForums: Forum[] = [
-  { id: "framing", title: "Problem framing / discovery review", description: "Confirms the problem, target users, and success metric before scope work begins.", produces: "Problem statement, evidence, success metrics" },
-  { id: "architecture", title: "Architecture review", description: "Reviews the technical approach, ADRs, and system boundaries.", produces: "ADRs, C4 sketches, tech design" },
-  { id: "security", title: "Security review", description: "Threat model, control mapping, and privacy review. Cross-vendor on every gate.", produces: "Threat model, control matrix, PIA" },
-  { id: "api-design", title: "API / contract review", description: "OpenAPI/AsyncAPI stability and integration wiring.", produces: "OpenAPI, event catalog" },
-  { id: "data-governance", title: "Data governance review", description: "ERD, lineage, retention, and analytics events.", produces: "ERD, retention policy, lineage" },
-  { id: "release-readiness", title: "Release readiness review", description: "Rollout, rollback, migration runbook, and comms.", produces: "Rollout plan, rollback plan" },
-  { id: "cost", title: "Cost review", description: "Budget envelope and tier-ladder cost analysis.", produces: "Cost model, budget caps" },
-  { id: "privacy", title: "Privacy review", description: "PIA/DPIA, data-flow, and retention/deletion.", produces: "PIA, data-flow map" },
-  { id: "accessibility", title: "Accessibility review", description: "WCAG 2.2 AA conformance and a11y plan.", produces: "A11y plan, conformance report" },
-  { id: "incident-postmortem", title: "Incident post-mortem", description: "Blameless post-mortem and corrective actions.", produces: "Post-mortem, action items" },
+  { id: "framing", title: "Problem framing / discovery review", description: "Confirms the problem, target users, and success metric before scope work begins.", produces: "Problem statement, evidence, success metrics", stages: [
+    { kind: "problem_statement", artifact_kind: "one_pager", gate_type: "spec", generator_agent: "research-analyst", judge_tier: "cross_vendor", rubric_id: "feature-spec-quality@2" },
+    { kind: "success_metrics", artifact_kind: "okrs", gate_type: "spec", generator_agent: "strategy-lead", judge_tier: "same_vendor" },
+  ] },
+  { id: "architecture", title: "Architecture review", description: "Reviews the technical approach, ADRs, and system boundaries.", produces: "ADRs, C4 sketches, tech design", stages: [
+    { kind: "adr", artifact_kind: "adr", gate_type: "design", generator_agent: "architect", judge_tier: "cross_vendor", rubric_id: "adr-madr-structure@1" },
+    { kind: "c4_sketch", artifact_kind: "c4_diagram", gate_type: "design", generator_agent: "architect", judge_tier: "same_vendor" },
+  ] },
+  { id: "security", title: "Security review", description: "Threat model, control mapping, and privacy review. Cross-vendor on every gate.", produces: "Threat model, control matrix, PIA", required_missability_checks: ["authz-matrix", "secrets-scan"], stages: [
+    { kind: "threat_model", artifact_kind: "threat_model", gate_type: "security", generator_agent: "threat-modeler", judge_tier: "cross_vendor", rubric_id: "stride-threat-model@1" },
+    { kind: "controls", artifact_kind: "control_matrix", gate_type: "security", generator_agent: "security-reviewer", judge_tier: "cross_vendor", rubric_id: "owasp-asvs@2" },
+    { kind: "privacy_impact", artifact_kind: "pia", gate_type: "security", generator_agent: "privacy-reviewer", judge_tier: "cross_vendor" },
+  ] },
+  { id: "api-design", title: "API / contract review", description: "OpenAPI/AsyncAPI stability and integration wiring.", produces: "OpenAPI, event catalog", stages: [
+    { kind: "openapi", artifact_kind: "openapi", gate_type: "contract", generator_agent: "api-designer", judge_tier: "cross_vendor", rubric_id: "openapi-3.1-stability@1" },
+    { kind: "event_catalog", artifact_kind: "event_catalog", gate_type: "contract", generator_agent: "api-designer", judge_tier: "same_vendor" },
+  ] },
+  { id: "data-governance", title: "Data governance review", description: "ERD, lineage, retention, and analytics events.", produces: "ERD, retention policy, lineage", stages: [
+    { kind: "erd", artifact_kind: "erd", gate_type: "design", generator_agent: "db-designer", judge_tier: "same_vendor" },
+    { kind: "retention_policy", artifact_kind: "retention_policy", gate_type: "security", generator_agent: "privacy-reviewer", judge_tier: "cross_vendor" },
+  ] },
+  { id: "release-readiness", title: "Release readiness review", description: "Rollout, rollback, migration runbook, and comms.", produces: "Rollout plan, rollback plan", stages: [
+    { kind: "rollout_plan", artifact_kind: "rollout_plan", gate_type: "design", generator_agent: "release-engineer", judge_tier: "cross_vendor" },
+    { kind: "rollback_plan", artifact_kind: "rollback_plan", gate_type: "design", generator_agent: "release-engineer", judge_tier: "same_vendor" },
+    { kind: "migration_runbook", artifact_kind: "migration_runbook", gate_type: "docs_polish", generator_agent: "migration-planner", judge_tier: "same_vendor" },
+  ] },
+  { id: "cost", title: "Cost review", description: "Budget envelope and tier-ladder cost analysis.", produces: "Cost model, budget caps", stages: [
+    { kind: "cost_model", artifact_kind: "business_case", gate_type: "spec", generator_agent: "cfo", judge_tier: "same_vendor" },
+  ] },
+  { id: "privacy", title: "Privacy review", description: "PIA/DPIA, data-flow, and retention/deletion.", produces: "PIA, data-flow map", stages: [
+    { kind: "pia", artifact_kind: "pia", gate_type: "security", generator_agent: "privacy-reviewer", judge_tier: "cross_vendor" },
+    { kind: "data_flow_map", artifact_kind: "lineage_map", gate_type: "design", generator_agent: "data-engineer", judge_tier: "same_vendor" },
+  ] },
+  { id: "accessibility", title: "Accessibility review", description: "WCAG 2.2 AA conformance and a11y plan.", produces: "A11y plan, conformance report", stages: [
+    { kind: "a11y_plan", artifact_kind: "a11y_plan", gate_type: "design", generator_agent: "a11y-auditor", judge_tier: "cross_vendor", rubric_id: "wcag-2.2-aa@1" },
+  ] },
+  { id: "incident-postmortem", title: "Incident post-mortem", description: "Blameless post-mortem and corrective actions.", produces: "Post-mortem, action items", stages: [
+    { kind: "post_mortem", artifact_kind: "post_mortem", gate_type: "docs_polish", generator_agent: "incident-commander", judge_tier: "same_vendor" },
+    { kind: "action_items", artifact_kind: "decision_log", gate_type: "spec", generator_agent: "incident-commander", judge_tier: "same_vendor" },
+  ] },
 ];
 
-/** Taxonomy sections — abridged mirror of @pp/core TAXONOMY_SECTIONS. */
+/** All 16 taxonomy sections — mirror of @pp/core TAXONOMY_SECTIONS (artifact
+ * kind lists abridged for the very wide sections). */
 export const mockTaxonomy: TaxonomySection[] = [
-  { id: "4.1", title: "Strategy, business context, and investment logic", default_artifact_kinds: ["vision_brief", "business_case", "okrs"], master_plan_section: "2. Business and portfolio context" },
+  { id: "4.1", title: "Strategy, business context, and investment logic", default_artifact_kinds: ["vision_brief", "business_case", "okrs", "one_pager"], master_plan_section: "2. Business and portfolio context" },
+  { id: "4.2", title: "User, market, workflow, and domain understanding", default_artifact_kinds: ["research_brief", "personas", "journey_map"], master_plan_section: "3. Stakeholders and users" },
   { id: "4.3", title: "Product scope, requirements, and prioritization", default_artifact_kinds: ["prd", "feature_spec", "acceptance_criteria"], master_plan_section: "6. Functional requirements" },
-  { id: "4.6", title: "Architecture and technical strategy", default_artifact_kinds: ["adr", "c4_diagram", "tech_design_doc"], master_plan_section: "11. Architecture and technical strategy" },
-  { id: "4.7", title: "Interfaces, contracts, and integration wiring", default_artifact_kinds: ["openapi", "asyncapi", "event_catalog"], master_plan_section: "12. Interfaces and contracts" },
-  { id: "4.8", title: "Engineering implementation system and code quality", default_artifact_kinds: ["coding_standard", "diff", "code"], master_plan_section: "13. Engineering standards and delivery model" },
-  { id: "4.9", title: "Security, privacy, compliance, and trust", default_artifact_kinds: ["threat_model", "control_matrix", "pia"], master_plan_section: "14. Security, privacy, and compliance" },
-  { id: "4.10", title: "Quality engineering and verification", default_artifact_kinds: ["test_strategy", "contract_tests", "performance_budget"], master_plan_section: "15. Test and verification strategy" },
+  { id: "4.4", title: "Experience design, content, and accessibility", default_artifact_kinds: ["ia_map", "user_flow", "wireframes", "design_tokens", "component_specs", "a11y_plan"], master_plan_section: "9. UX/UI/content design" },
+  { id: "4.5", title: "Domain model, data, analytics, and information lifecycle", default_artifact_kinds: ["erd", "data_dictionary", "lineage_map", "retention_policy", "migration_plan"], master_plan_section: "10. Domain and data model" },
+  { id: "4.6", title: "Architecture and technical strategy", default_artifact_kinds: ["adr", "c4_diagram", "deployment_arch", "tech_design_doc"], master_plan_section: "11. Architecture and technical strategy" },
+  { id: "4.7", title: "Interfaces, contracts, and integration wiring", default_artifact_kinds: ["openapi", "asyncapi", "route_inventory", "event_catalog"], master_plan_section: "12. Interfaces and contracts" },
+  { id: "4.8", title: "Engineering implementation system and code quality", default_artifact_kinds: ["coding_standard", "review_checklist", "diff", "code"], master_plan_section: "13. Engineering standards and delivery model" },
+  { id: "4.9", title: "Security, privacy, compliance, and trust", default_artifact_kinds: ["threat_model", "control_matrix", "pia", "sbom"], master_plan_section: "14. Security, privacy, and compliance" },
+  { id: "4.10", title: "Quality engineering and verification", default_artifact_kinds: ["test_strategy", "test_plan", "contract_tests", "performance_budget"], master_plan_section: "15. Test and verification strategy" },
+  { id: "4.11", title: "Delivery, environments, release, and change management", default_artifact_kinds: ["rollout_plan", "rollback_plan", "migration_runbook", "release_notes"], master_plan_section: "19. Launch, migration, and rollback plan" },
+  { id: "4.12", title: "Observability, reliability, operations, and support", default_artifact_kinds: ["slo_doc", "telemetry_taxonomy", "runbook", "alert_catalog"], master_plan_section: "16. Operations and support model" },
+  { id: "4.13", title: "Documentation, enablement, and knowledge management", default_artifact_kinds: ["changelog", "release_notes", "runbook", "user_doc"], master_plan_section: "Appendices" },
+  { id: "4.14", title: "Team operating model, decision governance, and execution cadence", default_artifact_kinds: ["raci", "decision_log", "delivery_plan"], master_plan_section: "17. Team operating model and governance" },
+  { id: "4.15", title: "AI and agentic system controls", default_artifact_kinds: ["ai_system_spec", "eval_suite", "tool_permission_matrix", "hitl_workflow"], master_plan_section: "Appendices" },
+  { id: "4.16", title: "Deprecation, retirement, and lifecycle exit", default_artifact_kinds: ["eol_plan", "migration_guide", "sunset_comms"], master_plan_section: "20. Deprecation and retirement plan" },
 ];
 
 const DAY = "2026-07-01";
@@ -362,6 +448,18 @@ export const mockEvolutionProposals: EvolutionProposal[] = [
     eights_proposal_id: null,
     status: "approved",
     created_at: "2026-06-27T11:05:00.000Z",
+  },
+  {
+    id: "evo_4358",
+    run_id: "run_3xC8wDe2sK5",
+    resource_rid: "rubric:wcag-2.2-aa@1",
+    proposed_change: "Add a 'focus-visible on custom controls' checkpoint to the keyboard section.",
+    justification: "3 runs shipped custom dropdowns with no visible focus ring; the rubric never flagged it.",
+    signal_count: 3,
+    risk_class: "high",
+    eights_proposal_id: "eights_prop_0877",
+    status: "committed",
+    created_at: "2026-06-25T09:40:00.000Z",
   },
   {
     id: "evo_4402",

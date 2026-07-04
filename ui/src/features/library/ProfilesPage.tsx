@@ -11,7 +11,7 @@ export function ProfilesPage() {
 
   return (
     <Page title="Library" description="Project profiles and their gate policy.">
-      <LibraryTabs active="profiles" />
+      <LibraryTabs active="profiles" count={profiles?.length} />
       {isLoading ? (
         <EmptyState title="Loading profiles…" compact />
       ) : (

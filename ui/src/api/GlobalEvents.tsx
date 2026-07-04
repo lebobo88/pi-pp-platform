@@ -5,6 +5,7 @@ import { apiPaths } from "@shared/api-types";
 import { qk } from "@/api/queryKeys";
 import { toast } from "@/stores/uiStore";
 import { liveRunStore } from "@/stores/liveRunStore";
+import { useAuthStore } from "@/stores/authStore";
 
 /**
  * Opens the global SSE stream for the app's lifetime and folds events into the
@@ -13,6 +14,9 @@ import { liveRunStore } from "@/stores/liveRunStore";
  */
 export function GlobalEvents() {
   const qc = useQueryClient();
+  // Token in deps: SseManager reads it at connect time, so a token change must
+  // tear the stream down and reopen it with the new `?token=`.
+  const token = useAuthStore((s) => s.token);
 
   useEffect(() => {
     const mgr = new SseManager({ url: apiPaths.events });
@@ -48,7 +52,7 @@ export function GlobalEvents() {
 
     mgr.connect();
     return () => mgr.close();
-  }, [qc]);
+  }, [qc, token]);
 
   return null;
 }

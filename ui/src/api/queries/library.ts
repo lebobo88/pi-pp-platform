@@ -8,6 +8,10 @@ import {
   type RubricInfo,
   type Forum,
   type TaxonomySection,
+  type AgentSummary,
+  type AgentDetail,
+  type SkillSummary,
+  type SkillDetail,
 } from "@shared/api-types";
 
 export function useTeams() {
@@ -59,17 +63,63 @@ export function useRubric(id: string | undefined) {
   });
 }
 
+/** List omits the prompt body (AgentSummary); use useAgent for the detail. */
+export function useAgents() {
+  return useQuery({
+    queryKey: qk.agents,
+    queryFn: ({ signal }) => api.get<AgentSummary[]>(apiPaths.agents, { signal }),
+    staleTime: 60_000,
+  });
+}
+
+export function useAgent(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.agent(id ?? ""),
+    queryFn: ({ signal }) => api.get<AgentDetail>(apiPaths.agent(id!), { signal }),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
+/** List omits the skill body (SkillSummary); use useSkill for the detail. */
+export function useSkills() {
+  return useQuery({
+    queryKey: qk.skills,
+    queryFn: ({ signal }) => api.get<SkillSummary[]>(apiPaths.skills, { signal }),
+    staleTime: 60_000,
+  });
+}
+
+export function useSkill(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.skill(id ?? ""),
+    queryFn: ({ signal }) => api.get<SkillDetail>(apiPaths.skill(id!), { signal }),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
 export function useForums() {
   return useQuery({
-    queryKey: ["forums"],
+    queryKey: qk.forums,
     queryFn: ({ signal }) => api.get<Forum[]>(apiPaths.forums, { signal }),
+    staleTime: 60_000,
+  });
+}
+
+/** Full forum (list rows are the summary subset; detail includes stages). */
+export function useForum(id: string | undefined) {
+  return useQuery({
+    queryKey: qk.forum(id ?? ""),
+    queryFn: ({ signal }) => api.get<Forum>(apiPaths.forum(id!), { signal }),
+    enabled: !!id,
     staleTime: 60_000,
   });
 }
 
 export function useTaxonomy() {
   return useQuery({
-    queryKey: ["taxonomy"],
+    queryKey: qk.taxonomy,
     queryFn: ({ signal }) => api.get<TaxonomySection[]>(apiPaths.taxonomy, { signal }),
     staleTime: 60_000,
   });

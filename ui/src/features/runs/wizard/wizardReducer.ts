@@ -6,6 +6,7 @@ import type { RunMode, ClaudeTier, StartRunRequest } from "@shared/api-types";
 
 export type WizardStep = 1 | 2 | 3 | 4;
 export type ScopeOverride = "auto" | "trivial" | "standard" | "major";
+export type TeamSource = "manual" | "recommended";
 
 export interface WizardState {
   step: WizardStep;
@@ -13,12 +14,16 @@ export interface WizardState {
   requestText: string;
   mode: RunMode;
   team: string;
+  /** Who last set `team` — a recommendation must never clobber a manual pick. */
+  teamSource: TeamSource;
   forum: string;
   n: number;
   scope: ScopeOverride;
   tierCap: ClaudeTier | "";
   tierFloor: ClaudeTier | "";
   profile: string;
+  /** User dismissed the "switch to team mode" nudge (reset on manual mode change). */
+  dismissedModeSuggestion: boolean;
 }
 
 export const initialWizardState: WizardState = {
@@ -27,17 +32,26 @@ export const initialWizardState: WizardState = {
   requestText: "",
   mode: "single",
   team: "",
+  teamSource: "manual",
   forum: "architecture-review",
   n: 3,
   scope: "auto",
   tierCap: "",
   tierFloor: "",
   profile: "",
+  dismissedModeSuggestion: false,
 };
 
 export type WizardAction =
   | { type: "set"; patch: Partial<WizardState> }
   | { type: "mode"; mode: RunMode }
+  /** Explicit user pick in the team grid — always wins, flips source to manual. */
+  | { type: "teamManual"; team: string }
+  /** Recommender preselect — applies only when team is empty or still recommended. */
+  | { type: "applyRecommendation"; team: string }
+  /** Accept the "use team mode" nudge: switch mode and jump to step 2. */
+  | { type: "suggestMode"; mode: RunMode }
+  | { type: "dismissModeSuggestion" }
   | { type: "next" }
   | { type: "back" }
   | { type: "goto"; step: WizardStep };
@@ -56,13 +70,33 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case "set":
       return { ...state, ...action.patch };
     case "mode": {
-      const next: WizardState = { ...state, mode: action.mode };
+      // A manual mode change re-arms the team-mode nudge.
+      const next: WizardState = { ...state, mode: action.mode, dismissedModeSuggestion: false };
       if (tierControlsDisabled(action.mode)) {
         next.tierCap = "";
         next.tierFloor = "";
       }
       return next;
     }
+    case "teamManual":
+      return { ...state, team: action.team, teamSource: "manual" };
+    case "applyRecommendation": {
+      // Never clobber a manual pick; only fill an empty slot or replace an
+      // earlier recommendation.
+      if (state.team !== "" && state.teamSource !== "recommended") return state;
+      if (state.team === action.team && state.teamSource === "recommended") return state;
+      return { ...state, team: action.team, teamSource: "recommended" };
+    }
+    case "suggestMode": {
+      const next: WizardState = { ...state, mode: action.mode, step: 2 };
+      if (tierControlsDisabled(action.mode)) {
+        next.tierCap = "";
+        next.tierFloor = "";
+      }
+      return next;
+    }
+    case "dismissModeSuggestion":
+      return { ...state, dismissedModeSuggestion: true };
     case "next":
       return { ...state, step: Math.min(4, state.step + 1) as WizardStep };
     case "back":

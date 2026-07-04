@@ -6,7 +6,7 @@
  *
  *   VITE_MOCK=1 pnpm -F ui dev
  */
-import { apiPaths, type ApiError } from "@shared/api-types";
+import { apiPaths, type ApiError, type RunListResponse } from "@shared/api-types";
 import {
   mockProjects,
   mockRunSummaries,
@@ -33,7 +33,13 @@ import {
   mockMasterPlan,
   mockAgentsMd,
   mockConstitution,
+  mockAgents,
+  mockAgentDetail,
+  mockSkills,
+  mockSkillDetail,
+  mockRecommendTeams,
 } from "./fixtures";
+import type { TeamRecommendRequest } from "@shared/api-types";
 import { MOCK_RUN_ID, mockWinningDiff } from "./fixtures/runTree";
 import { runStreamScript, globalStreamScript, type ScriptedFrame } from "./sseScript";
 import type { ArtifactContent } from "@shared/api-types";
@@ -75,12 +81,43 @@ function decode(seg: string): string {
   }
 }
 
+/** Opaque keyset run cursor: base64url of `"<started_at>|<id>"` — mirrors the server. */
+function encodeRunCursor(started_at: string, id: string): string {
+  return btoa(`${started_at}|${id}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeRunCursor(cursor: string): { started_at: string; id: string } | null {
+  try {
+    const raw = atob(cursor.replace(/-/g, "+").replace(/_/g, "/"));
+    const sep = raw.lastIndexOf("|");
+    if (sep <= 0 || sep === raw.length - 1) return null;
+    return { started_at: raw.slice(0, sep), id: raw.slice(sep + 1) };
+  } catch {
+    return null;
+  }
+}
+
 /** Mask an API key for display: first 3 + last 4, never the raw value.
  * Provider-agnostic (mirrors the engine's maskKey), so it works for any provider. */
 function maskKey(_vendor: string, raw: string): string {
   const k = raw.replace(/\s/g, "");
   if (k.length <= 8) return "*".repeat(k.length);
   return `${k.slice(0, 3)}…${k.slice(-4)}`;
+}
+
+/**
+ * Where an evolution commit writes its project-scoped override — mirrors the
+ * server's target derivation (rubric → .claude/rubrics/<id>.md, stage-prompt →
+ * .claude/agents/<role>.md, missability → .harness/missability-overrides.json).
+ */
+function evolutionTargetPath(resourceRid: string): string {
+  const [kind, ...rest] = resourceRid.split(":");
+  const id = rest.join(":") || resourceRid;
+  const base = "C:/AiAppDeployments/orbit-api";
+  if (kind === "rubric") return `${base}/.claude/rubrics/${id}.md`;
+  if (kind === "stage-prompt") return `${base}/.claude/agents/${id}.md`;
+  if (kind === "missability") return `${base}/.harness/missability-overrides.json`;
+  return `${base}/.claude/${kind}s/${id}.md`;
 }
 
 /** Handle a control-plane mutation. Returns null when unmatched. */
@@ -128,6 +165,22 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
   if (method === "POST" && testMatch) {
     const vendor = decode(testMatch[1]!);
     return json({ vendor, ok: true, status: "ok", model: `${vendor}-probe`, wall_ms: 1800, detail: "model resolved" });
+  }
+  // Re-fetch a provider's live model list; unknown vendors 404 like the server.
+  const refreshMatch = p.match(/^\/api\/v1\/providers\/([^/]+)\/models\/refresh$/);
+  if (method === "POST" && refreshMatch) {
+    const vendor = decode(refreshMatch[1]!);
+    const known =
+      mockAvailableProviders.some((a) => a.id === vendor) || mockProviders.some((x) => x.vendor === vendor);
+    if (!known) return errorResponse(404, "unknown provider");
+    const catalogModels = mockModels.filter((m) => m.vendor === vendor).map((m) => m.id);
+    // Catalog vendors "refresh" to their catalog list; curated pi vendors fall
+    // back to a static pair, mirroring the server's static-fallback path.
+    return json({
+      provider: vendor,
+      refreshed: catalogModels.length > 0,
+      models: catalogModels.length ? catalogModels : [`${vendor}-latest`, `${vendor}-mini`],
+    });
   }
   if (method === "DELETE" && keyMatch) {
     const vendor = decode(keyMatch[1]!);
@@ -211,18 +264,68 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
     return json(body ?? mockSettings);
   }
 
-  // Evolution review: approve/reject ack; commit/rollback → 501 (ecosystem bridge).
+  // Evolution review lifecycle — mirrors the real server: approve/reject from
+  // pending; commit (from approved) REQUIRES reviewer-authored content and
+  // writes the project override (422 content_required without it); rollback
+  // (from committed) restores the snapshot. Wrong-status transitions 409.
+  // Statuses mutate in-memory so the VITE_MOCK flow works end-to-end.
   const review = p.match(/^\/api\/v1\/evolution\/proposals\/([^/]+)\/review$/);
   if (method === "POST" && review) {
     const id = decode(review[1]!);
-    const decision = (body as { decision?: string } | null)?.decision ?? "approve";
-    if (decision === "commit" || decision === "rollback") {
-      return errorResponse(501, "evolution_commit_pending");
+    const proposal = mockEvolutionProposals.find((x) => x.id === id);
+    if (!proposal) return errorResponse(404, `proposal ${id} not found`);
+    const b = (body as { decision?: string; content?: string } | null) ?? {};
+    const decision = b.decision ?? "approve";
+    const expect = (allowed: string): Response | null =>
+      proposal.status === allowed
+        ? null
+        : errorResponse(409, `proposal ${id} is ${proposal.status}, expected ${allowed}`);
+
+    if (decision === "approve" || decision === "reject") {
+      const guard = expect("pending");
+      if (guard) return guard;
+      proposal.status = decision === "approve" ? "approved" : "rejected";
+      return json({ id, decision, status: proposal.status, updated: true });
     }
-    const existing = mockEvolutionProposals.find((x) => x.id === id);
-    if (!existing) return errorResponse(404, `proposal ${id} not pending or not found`);
-    const status = decision === "approve" ? "approved" : "rejected";
-    return json({ id, decision, status, updated: true });
+    if (decision === "commit") {
+      const guard = expect("approved");
+      if (guard) return guard;
+      if (typeof b.content !== "string" || !b.content.trim()) {
+        return errorResponse(422, "content_required", {
+          content: "reviewer-authored replacement content is required to commit",
+        });
+      }
+      proposal.status = "committed";
+      return json({
+        id,
+        decision,
+        status: "committed",
+        updated: true,
+        target_path: evolutionTargetPath(proposal.resource_rid),
+        snapshot_path: null,
+      });
+    }
+    if (decision === "rollback") {
+      const guard = expect("committed");
+      if (guard) return guard;
+      proposal.status = "rolled_back";
+      return json({
+        id,
+        decision,
+        status: "rolled_back",
+        updated: true,
+        target_path: evolutionTargetPath(proposal.resource_rid),
+        snapshot_path: null,
+      });
+    }
+    return errorResponse(422, "validation failed", { decision: "unknown decision" });
+  }
+
+  // Team recommendation — deterministic heuristics, no model calls.
+  if (method === "POST" && p === apiPaths.teamsRecommend) {
+    const b = (body as TeamRecommendRequest | null) ?? { request_text: "" };
+    if (!b.request_text) return errorResponse(422, "validation failed", { request_text: "required" });
+    return json(mockRecommendTeams(b));
   }
 
   if (method === "PUT" && p === apiPaths.budgetCaps) {
@@ -264,10 +367,22 @@ function route(method: string, url: URL, body: unknown): Response | null {
   if (p === apiPaths.runs) {
     const projectPath = url.searchParams.get("project_path");
     const status = url.searchParams.get("status");
-    let rows = mockRunSummaries;
+    const limitRaw = Number(url.searchParams.get("limit") ?? "");
+    const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50, 500));
+    // Keyset order (started_at, id) DESC — mirrors the server's listRuns.
+    let rows = [...mockRunSummaries].sort((a, b) =>
+      a.started_at === b.started_at ? (a.id < b.id ? 1 : -1) : a.started_at < b.started_at ? 1 : -1,
+    );
     if (projectPath) rows = rows.filter((r) => r.project_path === projectPath);
     if (status) rows = rows.filter((r) => r.status === status);
-    return json(rows);
+    const cursorParam = url.searchParams.get("cursor");
+    const c = cursorParam ? decodeRunCursor(cursorParam) : null;
+    // A malformed cursor is ignored (first page), matching the server.
+    if (c) rows = rows.filter((r) => r.started_at < c.started_at || (r.started_at === c.started_at && r.id < c.id));
+    const items = rows.slice(0, limit);
+    const last = items[items.length - 1];
+    const next_cursor = rows.length > limit && last ? encodeRunCursor(last.started_at, last.id) : null;
+    return json({ items, next_cursor } satisfies RunListResponse);
   }
   // Run sub-resources before the bare run match.
   const runReplay = p.match(/^\/api\/v1\/runs\/([^/]+)\/replay$/);
@@ -315,6 +430,24 @@ function route(method: string, url: URL, body: unknown): Response | null {
     const id = decode(forumMatch[1]!);
     const f = mockForums.find((x) => x.id === id);
     return f ? json(f) : errorResponse(404, `forum ${id} not found`);
+  }
+
+  // Agents library: list is the summary; detail adds the prompt body.
+  if (p === apiPaths.agents) return json(mockAgents);
+  const agentMatch = p.match(/^\/api\/v1\/agents\/([^/]+)$/);
+  if (agentMatch) {
+    const id = decode(agentMatch[1]!);
+    const a = mockAgents.find((x) => x.id === id);
+    return a ? json(mockAgentDetail(a)) : errorResponse(404, `agent ${id} not found`);
+  }
+
+  // Skill registry: list is the summary; detail adds body + injection budget.
+  if (p === apiPaths.skills) return json(mockSkills);
+  const skillMatch = p.match(/^\/api\/v1\/skills\/([^/]+)$/);
+  if (skillMatch) {
+    const id = decode(skillMatch[1]!);
+    const s = mockSkills.find((x) => x.id === id);
+    return s ? json(mockSkillDetail(s)) : errorResponse(404, `skill ${id} not found`);
   }
 
   // Faithful to the server: the list is a SUMMARY without stages.

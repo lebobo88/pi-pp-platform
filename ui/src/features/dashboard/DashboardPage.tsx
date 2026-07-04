@@ -13,6 +13,7 @@ import { useProviders } from "@/api/queries/providers";
 import { useDoctor } from "@/api/queries/system";
 import { runTone } from "@/lib/status";
 import { formatUsd, formatRelative, formatElapsed, basename, shortId } from "@/lib/format";
+import { OnboardingChecklist } from "./OnboardingChecklist";
 import type { RunSummary } from "@shared/api-types";
 
 export function DashboardPage() {
@@ -32,7 +33,7 @@ export function DashboardPage() {
     budgets?.find((b) => b.scope === `day:${today}`)?.cost_usd ??
     budgets?.find((b) => b.scope.startsWith("day:"))?.cost_usd ??
     0;
-  const dayCap = caps?.find((c) => c.scope === "day")?.limit_usd ?? 8;
+  const dayCap = caps?.find((c) => c.scope === "day")?.limit_usd;
 
   const recentColumns: Column<RunSummary>[] = [
     { key: "id", header: "Run", render: (r) => shortId(r.id, 12), sortValue: (r) => r.id, mono: true },
@@ -45,6 +46,9 @@ export function DashboardPage() {
 
   return (
     <Page title="Dashboard" description="Live harness overview." className="space-y-4">
+      {/* First-launch checklist — only while the harness has zero runs. */}
+      {runs != null && runs.length === 0 && <OnboardingChecklist />}
+
       {/* Surfaced-runs banner (persistent) */}
       {surfaced.length > 0 && (
         <div className="rounded-md border border-[color-mix(in_srgb,var(--warn)_45%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-3 py-2">
@@ -95,16 +99,26 @@ export function DashboardPage() {
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Day budget */}
+        {/* Day budget — capped meter only when a day cap is configured; never
+            a fabricated max (same rule as TopBar). */}
         <Card title="Today's budget">
-          <Meter
-            value={daySpend}
-            max={dayCap}
-            label="Spend"
-            readout={`${formatUsd(daySpend)} / ${formatUsd(dayCap)}`}
-            ticks={[{ at: 0.8, tone: "warn" }, { at: 1, tone: "fail" }]}
-          />
-          <p className="mt-2 text-[11px] text-ink-3">Downgrade at 80%, block at 100%.</p>
+          {dayCap != null ? (
+            <>
+              <Meter
+                value={daySpend}
+                max={dayCap}
+                label="Spend"
+                readout={`${formatUsd(daySpend)} / ${formatUsd(dayCap)}`}
+                ticks={[{ at: 0.8, tone: "warn" }, { at: 1, tone: "fail" }]}
+              />
+              <p className="mt-2 text-[11px] text-ink-3">Downgrade at 80%, block at 100%.</p>
+            </>
+          ) : (
+            <div className="flex items-baseline justify-between gap-2" title="No day cap configured">
+              <span className="text-[11px] text-ink-3">Spend</span>
+              <span className="mono tnum text-[12px] text-ink-1">{formatUsd(daySpend)}</span>
+            </div>
+          )}
         </Card>
 
         {/* Provider status row */}

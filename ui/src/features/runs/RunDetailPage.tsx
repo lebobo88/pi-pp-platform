@@ -4,6 +4,7 @@ import { Page } from "@/layout/Page";
 import { Tabs } from "@/components/Tabs";
 import { EmptyState } from "@/components/EmptyState";
 import { useRun } from "@/api/queries/runs";
+import { useCaps } from "@/api/queries/budgets";
 import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
 import { buildPipeline } from "@/lib/runModel";
@@ -24,6 +25,10 @@ type TabId = "pipeline" | "candidates" | "artifacts" | "taxonomy" | "missability
 export function RunDetailPage() {
   const { runId } = useParams();
   const { data: tree, isLoading, error } = useRun(runId);
+  // Run-scope budget cap (null when none is configured) — threaded to the
+  // header meter and the budget panel so neither fabricates a max.
+  const { data: caps } = useCaps();
+  const runCapUsd = caps?.find((c) => c.scope === "run")?.limit_usd ?? null;
   // Drive the live overlay (mock mode animates via the scripted SSE replay).
   const streamStatus = useRunStream(runId);
   const overlay = useLiveRunOverlay(runId ?? "");
@@ -71,7 +76,7 @@ export function RunDetailPage() {
 
   return (
     <Page title="Run" description={<span className="mono">{tree.run.id}</span>} className="space-y-4">
-      <RunHeader tree={tree} overlay={overlay} streamStatus={streamStatus} />
+      <RunHeader tree={tree} overlay={overlay} streamStatus={streamStatus} capUsd={runCapUsd} />
 
       <Tabs
         active={tab}
@@ -103,7 +108,7 @@ export function RunDetailPage() {
       {tab === "artifacts" && <ArtifactsPanel tree={tree} />}
       {tab === "taxonomy" && <TaxonomyPanel tree={tree} />}
       {tab === "missability" && <MissabilityPanel runId={tree.run.id} />}
-      {tab === "budget" && <RunBudgetPanel tree={tree} />}
+      {tab === "budget" && <RunBudgetPanel tree={tree} capUsd={runCapUsd} />}
       {tab === "replay" && <ReplayPanel runId={tree.run.id} />}
     </Page>
   );

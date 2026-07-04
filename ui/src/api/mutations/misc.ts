@@ -24,6 +24,9 @@ export function useReviewProposal() {
       api.post<EvolutionReviewResponse>(apiPaths.evolutionReview(args.id), {
         decision: args.decision,
         note: args.note,
+        // Reviewer-authored override body — REQUIRED by decision:"commit"
+        // (the server 422s with `content_required` without it).
+        content: args.content,
       } satisfies EvolutionReviewRequest),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.evolution }),
   });
@@ -57,10 +60,15 @@ export function useWriteProfile(path: string) {
   });
 }
 
-/** POST /doctor — async: acks immediately, result arrives via SSE doctor.result. */
+/**
+ * POST /doctor — async: acks immediately, result arrives via SSE doctor.result.
+ * `smoke: true` additionally runs the critique smoke test against each keyed
+ * vendor (slow + costs tokens), so it defaults off.
+ */
 export function useRunDoctor() {
   return useMutation({
-    mutationFn: () => api.post<DoctorRunAck>(apiPaths.doctor),
+    mutationFn: (opts?: { smoke?: boolean }) =>
+      api.post<DoctorRunAck>(apiPaths.doctor, { smoke: opts?.smoke ?? false }),
   });
 }
 

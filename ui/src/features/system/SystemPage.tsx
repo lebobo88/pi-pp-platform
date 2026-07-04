@@ -12,6 +12,7 @@ import { useRunDoctor, useRunJanitor } from "@/api/mutations/misc";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/stores/uiStore";
+import { useAuthStore } from "@/stores/authStore";
 import { formatBytes, formatRelative, formatDuration } from "@/lib/format";
 
 export function SystemPage() {
@@ -26,8 +27,113 @@ export function SystemPage() {
           { id: "janitor", label: "Janitor" },
         ]}
       />
-      {tab === "doctor" ? <DoctorPanel /> : <JanitorPanel />}
+      {tab === "doctor" ? (
+        <>
+          <DoctorPanel />
+          <ApiAccessCard />
+        </>
+      ) : (
+        <JanitorPanel />
+      )}
     </Page>
+  );
+}
+
+/**
+ * Masked API-token management. The token itself is never displayed — only the
+ * last 4 characters. Change reuses the TokenGate input pattern; Clear drops the
+ * stored token (a token-guarded daemon will 401 and re-prompt).
+ */
+function ApiAccessCard() {
+  const token = useAuthStore((s) => s.token);
+  const setToken = useAuthStore((s) => s.setToken);
+  const clearToken = useAuthStore((s) => s.clearToken);
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+
+  const close = () => {
+    setValue("");
+    setOpen(false);
+  };
+  const save = () => {
+    const t = value.trim();
+    if (!t) return;
+    setToken(t);
+    close();
+    toast({ tone: "success", title: "API token updated" });
+  };
+
+  return (
+    <Card
+      title="API access"
+      actions={
+        <>
+          <Button size="sm" onClick={() => setOpen(true)} data-testid="token-change">
+            Change
+          </Button>
+          {token && (
+            <Button
+              size="sm"
+              variant="danger"
+              data-testid="token-clear"
+              onClick={() => {
+                clearToken();
+                toast({ tone: "warn", title: "API token cleared", message: "a token-guarded daemon will 401 and re-prompt" });
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </>
+      }
+    >
+      <KeyValue
+        labelWidth={92}
+        rows={[
+          {
+            label: "token",
+            value: token ? `••••••••${token.slice(-4)}` : <span className="text-ink-3">not set</span>,
+            mono: true,
+          },
+        ]}
+      />
+      <p className="mt-2 text-[11px] text-ink-3">
+        Sent as a bearer header on every request (and as <span className="mono">?token=</span> on the SSE
+        streams). Stored locally; only the last 4 characters are ever shown.
+      </p>
+
+      <Modal
+        open={open}
+        onClose={close}
+        width={400}
+        title="Change API token"
+        footer={
+          <>
+            <Button variant="ghost" onClick={close}>Cancel</Button>
+            <Button variant="primary" disabled={!value.trim()} onClick={save} data-testid="token-save">
+              Save token
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[12px] leading-relaxed text-ink-2">
+          Paste the daemon's API token — it replaces the stored one immediately.
+        </p>
+        <input
+          type="password"
+          autoComplete="off"
+          autoFocus
+          data-testid="token-change-input"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+          }}
+          placeholder="API token"
+          className="mono mt-2 w-full rounded-sm border border-line-2 bg-bg-2 px-2 py-1.5 text-[12px] text-ink-1 outline-none focus:border-accent"
+        />
+      </Modal>
+    </Card>
   );
 }
 
@@ -38,13 +144,14 @@ function Check({ ok }: { ok: boolean }) {
 function DoctorPanel() {
   const { data, isLoading } = useDoctor();
   const rerun = useRunDoctor();
+  const [smoke, setSmoke] = useState(false);
   if (isLoading) return <EmptyState title="Running doctor…" compact />;
   if (!data) {
     return (
       <div className="space-y-3">
         <EmptyState title="Doctor unavailable" description="The daemon did not respond." />
         <div className="flex justify-center">
-          <Button variant="primary" disabled={rerun.isPending} onClick={() => rerun.mutate()}>
+          <Button variant="primary" disabled={rerun.isPending} onClick={() => rerun.mutate({ smoke: false })}>
             {rerun.isPending ? "Running…" : "Run doctor"}
           </Button>
         </div>
@@ -62,11 +169,21 @@ function DoctorPanel() {
         {data.gemini_disabled && <StatusChip tone="dim" label="gemini disabled" />}
         <span className="mono text-[11px] text-ink-3">{data.db_path}</span>
         <span className="flex-1" />
+        <label className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-ink-3">
+          <input
+            type="checkbox"
+            checked={smoke}
+            onChange={(e) => setSmoke(e.target.checked)}
+            data-testid="doctor-smoke"
+            className="accent-[var(--accent)]"
+          />
+          include critique smoke test (calls each keyed vendor)
+        </label>
         <Button
           size="sm"
           disabled={rerun.isPending}
           onClick={() =>
-            rerun.mutate(undefined, {
+            rerun.mutate({ smoke }, {
               onSuccess: () => toast({ tone: "info", title: "Doctor started", message: "result refreshes via the live stream" }),
               onError: (e) => toast({ tone: "error", title: "Doctor failed", message: e instanceof Error ? e.message : "" }),
             })

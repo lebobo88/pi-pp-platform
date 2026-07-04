@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { api, ApiClientError } from "./client";
+import { useAuthStore } from "@/stores/authStore";
 
 function mockFetch(body: string, init: { status?: number; contentType?: string } = {}) {
   const status = init.status ?? 200;
@@ -14,6 +15,8 @@ function mockFetch(body: string, init: { status?: number; contentType?: string }
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  useAuthStore.setState({ token: null, unauthorized: false });
+  localStorage.removeItem("pp.apiToken");
 });
 
 describe("api client", () => {
@@ -90,5 +93,34 @@ describe("api client", () => {
   it("falls back to statusText when the envelope has no error field", async () => {
     mockFetch(JSON.stringify({ nope: true }), { status: 400 });
     await expect(api.get("/api/v1/thing")).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe("api client auth", () => {
+  it("sends no Authorization header when no token is set", async () => {
+    mockFetch(JSON.stringify({ ok: true }), { status: 200 });
+    await api.get("/api/v1/thing");
+    const init = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it("injects Authorization: Bearer when a token is set", async () => {
+    useAuthStore.getState().setToken("tok_secret");
+    mockFetch(JSON.stringify({ ok: true }), { status: 200 });
+    await api.get("/api/v1/thing");
+    const init = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok_secret");
+  });
+
+  it("marks the store unauthorized on 401 before throwing", async () => {
+    mockFetch(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    await expect(api.get("/api/v1/thing")).rejects.toMatchObject({ status: 401, message: "unauthorized" });
+    expect(useAuthStore.getState().unauthorized).toBe(true);
+  });
+
+  it("does not mark unauthorized on other error statuses", async () => {
+    mockFetch(JSON.stringify({ error: "boom" }), { status: 500 });
+    await expect(api.get("/api/v1/thing")).rejects.toMatchObject({ status: 500 });
+    expect(useAuthStore.getState().unauthorized).toBe(false);
   });
 });

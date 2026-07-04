@@ -11,16 +11,17 @@ import { AbortRunButton } from "./RunControls";
 import { formatUsd, formatDuration, formatTokens, basename, shortId } from "@/lib/format";
 import { runTotals, runElapsedMs } from "@/lib/runModel";
 
-const RUN_CAP_USD = 3;
-
 export function RunHeader({
   tree,
   overlay,
   streamStatus,
+  capUsd,
 }: {
   tree: RunTree;
   overlay: LiveRunOverlay;
   streamStatus: SseStatus;
+  /** Run-scope budget cap, or null when none is configured. */
+  capUsd: number | null;
 }) {
   const { run } = tree;
   const status = overlay.status ?? run.status;
@@ -67,16 +68,25 @@ export function RunHeader({
           <div className="flex justify-end">
             <AbortRunButton runId={run.id} status={status} />
           </div>
-          <Meter
-            value={cost}
-            max={RUN_CAP_USD}
-            label="Run budget"
-            readout={`${formatUsd(cost)} / ${formatUsd(RUN_CAP_USD)}`}
-            ticks={[
-              { at: 0.8, tone: "warn", label: "80% downgrade" },
-              { at: 1, tone: "fail", label: "100% block" },
-            ]}
-          />
+          {/* Capped meter only when a run cap is configured — never a
+              fabricated max (same rule as TopBar's day budget). */}
+          {capUsd != null ? (
+            <Meter
+              value={cost}
+              max={capUsd}
+              label="Run budget"
+              readout={`${formatUsd(cost)} / ${formatUsd(capUsd)}`}
+              ticks={[
+                { at: 0.8, tone: "warn", label: "80% downgrade" },
+                { at: 1, tone: "fail", label: "100% block" },
+              ]}
+            />
+          ) : (
+            <div className="flex items-baseline justify-between gap-2" title="No run cap configured">
+              <span className="text-[11px] text-ink-3">Run spend</span>
+              <span className="mono tnum text-[11px] text-ink-2">{formatUsd(cost)}</span>
+            </div>
+          )}
           <KeyValue
             labelWidth={72}
             rows={[

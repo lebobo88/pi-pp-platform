@@ -20,6 +20,7 @@ import {
   type SseEventType,
   type SseEventOf,
 } from "@shared/api-types";
+import { getApiToken } from "@/stores/authStore";
 
 export type SseStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed";
 
@@ -112,9 +113,19 @@ export class SseManager {
   }
 
   private buildUrl(): string {
-    if (this.lastEventId == null) return this.url;
-    const sep = this.url.includes("?") ? "&" : "?";
-    return `${this.url}${sep}lastEventId=${encodeURIComponent(this.lastEventId)}`;
+    let url = this.url;
+    // EventSource can't set request headers, so the bearer token rides as a
+    // query param — the server accepts `?token=` on SSE endpoints only.
+    const token = getApiToken();
+    if (token) {
+      const sep = url.includes("?") ? "&" : "?";
+      url = `${url}${sep}token=${encodeURIComponent(token)}`;
+    }
+    if (this.lastEventId != null) {
+      const sep = url.includes("?") ? "&" : "?";
+      url = `${url}${sep}lastEventId=${encodeURIComponent(this.lastEventId)}`;
+    }
+    return url;
   }
 
   private open(): void {

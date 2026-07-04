@@ -16,7 +16,7 @@ export function RubricsPage() {
 
   return (
     <Page title="Library" description="Standard-aligned judging rubrics shipped with the harness.">
-      <LibraryTabs active="rubrics" />
+      <LibraryTabs active="rubrics" count={rubrics?.length} />
       {isLoading ? (
         <EmptyState title="Loading rubrics…" compact />
       ) : (
