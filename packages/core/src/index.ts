@@ -73,6 +73,9 @@ export type { CritiqueOutcome, CritiqueVerdict } from "./mcp/critique-schema.js"
 // Provider/model catalog (dynamic vendor space — single source of truth).
 export * from "./catalog/config.js";
 
+// Local vendor-CLI / subscription login detection (shared by doctor + engine).
+export * from "./providers/cli-login.js";
+
 // Pricing
 export * from "./util/prices.js";
 

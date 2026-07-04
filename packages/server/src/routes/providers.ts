@@ -9,12 +9,26 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { setProviderKey, clearProviderKey, listPiProviders, listPiModels, piEnvKeyHint, refreshPiModels } from "@pp/engine";
+import {
+  setProviderKey,
+  clearProviderKey,
+  listPiProviders,
+  listPiModels,
+  piEnvKeyHint,
+  refreshPiModels,
+  startOAuthLogin,
+  oauthProviderDescriptors,
+  isOAuthProvider,
+  OAuthProviderUnavailableError,
+  type OAuthLoginHandle,
+  type OAuthLoginState,
+} from "@pp/engine";
 import { catalog, knownProviderIds } from "@pp/core";
 import { allProviderStatuses, providerStatusWire, visibleProviders, modelsForProviderMerged } from "../wire.js";
 import { V1, type ServerDeps } from "../deps.js";
 
 const KeyBody = z.object({ api_key: z.string().min(8) });
+const InputBody = z.object({ value: z.string() });
 
 function prettyName(id: string): string {
   return id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -23,7 +37,16 @@ function prettyName(id: string): string {
 export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): void {
   const storage = deps.engine.authStorage;
 
+  // In-flight subscription (OAuth) logins, keyed by login id. A login is
+  // interactive (browser URL / device code / paste-a-code) so it outlives the
+  // start request; the UI polls GET /providers/login/:id and/or POSTs input.
+  const logins = new Map<string, OAuthLoginHandle>();
+
   app.get(`${V1}/providers`, async () => allProviderStatuses(storage));
+
+  // Vendors that support subscription (OAuth) login — the UI shows a
+  // "Log in with subscription" action for these.
+  app.get(`${V1}/providers/oauth`, async () => ({ providers: oauthProviderDescriptors(storage) }));
 
   // Installable set for the add-provider picker: every catalog provider AND
   // every provider pi ships a catalog for, with an env-key hint + configured flag.
@@ -68,6 +91,87 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
     const status = providerStatusWire(storage, vendor);
     deps.bus.publish({ type: "provider.status", data: status });
     return status;
+  });
+
+  // ── Subscription (OAuth) login ─────────────────────────────────────────────
+  // Map the engine's (camelCase) login state onto the snake_case wire contract.
+  const loginStateWire = (s: OAuthLoginState) => ({
+    login_id: s.id,
+    vendor: s.vendor,
+    status: s.status,
+    auth: s.auth,
+    device_code: s.deviceCode && {
+      user_code: s.deviceCode.userCode,
+      verification_uri: s.deviceCode.verificationUri,
+      interval_seconds: s.deviceCode.intervalSeconds,
+      expires_in_seconds: s.deviceCode.expiresInSeconds,
+    },
+    prompt: s.prompt,
+    error: s.error,
+  });
+
+  // Wait for the flow to surface something actionable (browser URL / device code
+  // / a paste-a-code prompt / terminal state) so the first response is useful;
+  // otherwise the UI keeps polling GET /providers/login/:id.
+  async function waitUntilActionable(handle: OAuthLoginHandle, timeoutMs = 8000): Promise<OAuthLoginState> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const s = handle.state();
+      if (s.status !== "starting" || Date.now() >= deadline) return s;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  app.post(`${V1}/providers/:vendor/login`, async (req, reply) => {
+    const vendor = (req.params as { vendor: string }).vendor;
+    let handle: OAuthLoginHandle;
+    try {
+      handle = startOAuthLogin(storage, vendor);
+    } catch (err) {
+      if (err instanceof OAuthProviderUnavailableError) {
+        return reply.code(404).send({ error: err.message });
+      }
+      throw err;
+    }
+    logins.set(handle.id, handle);
+    // On completion: publish the refreshed (now-configured) status, then retire.
+    void handle.done.then(() => {
+      deps.bus.publish({ type: "provider.status", data: providerStatusWire(storage, vendor) });
+      setTimeout(() => logins.delete(handle.id), 60_000);
+    });
+    const state = await waitUntilActionable(handle);
+    return reply.code(202).send(loginStateWire(state));
+  });
+
+  app.get(`${V1}/providers/login/:loginId`, async (req, reply) => {
+    const { loginId } = req.params as { loginId: string };
+    const handle = logins.get(loginId);
+    if (!handle) return reply.code(404).send({ error: "unknown login", login_id: loginId });
+    return loginStateWire(handle.state());
+  });
+
+  app.post(`${V1}/providers/login/:loginId/input`, async (req, reply) => {
+    const { loginId } = req.params as { loginId: string };
+    const handle = logins.get(loginId);
+    if (!handle) return reply.code(404).send({ error: "unknown login", login_id: loginId });
+    const parsed = InputBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(422).send({ error: "validation failed", details: parsed.error.flatten() });
+    }
+    if (!handle.provideInput(parsed.data.value)) {
+      return reply.code(409).send({ error: "no input is pending for this login", login_id: loginId });
+    }
+    const state = await waitUntilActionable(handle);
+    return loginStateWire(state);
+  });
+
+  app.delete(`${V1}/providers/login/:loginId`, async (req, reply) => {
+    const { loginId } = req.params as { loginId: string };
+    const handle = logins.get(loginId);
+    if (!handle) return reply.code(404).send({ error: "unknown login", login_id: loginId });
+    handle.abort();
+    logins.delete(loginId);
+    return { login_id: loginId, aborted: true };
   });
 
   app.get(`${V1}/providers/:vendor/models`, async (req) => {

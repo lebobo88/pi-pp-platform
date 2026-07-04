@@ -136,24 +136,54 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
   });
 
   // ── Manual retry (Reflexion ×1) — drives the pilot's retryStage helper ──
+  // The Reflexion ×1 invariant is the enforced DEFAULT: a stage whose latest
+  // attempt already retried returns 409. An operator may explicitly override
+  // with `{ override: true }` (body) or `?override=true` — a deliberate, logged
+  // human action. The daemon's AUTOMATIC retry path is never affected, so the
+  // invariant is never broken implicitly.
   app.post(`${V1}/runs/:id/stages/:stageId/retry`, async (req, reply) => {
     const { id, stageId } = req.params as { id: string; stageId: string };
     if (!runIdForStage(stageId)) return reply.code(404).send({ error: "stage not found", stage_id: stageId });
 
-    // Preserve the 409-when-exhausted HTTP semantic: the ×1 invariant is
-    // enforced in core; a stage whose latest attempt already retried can't retry.
+    const body = (req.body ?? {}) as { override?: boolean };
+    const query = (req.query ?? {}) as { override?: string };
+    const override = body.override === true || query.override === "true" || query.override === "1";
+
     const att = db()
       .prepare("SELECT id FROM attempts WHERE stage_id = ? ORDER BY created_at DESC LIMIT 1")
       .get(stageId) as { id: string } | undefined;
     if (!att) return reply.code(404).send({ error: "stage has no attempt to retry", stage_id: stageId });
     const elig = checkRetryEligible({ attempt_id: att.id });
-    if (!elig.ok) return reply.code(409).send({ error: "retry_exhausted", reason: elig.reason });
+    if (!elig.ok && !override) {
+      // Not eligible and no override → keep the 409, but tell the client an
+      // override is available so it can offer "retry anyway".
+      return reply.code(409).send({
+        error: "retry_exhausted",
+        reason: elig.reason,
+        override_available: true,
+      });
+    }
 
-    // Eligible → actually re-drive the stage (critique fed back, tier +1,
-    // regenerate, re-judge) via the pilot helper.
+    const overridden = !elig.ok && override;
+    if (overridden) {
+      // Audit the deliberate bypass of the Reflexion ×1 budget.
+      req.log.warn(
+        { run_id: id, stage_id: stageId, attempt_id: att.id, reason: elig.reason },
+        "operator override: retrying a Reflexion-exhausted stage",
+      );
+    }
+
+    // Actually re-drive the stage (critique fed back, tier +1, regenerate, re-judge).
     const res = await retryStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps) });
     if (!res.ok) return reply.code(409).send({ error: "retry_unavailable", reason: res.reason });
-    return reply.code(202).send({ run_id: id, stage_id: stageId, action: "retry", ok: true, outcome: res.outcome });
+    return reply.code(202).send({
+      run_id: id,
+      stage_id: stageId,
+      action: "retry",
+      ok: true,
+      overridden,
+      outcome: res.outcome,
+    });
   });
 
   // ── Re-judge only (the /pp:gate equivalent) — pilot's regateStage helper ──

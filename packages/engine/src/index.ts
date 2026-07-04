@@ -11,6 +11,7 @@ export * from "./envelope.js";
 export * from "./catalog.js";
 export * from "./models.js";
 export * from "./auth.js";
+export * from "./oauth-login.js";
 export * from "./llm.js";
 export * from "./critique.js";
 export * from "./generate-completion.js";

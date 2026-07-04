@@ -3,6 +3,7 @@ import type { RunStatus, StageStatus } from "@shared/api-types";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
 import { toast } from "@/stores/uiStore";
+import { ApiClientError } from "@/api/client";
 import { useAbortRun, useRetryStage, useGateStage } from "@/api/mutations/runs";
 
 /** Abort button — only meaningful while the run is in-flight. */
@@ -60,6 +61,36 @@ export function StageActions({
   const retry = useRetryStage(runId);
   const gate = useGateStage(runId);
   const canRetry = stageStatus === "surfaced";
+  // Set once a retry returns 409 retry_exhausted, revealing the explicit override.
+  const [exhausted, setExhausted] = useState(false);
+
+  const runRetry = (override: boolean) =>
+    retry.mutate(
+      { stageId, override },
+      {
+        onSuccess: () => {
+          setExhausted(false);
+          toast({
+            tone: override ? "warn" : "info",
+            title: override ? "Override retry queued" : "Stage retry queued",
+            message: stageId,
+          });
+        },
+        onError: (e) => {
+          // Reflexion ×1 budget spent — surface the real reason and offer override.
+          if (e instanceof ApiClientError && e.status === 409) {
+            setExhausted(true);
+            toast({
+              tone: "warn",
+              title: "Retry budget exhausted (Reflexion ×1)",
+              message: "Override available — a forced retry may yield diminishing returns.",
+            });
+            return;
+          }
+          toast({ tone: "error", title: "Retry failed", message: e instanceof Error ? e.message : "" });
+        },
+      },
+    );
 
   return (
     <div className="flex items-center gap-1.5">
@@ -68,15 +99,21 @@ export function StageActions({
           size="sm"
           variant="default"
           disabled={retry.isPending}
-          onClick={() =>
-            retry.mutate(stageId, {
-              onSuccess: () => toast({ tone: "info", title: "Stage retry queued", message: stageId }),
-              onError: (e) => toast({ tone: "error", title: "Retry failed", message: e instanceof Error ? e.message : "" }),
-            })
-          }
+          onClick={() => runRetry(false)}
           title="Retry with the verdict's critique fed back (Reflexion ×1)"
         >
           {retry.isPending ? "Retrying…" : "Retry"}
+        </Button>
+      )}
+      {canRetry && exhausted && (
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={retry.isPending}
+          onClick={() => runRetry(true)}
+          title="Force another retry past the Reflexion ×1 budget — diminishing returns likely"
+        >
+          Override &amp; retry anyway
         </Button>
       )}
       <Button

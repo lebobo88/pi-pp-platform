@@ -4,7 +4,7 @@
  * match the wire shape 1:1 (see the deltas noted in each function).
  */
 import { prices, enabledProviders, catalog } from "@pp/core";
-import { getProviderStatus, listPiModels, providersWithCredential, type ProviderStatus as EngineProviderStatus } from "@pp/engine";
+import { getProviderStatus, listPiModels, providersWithCredential, providersWithCliLogin, type ProviderStatus as EngineProviderStatus } from "@pp/engine";
 
 /** The AuthStorage type, derived from the engine signature (no pi dep in @pp/server). */
 type AuthStorage = Parameters<typeof getProviderStatus>[0];
@@ -20,14 +20,16 @@ export function wireVendors(): string[] {
 
 /**
  * Providers to surface as cards / in the model catalog: enabled catalog
- * providers PLUS any provider that has a stored credential — so a keyed provider
- * (e.g. deepseek/xai) always gets a card even before it is enabled in the
- * catalog. Catalog providers come first, then keyed-only ones.
+ * providers PLUS any provider that has a stored credential PLUS any provider
+ * with a locally logged-in vendor CLI / subscription — so a keyed provider
+ * (e.g. deepseek/xai) or a subscription-logged-in provider (e.g. github-copilot)
+ * always gets a card even before it is enabled in the catalog. Catalog providers
+ * come first, then keyed-/login-only ones.
  */
 export function visibleProviders(storage: AuthStorage): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const id of [...enabledProviders(), ...providersWithCredential(storage)]) {
+  for (const id of [...enabledProviders(), ...providersWithCredential(storage), ...providersWithCliLogin()]) {
     if (!seen.has(id)) { seen.add(id); out.push(id); }
   }
   return out;
@@ -50,10 +52,12 @@ export interface WireProviderStatus {
 
 /**
  * Build the wire ProviderStatus from the engine's auth status. DELTA vs the
- * UI mock: the pi runtime has NO sub-CLIs, so cli_installed/cli_version/logged_in
- * are always false/null here (they were codex/gemini/copilot CLI fields in the
- * legacy daemon). `masked_key` carries only the engine's non-reversible
- * fingerprint — never a raw key.
+ * UI mock: the pi runtime has NO sub-CLIs, so cli_installed/cli_version are
+ * always false/null here (they were codex/gemini/copilot CLI-binary fields in
+ * the legacy daemon). `logged_in`, however, is REAL: it reflects a locally
+ * logged-in vendor CLI / subscription session detected on disk (distinct from
+ * `configured`, which means pi can actually resolve a usable key). `masked_key`
+ * carries only the engine's non-reversible fingerprint — never a raw key.
  */
 export function providerStatusWire(storage: AuthStorage, vendor: WireVendor): WireProviderStatus {
   const s: EngineProviderStatus = getProviderStatus(storage, vendor);
@@ -63,7 +67,7 @@ export function providerStatusWire(storage: AuthStorage, vendor: WireVendor): Wi
     cli_installed: false,
     cli_version: null,
     has_api_key: !!s.fingerprint,
-    logged_in: false,
+    logged_in: s.loggedIn,
     masked_key: s.fingerprint ?? null,
     degraded: false,
   };

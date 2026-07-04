@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, isAbsolute, resolve, sep } from "node:path";
 import { listRuns, getRun, buildReplayBundle, db, type RunStatus } from "@pp/core";
 import { V1 } from "../deps.js";
 
@@ -69,15 +69,43 @@ export function registerRunRoutes(app: FastifyInstance): void {
   });
 
   // ── Artifact / file content ──
+  // Artifact paths are stored RELATIVE to the project root (e.g.
+  // ".harness/<run>/..."), but the server cwd is not the project dir — so a bare
+  // relative `path` cannot be resolved on its own. Callers pass `project_path`
+  // (or `run_id`, from which we look up the project root) to resolve it. Absolute
+  // paths are served as-is (e.g. a promoted_path).
   app.get(`${V1}/content`, async (req, reply) => {
-    const q = req.query as { path?: string };
-    const path = q.path;
-    if (!path) return reply.code(422).send({ error: "validation failed", details: { path: "required" } });
-    if (!existsSync(path) || !statSync(path).isFile()) {
-      return reply.code(404).send({ error: `no file at ${path}` });
+    const q = req.query as { path?: string; project_path?: string; run_id?: string };
+    const rawPath = q.path;
+    if (!rawPath) return reply.code(422).send({ error: "validation failed", details: { path: "required" } });
+
+    let projectRoot = q.project_path;
+    if (!projectRoot && q.run_id) {
+      const tree = getRun(q.run_id) as { run?: { project_path?: string } } | null;
+      projectRoot = tree?.run?.project_path ?? undefined;
     }
-    const content = readFileSync(path, "utf8");
-    return { path, kind: contentKind(path), content };
+
+    let resolved: string;
+    if (isAbsolute(rawPath)) {
+      resolved = resolve(rawPath);
+    } else if (projectRoot) {
+      resolved = resolve(projectRoot, rawPath);
+      // Containment guard: never serve a file outside the project root.
+      const root = resolve(projectRoot);
+      if (resolved !== root && !resolved.startsWith(root + sep)) {
+        return reply.code(400).send({ error: "resolved path escapes the project root" });
+      }
+    } else {
+      // No root supplied — fall back to cwd (legacy). A relative artifact path
+      // will usually 404 here; the caller should pass project_path or run_id.
+      resolved = resolve(rawPath);
+    }
+
+    if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+      return reply.code(404).send({ error: `no file at ${rawPath}`, resolved });
+    }
+    const content = readFileSync(resolved, "utf8");
+    return { path: resolved, kind: contentKind(resolved), content };
   });
 
   // Run-control POSTs are registered by registerRunControlRoutes (run-control.ts).

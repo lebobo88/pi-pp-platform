@@ -11,7 +11,7 @@
  * (fetches the latest list from the provider endpoint when a credential exists).
  */
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { catalog, normalizeProviderAlias } from "@pp/core";
+import { catalog, normalizeProviderAlias, detectCliLogin, CLI_LOGIN_PROVIDERS } from "@pp/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 
 export interface PiModelInfo {
@@ -142,6 +142,11 @@ export function hasCredential(storage: AuthStorage, provider: string): boolean {
  * Providers that currently have a stored/ambient credential, among a candidate
  * set (defaults to every pi provider). Uses AuthStorage.getAuthStatus, which
  * does not expose the key.
+ *
+ * NOTE: this is the "pi can actually resolve a usable key" set — it gates
+ * generation preflight (stage-loop / best-of) and judge eligibility, so it must
+ * NOT include merely CLI-logged-in providers pi cannot obtain a token for. Use
+ * {@link providersWithCliLogin} for visibility/display instead.
  */
 export function providersWithCredential(storage: AuthStorage, candidates?: string[]): string[] {
   const ids = candidates ?? listPiProviders();
@@ -154,6 +159,18 @@ export function providersWithCredential(storage: AuthStorage, candidates?: strin
     }
   }
   return out;
+}
+
+/**
+ * Providers with a locally logged-in vendor CLI / subscription session (presence
+ * detection only — see providers/cli-login.ts). This is a DISPLAY/visibility
+ * signal: a provider here should get a card, but it is NOT necessarily usable
+ * for generation (that still requires a resolvable credential — see
+ * {@link providersWithCredential}). Defaults to the known CLI-login providers.
+ */
+export function providersWithCliLogin(candidates?: readonly string[]): string[] {
+  const ids = candidates ?? CLI_LOGIN_PROVIDERS;
+  return ids.filter((id) => detectCliLogin(id).loggedIn);
 }
 
 /** Result of `refreshPiModels`: the model list plus whether a live refresh ran. */

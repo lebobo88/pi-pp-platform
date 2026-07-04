@@ -9,6 +9,7 @@ import {
   type ProviderModelsRefreshResponse,
   type InstallableProvider,
   type HarnessSettings,
+  type OAuthLoginState,
 } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
@@ -19,9 +20,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { StatusChip, StatusDot } from "@/components/StatusChip";
 import { KeyValue } from "@/components/KeyValue";
 import { Pill, TierChip } from "@/features/common/chips";
-import { useProviders, useModels, useAvailableProviders, useProviderModels, providerModelsKey } from "@/api/queries/providers";
+import { useProviders, useModels, useAvailableProviders, useProviderModels, providerModelsKey, useOAuthProviders, useProviderLoginState } from "@/api/queries/providers";
 import { useSettings } from "@/api/queries/system";
-import { useSetProviderKey, useTestProvider, useDeleteProviderKey } from "@/api/mutations/providers";
+import { useSetProviderKey, useTestProvider, useDeleteProviderKey, useStartProviderLogin, useProviderLoginInput, useAbortProviderLogin } from "@/api/mutations/providers";
 import { useSaveSettings } from "@/api/mutations/misc";
 import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
@@ -45,6 +46,8 @@ export function ProvidersPage() {
   const { data: providers, isLoading } = useProviders();
   const { data: models } = useModels();
   const { data: available } = useAvailableProviders();
+  const { data: oauth } = useOAuthProviders();
+  const oauthSet = useMemo(() => new Set((oauth?.providers ?? []).map((p) => p.id)), [oauth]);
   const [query, setQuery] = useState("");
 
   // env_key_hint / display_name captions come from the installable-provider set.
@@ -92,8 +95,8 @@ export function ProvidersPage() {
             <EmptyState title="No providers match" description="Try a different search." compact />
           ) : (
             <>
-              <ProviderGroup label="Configured" providers={configuredList} hintFor={hintFor} />
-              <ProviderGroup label="Available" providers={availableList} hintFor={hintFor} />
+              <ProviderGroup label="Configured" providers={configuredList} hintFor={hintFor} oauthSet={oauthSet} />
+              <ProviderGroup label="Available" providers={availableList} hintFor={hintFor} oauthSet={oauthSet} />
             </>
           )}
         </>
@@ -120,10 +123,12 @@ function ProviderGroup({
   label,
   providers,
   hintFor,
+  oauthSet,
 }: {
   label: string;
   providers: ProviderStatus[];
   hintFor: Map<string, InstallableProvider>;
+  oauthSet: Set<string>;
 }) {
   if (providers.length === 0) return null;
   return (
@@ -133,7 +138,12 @@ function ProviderGroup({
       </h2>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
         {providers.map((p) => (
-          <ProviderCard key={p.vendor} provider={p} envKeyHint={hintFor.get(p.vendor)?.env_key_hint ?? null} />
+          <ProviderCard
+            key={p.vendor}
+            provider={p}
+            envKeyHint={hintFor.get(p.vendor)?.env_key_hint ?? null}
+            canOAuthLogin={oauthSet.has(p.vendor)}
+          />
         ))}
       </div>
     </section>
@@ -350,10 +360,35 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
   );
 }
 
-function ProviderCard({ provider, envKeyHint = null }: { provider: ProviderStatus; envKeyHint?: string | null }) {
-  const tone = provider.degraded ? "warn" : provider.configured ? "pass" : "dim";
+function ProviderCard({
+  provider,
+  envKeyHint = null,
+  canOAuthLogin = false,
+}: {
+  provider: ProviderStatus;
+  envKeyHint?: string | null;
+  canOAuthLogin?: boolean;
+}) {
+  // A subscription/CLI login that hasn't produced a usable key yet reads as a
+  // distinct "logged in" state — ready-ish, but not the full "ready" of a
+  // resolvable credential.
+  const tone = provider.degraded
+    ? "warn"
+    : provider.configured
+      ? "pass"
+      : provider.logged_in
+        ? "judge"
+        : "dim";
+  const statusLabel = provider.degraded
+    ? "degraded"
+    : provider.configured
+      ? "ready"
+      : provider.logged_in
+        ? "logged in"
+        : "unconfigured";
   const [keyOpen, setKeyOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
   const test = useTestProvider(provider.vendor);
   const refresh = useRefreshProviderModels(provider.vendor);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
@@ -361,18 +396,24 @@ function ProviderCard({ provider, envKeyHint = null }: { provider: ProviderStatu
   return (
     <Card
       title={<span className="flex items-center gap-2 text-ink-1"><StatusDot tone={tone} pulse={provider.configured && !provider.degraded} /> {provider.vendor}</span>}
-      actions={<StatusChip tone={tone} label={provider.degraded ? "degraded" : provider.configured ? "ready" : "unconfigured"} />}
+      actions={<StatusChip tone={tone} label={statusLabel} />}
     >
       <KeyValue
         labelWidth={92}
         rows={[
           { label: "api key", value: provider.has_api_key ? (provider.masked_key ?? "set") : "—", mono: true },
           { label: "configured", value: provider.configured ? "yes" : "no" },
+          ...(provider.logged_in ? [{ label: "cli login", value: "detected" }] : []),
           ...(envKeyHint ? [{ label: "env key", value: envKeyHint, mono: true }] : []),
         ]}
       />
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line-1 pt-2">
+        {canOAuthLogin && !provider.configured && (
+          <Button size="sm" variant="primary" data-testid={`login-${provider.vendor}`} onClick={() => setLoginOpen(true)}>
+            Log in with subscription
+          </Button>
+        )}
         <Button size="sm" onClick={() => setKeyOpen(true)}>{provider.has_api_key ? "Replace key" : "Set key"}</Button>
         <Button
           size="sm"
@@ -419,7 +460,115 @@ function ProviderCard({ provider, envKeyHint = null }: { provider: ProviderStatu
 
       <SetKeyModal vendor={provider.vendor} open={keyOpen} onClose={() => setKeyOpen(false)} />
       <DeleteKeyModal vendor={provider.vendor} open={deleteOpen} onClose={() => setDeleteOpen(false)} />
+      {canOAuthLogin && <SubscriptionLoginModal vendor={provider.vendor} open={loginOpen} onClose={() => setLoginOpen(false)} />}
     </Card>
+  );
+}
+
+/**
+ * Subscription (OAuth) login flow. Starts on open, polls state, renders the
+ * browser URL / device code, and prompts for a paste-a-code step when the flow
+ * pauses. Aborts the flow if closed before completion.
+ */
+function SubscriptionLoginModal({ vendor, open, onClose }: { vendor: string; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const start = useStartProviderLogin(vendor);
+  const abort = useAbortProviderLogin();
+  const [loginId, setLoginId] = useState<string | null>(null);
+  const [initial, setInitial] = useState<OAuthLoginState | null>(null);
+  const [codeValue, setCodeValue] = useState("");
+
+  // Poll while open and not yet terminal.
+  const polled = useProviderLoginState(loginId, open && !!loginId);
+  const state: OAuthLoginState | undefined = polled.data ?? initial ?? undefined;
+  const input = useProviderLoginInput(loginId ?? "");
+
+  // Kick off the flow when the modal opens.
+  useEffect(() => {
+    if (!open || loginId || start.isPending) return;
+    start.mutate(undefined, {
+      onSuccess: (s) => { setInitial(s); setLoginId(s.login_id); },
+      onError: (e) => toast({ tone: "error", title: "Login could not start", message: e instanceof Error ? e.message : "" }),
+    });
+  }, [open, loginId, start]);
+
+  // On completion, refresh provider status + close.
+  useEffect(() => {
+    if (state?.status === "done") {
+      toast({ tone: "success", title: `${vendor} subscription connected` });
+      void qc.invalidateQueries({ queryKey: qk.providers });
+      close(false);
+    } else if (state?.status === "error") {
+      toast({ tone: "error", title: `${vendor} login failed`, message: state.error ?? "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.status]);
+
+  const close = (userAborted: boolean) => {
+    if (userAborted && loginId && state && state.status !== "done" && state.status !== "error") {
+      abort.mutate(loginId);
+    }
+    setLoginId(null);
+    setInitial(null);
+    setCodeValue("");
+    onClose();
+  };
+
+  const submitCode = () => {
+    if (!codeValue.trim()) return;
+    input.mutate(codeValue.trim(), {
+      onSuccess: () => setCodeValue(""),
+      onError: (e) => toast({ tone: "error", title: "Code rejected", message: e instanceof Error ? e.message : "" }),
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => close(true)}
+      title={`Log in to ${vendor}`}
+      footer={<Button variant="ghost" onClick={() => close(true)}>{state?.status === "done" ? "Close" : "Cancel"}</Button>}
+    >
+      {!state || state.status === "starting" ? (
+        <p className="text-[12px] text-ink-3">Starting subscription login…</p>
+      ) : (
+        <div className="space-y-3 text-[12px] text-ink-2">
+          {state.auth && (
+            <div>
+              <p className="text-ink-2">Open this URL in your browser to authorize:</p>
+              <a href={state.auth.url} target="_blank" rel="noreferrer" className="mono break-all text-accent hover:underline">{state.auth.url}</a>
+              {state.auth.instructions && <p className="mt-1 text-ink-3">{state.auth.instructions}</p>}
+            </div>
+          )}
+          {state.device_code && (
+            <div className="rounded-sm bg-bg-2 p-2">
+              <p>Go to <a href={state.device_code.verification_uri} target="_blank" rel="noreferrer" className="mono text-accent hover:underline">{state.device_code.verification_uri}</a> and enter the code:</p>
+              <p className="mono mt-1 select-all text-[18px] tracking-widest text-ink-1">{state.device_code.user_code}</p>
+            </div>
+          )}
+          {state.status === "awaiting_input" && state.prompt && (
+            <div>
+              <label className="block text-ink-2">{state.prompt.message}</label>
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  autoFocus
+                  value={codeValue}
+                  onChange={(e) => setCodeValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitCode(); }}
+                  placeholder={state.prompt.placeholder ?? "paste the code"}
+                  className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                />
+                <Button size="sm" variant="primary" disabled={!codeValue.trim() || input.isPending} onClick={submitCode}>Submit</Button>
+              </div>
+            </div>
+          )}
+          {(state.status === "awaiting_browser" || state.status === "awaiting_device_code") && (
+            <p className="flex items-center gap-1.5 text-ink-3"><StatusDot tone="run" pulse /> Waiting for you to authorize…</p>
+          )}
+          {state.status === "error" && <p className="text-fail">{state.error ?? "Login failed."}</p>}
+        </div>
+      )}
+    </Modal>
   );
 }
 

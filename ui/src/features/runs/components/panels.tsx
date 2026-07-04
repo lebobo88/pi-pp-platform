@@ -18,7 +18,8 @@ import { useContent } from "@/api/queries/content";
 
 export function ArtifactsPanel({ tree }: { tree: RunTree }) {
   const [selected, setSelected] = useState<ArtifactRow | null>(tree.artifacts[0] ?? null);
-  const { data: doc } = useContent(selected?.path);
+  // Artifact paths are relative to the project root — resolve via the run id.
+  const { data: doc } = useContent(selected?.path, { runId: selected?.run_id });
   if (tree.artifacts.length === 0) {
     return <EmptyState title="No artifacts" compact />;
   }

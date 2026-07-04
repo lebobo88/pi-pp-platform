@@ -44,6 +44,7 @@ import { analyzeAndPropose } from "./autogenesis-analyzer.js";
 import { constitutionSha } from "./constitution.js";
 import { getTeam } from "./teams.js";
 import { getForum } from "./forums.js";
+import { isCliLoggedIn } from "../providers/cli-login.js";
 
 const now = () => new Date().toISOString();
 
@@ -3218,63 +3219,17 @@ function hasAnthropicCreds(): boolean {
   return !!process.env.ANTHROPIC_API_KEY || claudeLoggedIn();
 }
 
-/**
- * Best-effort detection of a logged-in Codex session. The Codex CLI stores
- * auth state under `~/.codex/auth.json` (or similar). We only need to know
- * whether a non-empty credential file exists — not validate it — because
- * any subsequent CLI call will fail loudly if the credential is bad.
- */
+// Vendor-CLI login detection is centralized in providers/cli-login.ts (shared
+// with @pp/engine's provider status). These thin wrappers preserve the vendor
+// names used by the credential predicates above and map them onto catalog ids.
 function codexLoggedIn(): boolean {
-  try {
-    const home = (process.env.USERPROFILE ?? process.env.HOME) ?? "";
-    if (!home) return false;
-    const candidates = [`${home}/.codex/auth.json`, `${home}/.codex/credentials.json`];
-    for (const p of candidates) {
-      try {
-        const stat = statSync(p);
-        if (stat.size > 0) return true;
-      } catch { /* file missing */ }
-    }
-    return false;
-  } catch { return false; }
+  return isCliLoggedIn("openai-codex");
 }
 
-/**
- * Detection of a Gemini logged-in session. The Gemini CLI persists OAuth
- * state at `~/.gemini/oauth_creds.json`. Same caveat — we only check
- * presence + non-empty, not validity.
- */
 function geminiLoggedIn(): boolean {
-  try {
-    const home = (process.env.USERPROFILE ?? process.env.HOME) ?? "";
-    if (!home) return false;
-    const candidates = [`${home}/.gemini/oauth_creds.json`, `${home}/.gemini/credentials.json`];
-    for (const p of candidates) {
-      try {
-        const stat = statSync(p);
-        if (stat.size > 0) return true;
-      } catch { /* file missing */ }
-    }
-    return false;
-  } catch { return false; }
+  return isCliLoggedIn("google");
 }
 
-/**
- * Detection of a Claude Code logged-in session. The Claude CLI persists
- * credentials at `~/.claude/.credentials.json`. Same caveat — we only check
- * presence + non-empty, not validity.
- */
 function claudeLoggedIn(): boolean {
-  try {
-    const home = (process.env.USERPROFILE ?? process.env.HOME) ?? "";
-    if (!home) return false;
-    const candidates = [`${home}/.claude/.credentials.json`, `${home}/.claude/credentials.json`];
-    for (const p of candidates) {
-      try {
-        const stat = statSync(p);
-        if (stat.size > 0) return true;
-      } catch { /* file missing */ }
-    }
-    return false;
-  } catch { return false; }
+  return isCliLoggedIn("anthropic");
 }

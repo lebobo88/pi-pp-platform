@@ -237,21 +237,29 @@ export interface Project {
  * Provider (vendor) health as surfaced to the UI. NEVER carries a raw API key
  * — only a masked, non-reversible fingerprint suitable for display.
  *
- * The pi runtime has NO sub-CLIs, so `cli_installed`/`cli_version`/`logged_in`
- * are LEGACY fields the server always returns as `false`/`null`/`false` (they
- * were codex/gemini/copilot CLI fields in the old daemon). The UI does not
- * display them. `degraded` is likewise always `false` on the pi server.
+ * The pi runtime has NO sub-CLI binaries, so `cli_installed`/`cli_version` are
+ * LEGACY fields the server always returns as `false`/`null`. `logged_in`, by
+ * contrast, is REAL: it reports a locally logged-in vendor CLI / subscription
+ * session detected on disk (e.g. `claude` / `codex` / `gh copilot` / `opencode`
+ * login) — distinct from `configured`, which means the harness can actually
+ * resolve a usable key. A provider may be `logged_in` but not yet `configured`.
+ * `degraded` is always `false` on the pi server.
  */
 export interface ProviderStatus {
   vendor: Vendor;
-  /** A usable credential is present for this vendor. */
+  /** A usable credential is present for this vendor (the harness can generate). */
   configured: boolean;
   /** @deprecated legacy CLI-era field — always false on the pi server. */
   cli_installed: boolean;
   /** @deprecated legacy CLI-era field — always null on the pi server. */
   cli_version: string | null;
   has_api_key: boolean;
-  /** @deprecated legacy CLI-era field — always false on the pi server. */
+  /**
+   * A local vendor-CLI / subscription login was detected on disk. Presence
+   * signal only — does not imply `configured`. For pi-OAuth providers
+   * (anthropic, github-copilot, openai-codex) a subscription login via
+   * POST /providers/:vendor/login makes the provider `configured` too.
+   */
   logged_in: boolean;
   /** Masked key fingerprint for display; null when no key is set. */
   masked_key: string | null;
@@ -695,6 +703,28 @@ export interface StageActionResponse {
   stage_id: string;
   action: "retry" | "gate";
   ok: boolean;
+  /**
+   * True when this retry deliberately bypassed an exhausted Reflexion ×1 budget
+   * via an operator override (`{ override: true }`). Absent/false otherwise.
+   */
+  overridden?: boolean;
+}
+
+/**
+ * 409 body for `POST /runs/:id/stages/:sid/retry` when the Reflexion ×1 budget
+ * is exhausted. `override_available` tells the client it may re-POST with
+ * `{ override: true }` to retry anyway (diminishing returns).
+ */
+export interface RetryExhaustedResponse {
+  error: "retry_exhausted";
+  reason?: string;
+  override_available: true;
+}
+
+/** Body for `POST /runs/:id/stages/:sid/retry`. */
+export interface StageRetryRequest {
+  /** Bypass an exhausted Reflexion ×1 budget (deliberate, logged operator action). */
+  override?: boolean;
 }
 
 /**
@@ -713,6 +743,52 @@ export interface ProviderTestResult {
   model?: string;
   wall_ms?: number;
   detail?: string;
+}
+
+/**
+ * A vendor that supports subscription (OAuth) login — from `GET /providers/oauth`.
+ * Only pi-native OAuth providers appear (anthropic, github-copilot, openai-codex).
+ */
+export interface OAuthProviderDescriptor {
+  id: Vendor;
+  name: string;
+}
+
+/** `GET /providers/oauth` response. */
+export interface OAuthProvidersResponse {
+  providers: OAuthProviderDescriptor[];
+}
+
+/**
+ * Live state of a subscription-login flow. The flow is interactive: it surfaces
+ * a browser `auth` URL and/or a `deviceCode`, and may pause at a `prompt`
+ * awaiting `POST /providers/login/:loginId/input`. Terminal states are `done`
+ * (provider is now `configured`) and `error`. Carries no secrets.
+ */
+export interface OAuthLoginState {
+  login_id: string;
+  vendor: Vendor;
+  status: "starting" | "awaiting_browser" | "awaiting_device_code" | "awaiting_input" | "done" | "error";
+  auth?: { url: string; instructions?: string };
+  device_code?: {
+    user_code: string;
+    verification_uri: string;
+    interval_seconds?: number;
+    expires_in_seconds?: number;
+  };
+  prompt?: { message: string; placeholder?: string };
+  error?: string;
+}
+
+/** Body for `POST /providers/login/:loginId/input` (a paste-a-code step). */
+export interface OAuthLoginInputRequest {
+  value: string;
+}
+
+/** `DELETE /providers/login/:loginId` response. */
+export interface OAuthLoginAbortResponse {
+  login_id: string;
+  aborted: true;
 }
 
 /**
@@ -1122,6 +1198,17 @@ export const apiPaths = {
   /** POST — re-fetch a dynamic provider's live model list (no body). */
   providerModelsRefresh: (vendor: string) =>
     `${API_BASE}/providers/${encodeURIComponent(vendor)}/models/refresh`,
+  /** GET — vendors that support subscription (OAuth) login. */
+  providersOauth: `${API_BASE}/providers/oauth`,
+  /** POST — start a subscription (OAuth) login; returns an OAuthLoginState. */
+  providerLogin: (vendor: string) => `${API_BASE}/providers/${encodeURIComponent(vendor)}/login`,
+  /** GET — poll a login's state. */
+  providerLoginState: (loginId: string) => `${API_BASE}/providers/login/${encodeURIComponent(loginId)}`,
+  /** POST — supply a pending paste-a-code input (body OAuthLoginInputRequest). */
+  providerLoginInput: (loginId: string) =>
+    `${API_BASE}/providers/login/${encodeURIComponent(loginId)}/input`,
+  /** DELETE — abort an in-flight login. */
+  providerLoginAbort: (loginId: string) => `${API_BASE}/providers/login/${encodeURIComponent(loginId)}`,
   models: `${API_BASE}/models`,
 
   budgets: `${API_BASE}/budgets`,
@@ -1159,7 +1246,17 @@ export const apiPaths = {
   settings: `${API_BASE}/settings`,
 
   /** Fetch a file/artifact body by its (project-relative) path. */
-  content: (path: string) => `${API_BASE}/content?path=${encodeURIComponent(path)}`,
+  /**
+   * Artifact/file content. Artifact paths are stored RELATIVE to the project
+   * root, so pass `opts.projectPath` (or `opts.runId`, from which the server
+   * looks up the root) to resolve them; absolute paths need neither.
+   */
+  content: (path: string, opts?: { projectPath?: string; runId?: string }) => {
+    const qs = new URLSearchParams({ path });
+    if (opts?.projectPath) qs.set("project_path", opts.projectPath);
+    if (opts?.runId) qs.set("run_id", opts.runId);
+    return `${API_BASE}/content?${qs.toString()}`;
+  },
 
   /** Global SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
    *  the bearer as `?token=` — EventSource cannot send headers. */

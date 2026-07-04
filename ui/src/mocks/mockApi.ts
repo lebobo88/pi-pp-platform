@@ -407,6 +407,7 @@ function route(method: string, url: URL, body: unknown): Response | null {
   }
 
   if (p === apiPaths.providers) return json(mockProviders);
+  if (p === apiPaths.providersOauth) return json({ providers: [] });
   if (p === apiPaths.providersAvailable) return json(mockAvailableProviders);
   const provModelsMatch = p.match(/^\/api\/v1\/providers\/([^/]+)\/models$/);
   if (provModelsMatch) {

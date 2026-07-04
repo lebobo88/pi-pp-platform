@@ -83,9 +83,9 @@ export function ProjectDetailPage() {
       )}
 
       {tab === "profile" && <ProfileView name={project.active_profile} path={project.path} />}
-      {tab === "master-plan" && <MasterPlanPanel path={path!} />}
-      {tab === "agents-md" && <AgentsMdPanel path={path!} />}
-      {tab === "constitution" && <ConstitutionPanel path={path!} />}
+      {tab === "master-plan" && <MasterPlanPanel path={path!} present={project.master_plan?.present ?? false} />}
+      {tab === "agents-md" && <AgentsMdPanel path={path!} present={project.agents_md?.present ?? false} />}
+      {tab === "constitution" && <ConstitutionPanel path={path!} present={project.constitution?.present ?? false} />}
     </Page>
   );
 }
@@ -302,16 +302,18 @@ function ProfileView({ name, path }: { name: string | null; path: string }) {
   );
 }
 
-function MasterPlanPanel({ path }: { path: string }) {
-  const { data, isLoading } = useMasterPlan(path);
+// When a managed doc is not present, skip the fetch entirely (avoids a benign
+// 404) and let DocCard render its "Not present" state.
+function MasterPlanPanel({ path, present }: { path: string; present: boolean }) {
+  const { data, isLoading } = useMasterPlan(present ? path : undefined);
   return <DocCard title="PROJECT_MASTER.md" markdown={data?.markdown} loading={isLoading} sha={data?.sha} />;
 }
-function AgentsMdPanel({ path }: { path: string }) {
-  const { data, isLoading } = useAgentsMd(path);
+function AgentsMdPanel({ path, present }: { path: string; present: boolean }) {
+  const { data, isLoading } = useAgentsMd(present ? path : undefined);
   return <DocCard title="AGENTS.md" markdown={data?.markdown} loading={isLoading} sha={data?.sha} />;
 }
-function ConstitutionPanel({ path }: { path: string }) {
-  const { data, isLoading } = useConstitution(path);
+function ConstitutionPanel({ path, present }: { path: string; present: boolean }) {
+  const { data, isLoading } = useConstitution(present ? path : undefined);
   return <DocCard title="CONSTITUTION.md" markdown={data?.markdown} loading={isLoading} sha={data?.sha} />;
 }
 

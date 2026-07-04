@@ -7,6 +7,7 @@ import {
   type StartRunResponse,
   type AbortRunResponse,
   type StageActionResponse,
+  type StageRetryRequest,
 } from "@shared/api-types";
 
 export function useStartRun() {
@@ -33,7 +34,11 @@ export function useAbortRun(runId: string) {
 export function useRetryStage(runId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (stageId: string) => api.post<StageActionResponse>(apiPaths.runStageRetry(runId, stageId)),
+    mutationFn: ({ stageId, override }: { stageId: string; override?: boolean }) =>
+      api.post<StageActionResponse>(
+        apiPaths.runStageRetry(runId, stageId),
+        override ? ({ override: true } satisfies StageRetryRequest) : undefined,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.run(runId) }),
   });
 }
