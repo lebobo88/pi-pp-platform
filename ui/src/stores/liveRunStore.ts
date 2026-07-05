@@ -133,6 +133,12 @@ export interface LiveRunOverlay {
   tokensOut: number;
 
   // ── Observability fields (SPEC-LRSTORE-OBS-002) ──────────────────────
+  //
+  // NOTE: These are declared optional so pre-existing consumers that build
+  // partial LiveRunOverlay literals (see ui/src/lib/runModel.test.ts) keep
+  // compiling. `freshOverlay()` and `ingest()` guarantee they are ALWAYS
+  // populated on any overlay this store produces — code that reads from the
+  // store may treat them as present.
 
   /** Phase lifecycle timeline; at most one entry has status 'active'. */
   phaseTimeline?: PhaseTimelineEntry[];
@@ -179,23 +185,46 @@ function freshOverlay(runId: string): LiveRunOverlay {
 }
 
 /**
+ * Scrub any token that looks like a secret / API key material or an absolute
+ * filesystem path. Applied to every source string used by distill().
+ */
+function scrubSecrets(s: string): string {
+  return s
+    .split(/\s+/)
+    .filter((tok) => {
+      if (!tok) return false;
+      // Drop tokens that look like KEY_* names, *_SECRET names, or bare secret-shaped
+      // values (16+ chars of URL-safe base64 / hex). Also drop absolute paths.
+      if (/^key_/i.test(tok)) return false;
+      if (/_secret$/i.test(tok)) return false;
+      if (/^[A-Z][A-Z0-9_]{6,}$/.test(tok)) return false; // SCREAMING_SNAKE constants (often env keys)
+      if (/^(?:sk|pk|xoxb|ghp|ghs|glpat|AIza)[-_A-Za-z0-9]{10,}/.test(tok)) return false;
+      if (/^(?:[A-Za-z]:[\\/])/.test(tok)) return false; // Windows abs path
+      if (/^\//.test(tok) && tok.length > 1 && !/^\/[a-z]+$/i.test(tok)) return false; // POSIX abs path
+      return true;
+    })
+    .join(" ")
+    .trim();
+}
+
+/**
  * Produce a ≤120-char human detail string from run.context frame data.
  * MUST NOT include token counts, cost figures, paths, or key_* or *_secret fields.
+ * Only reads stage_id / stage_title / note / summary; scrubs secrets from values.
  */
 function distill(data: Record<string, unknown>): string | undefined {
   const parts: string[] = [];
-  if (typeof data["stage_title"] === "string" && data["stage_title"]) {
-    parts.push(data["stage_title"]);
-  } else if (typeof data["stage_id"] === "string" && data["stage_id"]) {
-    parts.push(data["stage_id"]);
-  }
-  if (typeof data["note"] === "string" && data["note"]) {
-    parts.push(data["note"]);
-  } else if (typeof data["summary"] === "string" && data["summary"]) {
-    parts.push(data["summary"]);
-  }
-  const result = parts.join(" — ").slice(0, 120);
-  return result || undefined;
+  const raw = (k: string): string | undefined => {
+    const v = data[k];
+    return typeof v === "string" && v ? v : undefined;
+  };
+  const title = raw("stage_title") ?? raw("stage_id");
+  if (title) parts.push(scrubSecrets(title));
+  const body = raw("note") ?? raw("summary");
+  if (body) parts.push(scrubSecrets(body));
+  const joined = parts.filter(Boolean).join(" — ").trim();
+  if (!joined) return undefined;
+  return joined.length > 120 ? joined.slice(0, 120) : joined;
 }
 
 /**
@@ -664,14 +693,16 @@ class LiveRunStore {
         const critiquePart = d.critique_excerpt
           ? truncateExcerpt(d.critique_excerpt, 160)
           : undefined;
-        const combined = [tierPart, critiquePart].filter(Boolean).join(" ");
+        const combinedRaw = [tierPart, critiquePart].filter(Boolean).join(" ");
+        // Enforce combined ≤160 code points including any ellipsis.
+        const combined = combinedRaw ? truncateExcerpt(combinedRaw, 160) : "";
         next.gateEvents = appendGateEvent(next.gateEvents, {
           seq: seqIsValid ? evSeq : -1,
           at: evTs,
           kind: "reflexion",
           stageId: d.stage_id,
           outcome: "retry",
-          detail: combined ? combined.slice(0, 200) : undefined,
+          detail: combined || undefined,
         });
         break;
       }
