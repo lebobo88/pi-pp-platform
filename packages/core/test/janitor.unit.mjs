@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 
 process.env.PP_SKIP_CLI_VERSIONS = "1";
 process.env.PP_HOME = mkdtempSync(join(tmpdir(), "pp-janitor-home-"));
+delete process.env.PP_DB_PATH; // isolate from any live dev server DB
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = join(__dirname, "..", "dist");

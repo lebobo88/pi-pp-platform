@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 
 const SUITE_DIR = mkdtempSync(join(tmpdir(), "pp-ppb-home-"));
 process.env.PP_HOME = SUITE_DIR;
+delete process.env.PP_DB_PATH; // isolate from any live dev server DB
 process.env.EIGHTS_SKIP_AUDIT_CHECK = "1";
 process.env.PP_SKIP_CLI_VERSIONS = "1";
 

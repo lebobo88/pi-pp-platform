@@ -12,6 +12,9 @@ import { join } from "node:path";
 if (!process.env.PP_HOME) {
   process.env.PP_HOME = mkdtempSync(join(tmpdir(), "pp-pilot-home-"));
 }
+// Always clear PP_DB_PATH so the fresh PP_HOME database is used,
+// not a live developer dev.db that may have divergent model IDs in settings.
+delete process.env.PP_DB_PATH;
 
 // Isolate the user scope too: dev machines have ~/.claude/agents and
 // ~/.claude/skills installed (AgentSmith), which would shadow the builtin

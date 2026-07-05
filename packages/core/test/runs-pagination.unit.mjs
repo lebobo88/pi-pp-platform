@@ -19,6 +19,8 @@ import assert from "node:assert/strict";
 const SUITE_DIR = mkdtempSync(join(tmpdir(), "pp-runs-page-"));
 mkdirSync(join(SUITE_DIR, ".pair-programmer"), { recursive: true });
 process.env.PP_HOME = SUITE_DIR;
+// Prevent a live PP_DB_PATH from overriding the isolated test database.
+delete process.env.PP_DB_PATH;
 process.env.PP_SKIP_CLI_VERSIONS = "1";
 process.env.EIGHTS_SKIP_AUDIT_CHECK = "1";
 

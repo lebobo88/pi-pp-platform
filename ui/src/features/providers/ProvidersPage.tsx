@@ -230,6 +230,10 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
     () => providers.filter((p) => p.configured).map((p) => p.vendor),
     [providers],
   );
+  const configuredVendors = useMemo(
+    () => new Set(configuredVendorList),
+    [configuredVendorList],
+  );
   const catalogIds = useMemo(() => new Set(models.map((m) => m.id)), [models]);
 
   /** Provider for a model id: priced catalog first, then each provider's live list. */
@@ -274,9 +278,9 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      {/* Shared autocomplete: the priced catalog + each configured provider's live model list. */}
+      {/* Shared autocomplete: configured vendors' priced models + each configured provider's live model list. */}
       <datalist id={MODEL_DATALIST_ID}>
-        {models.map((m) => (
+        {models.filter((m) => configuredVendors.has(m.vendor)).map((m) => (
           <option key={`${m.vendor}/${m.id}`} value={m.id}>
             {m.vendor}
             {m.tier ? ` · ${m.tier}` : ""}
@@ -305,6 +309,14 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
                     onChange={(e) =>
                       setDraft({ ...draft, ladders: { ...draft.ladders, [ladderName]: { ...tiers, [tier]: e.target.value } } })
                     }
+                    onBlur={(e) => {
+                      const id = e.target.value.trim();
+                      if (!id) return;
+                      const provider = vendorFor(id);
+                      if (!provider || !configuredVendors.has(provider)) {
+                        toast({ tone: "error", title: "Unknown model id", message: "pick a model from the suggestions (or refresh the provider's models)" });
+                      }
+                    }}
                     className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
                   />
                   {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}

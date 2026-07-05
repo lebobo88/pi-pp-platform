@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 const SUITE_DIR = mkdtempSync(join(tmpdir(), "pp-gemini-disable-"));
 mkdirSync(join(SUITE_DIR, ".pair-programmer"), { recursive: true });
 process.env.PP_HOME = SUITE_DIR;
+delete process.env.PP_DB_PATH; // isolate from any live dev server DB
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = join(__dirname, "..", "dist");

@@ -1018,9 +1018,25 @@ export type RunStartedEvent = SseEnvelope<
   "run.started",
   { mode: string; scope?: string; project_path: string; request: string }
 >;
+/**
+ * Well-known run lifecycle phases. The `(string & {})` tail keeps the type
+ * open so unknown phases (e.g. from future pilot versions) remain assignable.
+ */
+export type RunPhase =
+  | "triage"
+  | "profile"
+  | "taxonomy"
+  | "tier-resolve"
+  | "skills"
+  | "artifact-promotion"
+  | "master-plan"
+  | "autogenesis"
+  | "best-of-merge"
+  | (string & {});
+
 export type RunContextEvent = SseEnvelope<
   "run.context",
-  { phase: string; [k: string]: unknown }
+  { phase: RunPhase; [k: string]: unknown }
 >;
 export type StageStartedEvent = SseEnvelope<
   "stage.started",
@@ -1036,7 +1052,19 @@ export type StageSurfacedEvent = SseEnvelope<
 >;
 export type AttemptStartedEvent = SseEnvelope<
   "attempt.started",
-  { stage_id: string; agent?: string; model?: string; tier?: string | null; retry_index?: number }
+  {
+    stage_id: string;
+    agent?: string;
+    model?: string;
+    tier?: string | null;
+    retry_index?: number;
+    /** Pre-allocated attempt id, when the harness mints it before dispatch. */
+    attempt_id?: string;
+    /** Best-of-N candidate slot index (0-based). */
+    candidate_index?: number;
+    /** Diversification seed used for this candidate. */
+    seed?: number;
+  }
 >;
 export type AttemptOutputEvent = SseEnvelope<
   "attempt.output",
@@ -1044,7 +1072,24 @@ export type AttemptOutputEvent = SseEnvelope<
 >;
 export type AttemptCompletedEvent = SseEnvelope<
   "attempt.completed",
-  { stage_id: string; attempt_id: string; model?: string; tokens_in?: number | null; tokens_out?: number | null; cost_usd?: number | null }
+  {
+    stage_id: string;
+    attempt_id: string;
+    model?: string;
+    tokens_in?: number | null;
+    tokens_out?: number | null;
+    cost_usd?: number | null;
+    /** Reason the model stopped generating (e.g. "end_turn", "max_tokens"). */
+    stop_reason?: string;
+    /** Number of tool/function calls made during this attempt. */
+    tool_call_count?: number;
+    /** Number of source files the attempt changed. */
+    files_changed?: number;
+    /** Project-relative paths of every file the attempt wrote or modified. */
+    materialized_files?: string[];
+    /** True when the attempt produced no net diff against the pre-attempt tree. */
+    zero_change?: boolean;
+  }
 >;
 export type VerdictRecordedEvent = SseEnvelope<
   "verdict.recorded",
@@ -1081,6 +1126,10 @@ export type MissabilityResultEvent = SseEnvelope<
   "missability.result",
   { check_id: string; status: string; evidence_path?: string | null }
 >;
+/**
+ * Periodic budget update emitted during a run. cost_usd is the CUMULATIVE
+ * spend for the scope so far — it is NOT a delta since the last tick.
+ */
 export type BudgetTickEvent = SseEnvelope<
   "budget.tick",
   { scope: string; tokens_in: number; tokens_out: number; cost_usd: number }

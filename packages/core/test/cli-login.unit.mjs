@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 
 const HOME = mkdtempSync(join(tmpdir(), "pp-cli-login-"));
 process.env.PP_HOME = HOME;
+delete process.env.PP_DB_PATH; // isolate from any live dev server DB
 process.env.HOME = HOME;
 process.env.USERPROFILE = HOME;
 // Neutralize alternate roots so config/data paths resolve under HOME only.

@@ -33,6 +33,7 @@ import { describe, it, before } from "node:test";
 const SUITE_DIR = mkdtempSync(join(tmpdir(), "pp-finalize-gates-b-"));
 mkdirSync(join(SUITE_DIR, ".pair-programmer"), { recursive: true });
 process.env.PP_HOME = SUITE_DIR;
+delete process.env.PP_DB_PATH; // isolate from any live dev server DB
 process.env.EIGHTS_SKIP_AUDIT_CHECK = "1";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
