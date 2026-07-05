@@ -118,7 +118,16 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
   // produce its final text turn.
   let toolCallCount = 0;
   let mutatingToolCalls = 0;
-  const forceToolChoice = opts.toolPolicy === "coding" && isOpenAiCompatApi(opts.model.api);
+  // Forcing `tool_choice: "required"` predates the tools-allowlist fix above —
+  // it papered over sessions that had NO tools attached at all. With tools
+  // actually advertised, mainstream models call them unprompted, and several
+  // providers hard-400 on required tool_choice in thinking mode (deepseek v4:
+  // "Thinking mode does not support this tool_choice"). Opt back in with
+  // PP_FORCE_TOOL_CHOICE=1 if a prose-preferring model needs it.
+  const forceToolChoice =
+    process.env.PP_FORCE_TOOL_CHOICE === "1" &&
+    opts.toolPolicy === "coding" &&
+    isOpenAiCompatApi(opts.model.api);
   const toolForcingExtension: ExtensionFactory = (pi) => {
     pi.on("before_provider_request", (event) => {
       if (!forceToolChoice || mutatingToolCalls > 0) return undefined;
@@ -155,6 +164,12 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
 
   const sessionManager = SessionManager.create(opts.cwd, opts.sessionDir, { id: ref.id });
 
+  // 0.80.3: `noTools: "all"` sets the session's allowed-tool set to EMPTY, and
+  // that filter is applied to customTools too — sessions silently ran with no
+  // tools at all (models then hallucinate tool syntax as text). Naming our
+  // guarded tools in `tools` re-admits exactly them and nothing else.
+  const customTools = buildToolDefinitions(opts.cwd, opts.toolPolicy);
+
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     agentDir,
@@ -163,7 +178,8 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     model: opts.model,
     thinkingLevel: codingThinkingLevel(opts.model, opts.thinkingLevel),
     noTools: "all",
-    customTools: buildToolDefinitions(opts.cwd, opts.toolPolicy),
+    tools: customTools.map((t) => t.name),
+    customTools,
     resourceLoader,
     sessionManager,
     settingsManager,
