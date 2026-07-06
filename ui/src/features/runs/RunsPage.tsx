@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, Link } from "react-router";
 import type { RunSummary, RunStatus } from "@shared/api-types";
 import { RUN_STATUS } from "@shared/api-types";
 import { Page } from "@/layout/Page";
@@ -51,6 +51,26 @@ export function RunsPage() {
     { key: "cost", header: "Cost", render: (r) => formatUsd(r.cost_usd), sortValue: sortVal((r) => r.cost_usd ?? 0), mono: true, align: "right", width: 80 },
     { key: "dur", header: "Duration", render: (r) => formatElapsed(r.started_at, r.finished_at), sortValue: sortVal((r) => Date.parse(r.finished_at ?? new Date().toISOString()) - Date.parse(r.started_at)), mono: true, align: "right", width: 90 },
     { key: "started", header: "Started", render: (r) => formatRelative(r.started_at), sortValue: sortVal((r) => r.started_at), mono: true, align: "right", width: 110 },
+    {
+      key: "live",
+      header: "",
+      width: 48,
+      render: (r) => {
+        const isActive = r.status === "running" || r.status === "pending";
+        return (
+          <Link
+            to={`/runs/${r.id}/live`}
+            onClick={(e) => e.stopPropagation()}
+            title="Live view"
+            className={isActive
+              ? "mono rounded-sm border border-run/50 bg-run/10 px-1.5 py-0.5 text-[10px] text-run hover:bg-run/20"
+              : "mono rounded-sm border border-line-2 px-1.5 py-0.5 text-[10px] text-ink-3 opacity-50 hover:opacity-80"}
+          >
+            live
+          </Link>
+        );
+      },
+    },
   ];
 
   return (

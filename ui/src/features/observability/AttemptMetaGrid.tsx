@@ -44,6 +44,7 @@ interface AttemptCardProps {
   meta: AttemptMeta;
   verdict?: VerdictOutcome;
   judgeModel?: string;
+  judgeProvider?: string;
   crossVendor?: boolean;
   escalationNote?: string;
 }
@@ -52,6 +53,7 @@ function AttemptMetaCard({
   meta,
   verdict,
   judgeModel,
+  judgeProvider,
   crossVendor,
   escalationNote,
 }: AttemptCardProps) {
@@ -73,6 +75,9 @@ function AttemptMetaCard({
         )}
         {meta.agent && meta.model && (
           <span className="text-ink-3">·</span>
+        )}
+        {meta.provider && (
+          <Pill tone="default" title="provider">{meta.provider}</Pill>
         )}
         {meta.model && (
           <span className="mono text-[12px] text-ink-1">{meta.model}</span>
@@ -174,6 +179,9 @@ function AttemptMetaCard({
           {judgeModel && (
             <span className="mono text-[11px] text-ink-3">{judgeModel}</span>
           )}
+          {judgeProvider && (
+            <Pill tone="judge" title="judge provider">{judgeProvider}</Pill>
+          )}
           {crossVendor && <CrossVendorBadge />}
         </div>
       )}
@@ -185,16 +193,19 @@ interface AttemptMetaGridProps {
   overlay: LiveRunOverlay;
 }
 
-/** Parse judge model + cross-vendor flag from a verdict gate event detail string. */
+/** Parse judge model + cross-vendor flag + judge_provider from a verdict gate event detail string. */
 function parseVerdictDetail(detail?: string): {
   judgeModel?: string;
+  judgeProvider?: string;
   crossVendor?: boolean;
 } {
   if (!detail) return {};
   const judgeMatch = /judge=([^\s]+)/.exec(detail);
+  const judgeProviderMatch = /judge_provider=([^\s]+)/.exec(detail);
   const crossMatch = /cross=(true|1)/.exec(detail);
   return {
     judgeModel: judgeMatch?.[1],
+    judgeProvider: judgeProviderMatch?.[1],
     crossVendor: crossMatch != null,
   };
 }
@@ -212,7 +223,7 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
   // Build verdict detail lookup from gate events (judge model + cross-vendor)
   const verdictDetailByAttempt: Record<
     string,
-    { judgeModel?: string; crossVendor?: boolean }
+    { judgeModel?: string; judgeProvider?: string; crossVendor?: boolean }
   > = {};
   for (const ev of gateEvents) {
     if (ev.kind === "verdict" && ev.attemptId) {
@@ -289,12 +300,15 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
     <Card title={`Attempts (${entries.length})`}>
       <div className="space-y-3">
         {sorted.map((meta) => (
-          <AttemptMetaCard
+        <AttemptMetaCard
             key={meta.attemptId}
             meta={meta}
             verdict={verdictByAttempt[meta.attemptId]}
             judgeModel={
               verdictDetailByAttempt[meta.attemptId]?.judgeModel
+            }
+            judgeProvider={
+              verdictDetailByAttempt[meta.attemptId]?.judgeProvider
             }
             crossVendor={
               verdictDetailByAttempt[meta.attemptId]?.crossVendor

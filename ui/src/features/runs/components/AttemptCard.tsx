@@ -30,6 +30,9 @@ export function AttemptCard({
         <div className="flex min-w-0 items-center gap-2">
           {winner && <span className="text-accent" title="winner">★</span>}
           <VendorChip vendor={attempt.producer} />
+          {attempt.provider && (
+            <Pill tone="default" title="provider">{attempt.provider}</Pill>
+          )}
           <span className="mono truncate text-[12px] text-ink-1">{attempt.model_id}</span>
           <TierChip tier={attempt.attempted_tier} />
           {attempt.retry_index > 0 && <Pill tone="judge" title="reflexion retry">retry {attempt.retry_index}</Pill>}

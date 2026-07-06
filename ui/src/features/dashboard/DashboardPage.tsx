@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, Link } from "react-router";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
 import { Meter } from "@/components/Meter";
@@ -80,19 +80,27 @@ export function DashboardPage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {active.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => navigate(`/runs/${r.id}`)}
-                className="flex items-center gap-2 rounded-md border border-line-1 bg-bg-2 px-3 py-2 text-left hover:border-run"
-              >
-                <StatusDot tone={runTone(r.status)} pulse />
-                <span className="min-w-0">
-                  <span className="mono block text-[11px] text-ink-3">{shortId(r.id, 12)}</span>
-                  <span className="block max-w-[220px] truncate text-[12px] text-ink-1">{r.request_text}</span>
-                </span>
-                <span className="mono tnum ml-2 text-[11px] text-ink-3">{formatElapsed(r.started_at, r.finished_at)}</span>
-              </button>
+              <div key={r.id} className="flex items-stretch gap-0 rounded-md border border-line-1 bg-bg-2 hover:border-run">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/runs/${r.id}`)}
+                  className="flex items-center gap-2 px-3 py-2 text-left"
+                >
+                  <StatusDot tone={runTone(r.status)} pulse />
+                  <span className="min-w-0">
+                    <span className="mono block text-[11px] text-ink-3">{shortId(r.id, 12)}</span>
+                    <span className="block max-w-[220px] truncate text-[12px] text-ink-1">{r.request_text}</span>
+                  </span>
+                  <span className="mono tnum ml-2 text-[11px] text-ink-3">{formatElapsed(r.started_at, r.finished_at)}</span>
+                </button>
+                <Link
+                  to={`/runs/${r.id}/live`}
+                  title="Live Observatory view"
+                  className="mono flex items-center border-l border-line-1 px-2 text-[10px] text-run hover:bg-run/10"
+                >
+                  live
+                </Link>
+              </div>
             ))}
           </div>
         )}

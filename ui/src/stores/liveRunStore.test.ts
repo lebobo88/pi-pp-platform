@@ -776,3 +776,132 @@ describe("existing behaviour (unchanged)", () => {
     expect(ov.tokensOut).toBe(456);
   });
 });
+
+/* ── Provider visibility (spec-provider-visibility-live-view-discoverability) ── */
+
+describe("provider capture from SSE frames", () => {
+  beforeEach(() => {
+    liveRunStore.reset();
+    vi.useFakeTimers();
+  });
+
+  it("attempt.started with provider stores it on AttemptMeta", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "claude-sonnet-4-6", tier: "sonnet", provider: "github-copilot" },
+        1,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    expect(meta?.provider).toBe("github-copilot");
+  });
+
+  it("attempt.started without provider does not set provider on AttemptMeta", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "claude-sonnet-4-6", tier: "sonnet" },
+        1,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    expect(meta?.provider).toBeUndefined();
+  });
+
+  it("attempt.completed with provider updates AttemptMeta.provider", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4", tier: "sonnet", provider: "azure-openai-responses" },
+        1,
+      ),
+    );
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.completed",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4", tokens_in: 100, tokens_out: 50, cost_usd: 0.5, provider: "azure-openai-responses" },
+        2,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    expect(meta?.provider).toBe("azure-openai-responses");
+  });
+
+  it("started and completed provider must agree (REQ-W-5): completed overwrites with same value", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4", provider: "github-copilot" },
+        1,
+      ),
+    );
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.completed",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4", provider: "github-copilot" },
+        2,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    // Both frames agree — stored value is the common provider.
+    expect(meta?.provider).toBe("github-copilot");
+  });
+
+  it("verdict.recorded with judge_provider appears in gate event detail", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "verdict.recorded",
+        { attempt_id: "a1", outcome: "pass", stage_id: "s1", judge_model: "claude-opus-4-7", judge_provider: "anthropic-messages", cross_vendor: true },
+        3,
+      ),
+    );
+    flush();
+    const ov = liveRunStore.getOverlay(RUN_ID);
+    const verdictEv = (ov.gateEvents ?? []).find((e) => e.kind === "verdict" && e.attemptId === "a1");
+    expect(verdictEv).toBeDefined();
+    expect(verdictEv?.detail).toContain("judge_provider=anthropic-messages");
+  });
+
+  it("verdict.recorded without judge_provider omits it from gate event detail", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "verdict.recorded",
+        { attempt_id: "a1", outcome: "fail", stage_id: "s1", judge_model: "gpt-4o" },
+        3,
+      ),
+    );
+    flush();
+    const ov = liveRunStore.getOverlay(RUN_ID);
+    const verdictEv = (ov.gateEvents ?? []).find((e) => e.kind === "verdict" && e.attemptId === "a1");
+    expect(verdictEv?.detail).not.toContain("judge_provider=");
+  });
+
+  it("replay idempotency: re-ingesting same attempt.started frames does not duplicate provider", () => {
+    const startEv = mkEv(
+      "attempt.started",
+      { stage_id: "s1", attempt_id: "a1", model: "claude-sonnet-4-6", provider: "github-copilot" },
+      1,
+    );
+    liveRunStore.ingest(RUN_ID, startEv);
+    flush();
+    // Replay same frame (seq dedup)
+    liveRunStore.ingest(RUN_ID, startEv);
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    // Still exactly "github-copilot", not doubled
+    expect(meta?.provider).toBe("github-copilot");
+  });
+});

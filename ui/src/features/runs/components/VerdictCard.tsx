@@ -22,6 +22,9 @@ export function VerdictCard({ verdict }: { verdict: VerdictRow }) {
         <div className="flex items-center gap-2">
           <VerdictChip outcome={verdict.outcome} />
           <span className="mono text-[11px] text-ink-2">{verdict.judge_model_id}</span>
+          {verdict.judge_provider && (
+            <Pill tone="default" title="judge provider">{verdict.judge_provider}</Pill>
+          )}
           {verdict.cross_vendor === 1 && (
             <Pill tone="judge" title="cross-vendor verdict">cross-vendor</Pill>
           )}

@@ -118,7 +118,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     emit(
       ctx,
       "attempt.started",
-      { candidate_index: c.candidate_index, model: rot.model_id, tier: rot.tier, seed: rot.seed, judge_position: c.judge_position },
+      { candidate_index: c.candidate_index, model: rot.model_id, tier: rot.tier, seed: rot.seed, judge_position: c.judge_position, provider: providerForModel(rot.model_id) || undefined },
       { stage_id },
     );
 
@@ -166,6 +166,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       agent_type: stage.agent,
       attempt_slot_id: c.attempt_slot_id,
       notes: { candidate_index: c.candidate_index },
+      provider: genProvider || undefined,
     });
 
     if (gen.session_file) {
@@ -282,8 +283,9 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     outcome: "pass",
     critique_md: `Borda winner candidate-${winnerIndex} of ${n} (score ${winner.score.toFixed(3)}).`,
     score_json: { borda: borda.scores },
+    judge_provider: selection.provider || undefined,
   });
-  emit(ctx, "verdict.recorded", { outcome: "pass", winner: winnerIndex, cross_vendor: selection.cross_vendor }, { stage_id, attempt_id: winner.attempt_id });
+  emit(ctx, "verdict.recorded", { outcome: "pass", winner: winnerIndex, cross_vendor: selection.cross_vendor, judge_provider: selection.provider || undefined }, { stage_id, attempt_id: winner.attempt_id });
 
   // ── Finalize + merge-back + teardown. ─────────────────────────────────────
   const readiness = getStageFinalizeReadiness(stage_id, winner.attempt_id);

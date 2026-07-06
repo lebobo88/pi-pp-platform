@@ -306,7 +306,7 @@ async function generate(
   const sessionDir = join(ctx.artifact_dir, stage.kind);
   mkdirSync(sessionDir, { recursive: true });
 
-  emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex }, { stage_id });
+  emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex, provider: genProvider || undefined }, { stage_id });
 
   let artifactText: string;
   let artifactPath: string;
@@ -382,6 +382,7 @@ async function generate(
     status: "ok",
     attempted_tier: tier,
     agent_type: stage.agent,
+    provider: genProvider || undefined,
   });
 
   // Record the engine session (transcript file) for replay/audit when one exists
@@ -410,6 +411,7 @@ async function generate(
       files_changed: genResult.files_changed,
       materialized_files: genResult.materialized_files,
       zero_change: zeroChange,
+      provider: genProvider || undefined,
     },
     { stage_id, attempt_id: attempt.attempt_id },
   );
@@ -489,6 +491,7 @@ export async function judge(
     outcome: verdict.outcome,
     critique_md: verdict.critique_md,
     score_json: verdict.score ?? critiqueRes.parsed,
+    judge_provider: selection.provider || undefined,
   });
   emit(
     ctx,
@@ -500,6 +503,7 @@ export async function judge(
       cross_vendor: rec.cross_vendor,
       escalated: selection.escalated,
       rubric_id: selection.rubric_id,
+      judge_provider: selection.provider || undefined,
     },
     { stage_id, attempt_id },
   );

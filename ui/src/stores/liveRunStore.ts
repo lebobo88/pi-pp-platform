@@ -81,6 +81,8 @@ export type AttemptMeta = {
   filesChanged?: number;
   materializedFiles?: number;
   zeroChange?: boolean;
+  /** Provider id resolved for this attempt's model (e.g. "github-copilot"). Absent on historical rows. */
+  provider?: string;
   status: "running" | "ok";
 };
 
@@ -469,6 +471,8 @@ class LiveRunStore {
             ? { materializedFiles: d.materialized_files.length }
             : {}),
           ...(d.zero_change != null ? { zeroChange: d.zero_change } : {}),
+          // provider: use completed frame's value if present, else fall through to started-meta
+          ...(d.provider ? { provider: d.provider } : {}),
           status: "ok",
         };
         // If there was no model yet but the completion carries one, apply it.
@@ -506,6 +510,7 @@ class LiveRunStore {
 
         const detailParts: string[] = [];
         if (d.judge_model) detailParts.push(`judge=${d.judge_model}`);
+        if (d.judge_provider) detailParts.push(`judge_provider=${d.judge_provider}`);
         if (d.cross_vendor != null) detailParts.push(`cross=${d.cross_vendor}`);
         next.gateEvents = appendGateEvent(next.gateEvents, {
           seq: seqIsValid ? evSeq : -1,
@@ -641,6 +646,7 @@ class LiveRunStore {
             ? { candidateIndex: d.candidate_index }
             : {}),
           ...(d.seed !== undefined ? { seed: d.seed } : {}),
+          ...(d.provider ? { provider: d.provider } : {}),
         };
 
         if (d.attempt_id) {
@@ -669,6 +675,7 @@ class LiveRunStore {
         // Gate event
         const detailParts: string[] = [];
         if (d.model) detailParts.push(d.model);
+        if (d.provider) detailParts.push(`via ${d.provider}`);
         if (d.tier) detailParts.push(d.tier);
         next.gateEvents = appendGateEvent(next.gateEvents, {
           seq: seqIsValid ? evSeq : -1,

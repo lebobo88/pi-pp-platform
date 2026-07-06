@@ -64,8 +64,25 @@ export function registerRunRoutes(app: FastifyInstance): void {
 
   app.get(`${V1}/runs/:id`, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const tree = getRun(id);
-    return tree ?? reply.code(404).send({ error: `run ${id} not found` });
+    const tree = getRun(id) as {
+      run: unknown;
+      stages: unknown[];
+      attempts: Array<Record<string, unknown>>;
+      verdicts: Array<Record<string, unknown>>;
+      artifacts: unknown[];
+    } | null;
+    if (!tree) return reply.code(404).send({ error: `run ${id} not found` });
+    // REQ-S-1/S-2/S-3: strip null provider / judge_provider so historical rows
+    // omit the field entirely (UI's absence check works uniformly).
+    const attempts = tree.attempts.map((a) => {
+      if (a["provider"] == null) { const { provider: _p, ...rest } = a; return rest; }
+      return a;
+    });
+    const verdicts = tree.verdicts.map((v) => {
+      if (v["judge_provider"] == null) { const { judge_provider: _jp, ...rest } = v; return rest; }
+      return v;
+    });
+    return { ...tree, attempts, verdicts };
   });
 
   // ── Artifact / file content ──

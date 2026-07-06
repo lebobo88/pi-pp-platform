@@ -175,6 +175,17 @@ function applyMigrations(conn: Database.Database): void {
   if (!verdictCols.some(c => c.name === "hallucination_details")) {
     conn.exec("ALTER TABLE verdicts ADD COLUMN hallucination_details TEXT");
   }
+  // v-provider: resolving provider ids for attempts and verdicts.
+  // Additive-only, nullable, idempotent (guarded by table_info check).
+  if (!verdictCols.some(c => c.name === "judge_provider")) {
+    conn.exec("ALTER TABLE verdicts ADD COLUMN judge_provider TEXT");
+  }
+
+  // Refresh attemptCols for provider column check (earlier adds may have occurred).
+  const attemptColsFinal = conn.prepare("PRAGMA table_info(attempts)").all() as Array<{ name: string }>;
+  if (!attemptColsFinal.some(c => c.name === "provider")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN provider TEXT");
+  }
 
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.

@@ -399,6 +399,8 @@ export type RecordAttemptInput = {
    * closing eights prop_885cc22f (2026-05-23 Hydra dispatch fix).
    */
   agent_type?: string;
+  /** Provider id resolved for the generator model (e.g. "github-copilot"). Omit when unresolvable. */
+  provider?: string;
 };
 export type RecordAttemptOutput = { attempt_id: string };
 
@@ -468,8 +470,8 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
         `INSERT INTO attempts(
           id, stage_id, producer, model_id, prompt_hash, artifact_path,
           tokens_in, tokens_out, cost_usd, wall_ms,
-          retry_index, parent_attempt_id, status, attempted_tier, notes_json, agent_type, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          retry_index, parent_attempt_id, status, attempted_tier, notes_json, agent_type, provider, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -488,6 +490,7 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
         tier ?? null,
         input.notes ? JSON.stringify(input.notes) : null,
         input.agent_type ?? null,
+        (input.provider && input.provider.trim()) ? input.provider : null,
         now()
       );
 
@@ -621,6 +624,8 @@ export type RecordVerdictInput = {
   outcome: VerdictOutcome;
   critique_md?: string;
   score_json?: unknown;
+  /** Provider id resolved for the judge model (e.g. "anthropic-messages"). Omit when unresolvable. */
+  judge_provider?: string;
 };
 export type RecordVerdictOutput = { verdict_id: string; cross_vendor: boolean };
 
@@ -678,8 +683,9 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
           id, attempt_id, judge_producer, judge_model_id, rubric_id,
           outcome, critique_md, score_json, cross_vendor,
           hallucination_suspected, hallucination_details,
+          judge_provider,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -693,6 +699,7 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
         crossVendor ? 1 : 0,
         provenanceCheck.hallucination_suspected ? 1 : 0,
         provenanceCheck.details_json,
+        (input.judge_provider && input.judge_provider.trim()) ? input.judge_provider : null,
         now()
       );
   });

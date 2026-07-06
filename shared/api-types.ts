@@ -119,6 +119,8 @@ export interface AttemptRow {
   status: AttemptStatus;
   attempted_tier: ClaudeTier | null;
   created_at: string;
+  /** Provider id that served this attempt's model (e.g. "github-copilot"). Absent on historical rows. */
+  provider?: string;
 }
 
 /** `verdicts` table row. */
@@ -134,6 +136,8 @@ export interface VerdictRow {
   cross_vendor: number; // 0 | 1 (SQLite boolean)
   eights_memory_id: string | null;
   created_at: string;
+  /** Provider id that served the judge model (e.g. "anthropic-messages"). Absent on historical rows. */
+  judge_provider?: string;
 }
 
 /** `artifacts` table row. */
@@ -1064,6 +1068,8 @@ export type AttemptStartedEvent = SseEnvelope<
     candidate_index?: number;
     /** Diversification seed used for this candidate. */
     seed?: number;
+    /** Provider id resolved for this attempt's model (e.g. "github-copilot"). */
+    provider?: string;
   }
 >;
 export type AttemptOutputEvent = SseEnvelope<
@@ -1089,11 +1095,13 @@ export type AttemptCompletedEvent = SseEnvelope<
     materialized_files?: string[];
     /** True when the attempt produced no net diff against the pre-attempt tree. */
     zero_change?: boolean;
+    /** Provider id resolved for this attempt's model — same as AttemptStartedEvent.provider for convenience. */
+    provider?: string;
   }
 >;
 export type VerdictRecordedEvent = SseEnvelope<
   "verdict.recorded",
-  { attempt_id: string; outcome: VerdictOutcome; stage_id?: string; judge_producer?: string; judge_model?: string; cross_vendor?: boolean; rubric_id?: string | null }
+  { attempt_id: string; outcome: VerdictOutcome; stage_id?: string; judge_producer?: string; judge_model?: string; cross_vendor?: boolean; rubric_id?: string | null; judge_provider?: string; }
 >;
 export type VerdictRetractedEvent = SseEnvelope<
   "verdict.retracted",
