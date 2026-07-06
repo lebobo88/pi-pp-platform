@@ -904,4 +904,50 @@ describe("provider capture from SSE frames", () => {
     // Still exactly "github-copilot", not doubled
     expect(meta?.provider).toBe("github-copilot");
   });
+
+  it("mismatched completed-frame provider MUST NOT overwrite an existing started-frame provider (REQ-W-5 guard)", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4", provider: "github-copilot" },
+        1,
+      ),
+    );
+    // Deliberately bogus completed-frame carrying a different provider id.
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.completed",
+        { stage_id: "s1", attempt_id: "a1", provider: "azure-openai-responses", tokens_in: 1, tokens_out: 1, cost_usd: 0 },
+        2,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    // The started-frame value wins; the completed-frame is treated as a wire violation.
+    expect(meta?.provider).toBe("github-copilot");
+  });
+
+  it("completed-frame provider fills in when started-frame lacked one", () => {
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.started",
+        { stage_id: "s1", attempt_id: "a1", model: "gpt-5.4" },
+        1,
+      ),
+    );
+    liveRunStore.ingest(
+      RUN_ID,
+      mkEv(
+        "attempt.completed",
+        { stage_id: "s1", attempt_id: "a1", provider: "openai-codex", tokens_in: 1, tokens_out: 1, cost_usd: 0 },
+        2,
+      ),
+    );
+    flush();
+    const meta = liveRunStore.getOverlay(RUN_ID).attempts?.["a1"];
+    expect(meta?.provider).toBe("openai-codex");
+  });
 });

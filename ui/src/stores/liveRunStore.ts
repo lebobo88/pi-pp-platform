@@ -471,10 +471,18 @@ class LiveRunStore {
             ? { materializedFiles: d.materialized_files.length }
             : {}),
           ...(d.zero_change != null ? { zeroChange: d.zero_change } : {}),
-          // provider: use completed frame's value if present, else fall through to started-meta
-          ...(d.provider ? { provider: d.provider } : {}),
           status: "ok",
         };
+        // provider: never OVERWRITE an existing (started-frame) value; only
+        // fill when absent OR when the completed frame carries the same value.
+        // Guards against a mismatched completed-frame corrupting the meta.
+        if (d.provider) {
+          const prior = merged.provider ?? existingMeta?.provider ?? pending?.provider;
+          if (!prior || prior === d.provider) {
+            merged.provider = d.provider;
+          }
+          // else: keep prior; the mismatch is a wire-contract violation (REQ-W-5).
+        }
         // If there was no model yet but the completion carries one, apply it.
         if (!merged.model && d.model) merged.model = d.model;
 

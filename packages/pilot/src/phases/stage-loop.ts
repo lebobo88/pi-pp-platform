@@ -296,6 +296,13 @@ async function generate(
   // legacy hardcoded "anthropic". Preflight the credential so a missing key
   // surfaces a clear, actionable reason instead of pi's raw auth error.
   const genProvider = providerForModel(modelId);
+  if (!genProvider) {
+    // REQ-P-4: defensive log when providerForModel fails to resolve. In
+    // practice a launched attempt should always resolve (preflight below
+    // would already have thrown for a missing key), so this is a canary
+    // rather than an expected code path.
+    console.warn(`[pp/pilot] providerForModel returned no provider for model "${modelId}"; attempt will persist provider=NULL and omit provider from SSE frames`);
+  }
   if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
     throw new Error(
       `generation model "${modelId}" requires a key for provider "${genProvider}", which is not configured. ` +
@@ -483,6 +490,11 @@ export async function judge(
   }
 
   const verdict = critiqueRes.parsed as { outcome: VerdictOutcome; critique_md?: string; score?: unknown };
+  const judgeProvider = selection.provider || undefined;
+  if (!judgeProvider) {
+    // REQ-P-7: defensive log when the judge selection produced no provider.
+    console.warn(`[pp/pilot] judge selection produced no provider for judge model "${selection.judge_model}"; verdict will persist judge_provider=NULL and omit judge_provider from SSE frame`);
+  }
   const rec = recordVerdict({
     attempt_id,
     judge_producer: selection.judge_producer,
@@ -491,7 +503,7 @@ export async function judge(
     outcome: verdict.outcome,
     critique_md: verdict.critique_md,
     score_json: verdict.score ?? critiqueRes.parsed,
-    judge_provider: selection.provider || undefined,
+    judge_provider: judgeProvider,
   });
   emit(
     ctx,
@@ -503,7 +515,7 @@ export async function judge(
       cross_vendor: rec.cross_vendor,
       escalated: selection.escalated,
       rubric_id: selection.rubric_id,
-      judge_provider: selection.provider || undefined,
+      judge_provider: judgeProvider,
     },
     { stage_id, attempt_id },
   );

@@ -264,4 +264,61 @@ describe("run reads + run-control validation", () => {
     });
     expect(r.statusCode).toBe(422);
   });
+
+  it("GET /runs/:id includes provider/judge_provider when set; omits keys entirely when null or empty (REQ-S-1..S-3)", async () => {
+    // Seed the DB directly (bypasses runtime run-start).
+    const { db } = await import("@pp/core");
+    const conn = db();
+    const now = new Date().toISOString();
+    conn.prepare(
+      "INSERT INTO runs (id, project_path, request_text, mode, status, started_at) VALUES (?,?,?,?,?,?)",
+    ).run("run_prov_test", tmpdir(), "prov test", "single", "complete", now);
+    conn.prepare(
+      "INSERT INTO stages (id, run_id, kind, gate_type, status, started_at) VALUES (?,?,?,?,?,?)",
+    ).run("stg_prov", "run_prov_test", "code", "code", "passed", now);
+    // Two attempts: one with provider populated, one with NULL (historical), one with '' (defensive empty).
+    const attInsert = conn.prepare(
+      "INSERT INTO attempts (id, stage_id, producer, model_id, retry_index, status, provider, created_at) VALUES (?,?,?,?,?,?,?,?)",
+    );
+    attInsert.run("att_p_ok", "stg_prov", "claude", "gpt-5.4", 0, "ok", "github-copilot", now);
+    attInsert.run("att_p_null", "stg_prov", "claude", "gpt-5.4", 0, "ok", null, now);
+    attInsert.run("att_p_empty", "stg_prov", "claude", "gpt-5.4", 0, "ok", "", now);
+    const vInsert = conn.prepare(
+      "INSERT INTO verdicts (id, attempt_id, judge_producer, judge_model_id, rubric_id, outcome, critique_md, score_json, cross_vendor, eights_memory_id, judge_provider, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    vInsert.run("vd_p_ok", "att_p_ok", "openai", "gpt-4o", null, "pass", "", null, 1, null, "anthropic-messages", now);
+    vInsert.run("vd_p_null", "att_p_null", "openai", "gpt-4o", null, "pass", "", null, 1, null, null, now);
+    vInsert.run("vd_p_empty", "att_p_empty", "openai", "gpt-4o", null, "pass", "", null, 1, null, "", now);
+
+    const r = await get("/api/v1/runs/run_prov_test");
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as {
+      attempts: Array<Record<string, unknown>>;
+      verdicts: Array<Record<string, unknown>>;
+    };
+
+    const byId = new Map(body.attempts.map((a) => [a["id"] as string, a]));
+    // Populated row: key present with expected value.
+    expect(byId.get("att_p_ok")!.provider).toBe("github-copilot");
+    // NULL row: key OMITTED (not present, not `null`).
+    expect("provider" in byId.get("att_p_null")!).toBe(false);
+    // Empty-string row: also OMITTED.
+    expect("provider" in byId.get("att_p_empty")!).toBe(false);
+
+    const vById = new Map(body.verdicts.map((v) => [v["id"] as string, v]));
+    expect(vById.get("vd_p_ok")!.judge_provider).toBe("anthropic-messages");
+    expect("judge_provider" in vById.get("vd_p_null")!).toBe(false);
+    expect("judge_provider" in vById.get("vd_p_empty")!).toBe(false);
+
+    // REQ-S-5 secret-leak scan: no attempt/verdict field should surface
+    // credential material (api_key, api-key, apikey, or a bare *_token /
+    // *_secret name). `prompt_hash` and similar hashes are fine — the check
+    // is specifically about credentials, not hashed identifiers.
+    const badKeyRe = /(?:^|_)(?:api[_-]?key|api_?token|access_?token|refresh_?token|secret_?value|bearer_?token)(?:$|_)/i;
+    for (const row of [...body.attempts, ...body.verdicts]) {
+      for (const k of Object.keys(row)) {
+        expect(badKeyRe.test(k)).toBe(false);
+      }
+    }
+  });
 });

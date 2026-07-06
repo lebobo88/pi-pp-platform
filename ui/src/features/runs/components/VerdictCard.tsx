@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 import { Drawer } from "@/components/Drawer";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/Button";
-import { VerdictChip, Pill } from "@/features/common/chips";
+import { VerdictChip, VendorChip, Pill } from "@/features/common/chips";
 import { RubricScoreTable } from "./RubricScoreTable";
 import { verdictTone, toneVar } from "@/lib/status";
 import { useRubric } from "@/api/queries/library";
@@ -23,7 +23,7 @@ export function VerdictCard({ verdict }: { verdict: VerdictRow }) {
           <VerdictChip outcome={verdict.outcome} />
           <span className="mono text-[11px] text-ink-2">{verdict.judge_model_id}</span>
           {verdict.judge_provider && (
-            <Pill tone="default" title="judge provider">{verdict.judge_provider}</Pill>
+            <VendorChip vendor={verdict.judge_provider} />
           )}
           {verdict.cross_vendor === 1 && (
             <Pill tone="judge" title="cross-vendor verdict">cross-vendor</Pill>

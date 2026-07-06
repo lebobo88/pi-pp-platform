@@ -72,14 +72,17 @@ export function registerRunRoutes(app: FastifyInstance): void {
       artifacts: unknown[];
     } | null;
     if (!tree) return reply.code(404).send({ error: `run ${id} not found` });
-    // REQ-S-1/S-2/S-3: strip null provider / judge_provider so historical rows
-    // omit the field entirely (UI's absence check works uniformly).
+    // REQ-S-1/S-2/S-3: omit provider / judge_provider when null OR empty string
+    // so historical rows (and defensive-omit-from-pilot rows) drop the field
+    // entirely — UI's absence check works uniformly (never sees '' or null).
     const attempts = tree.attempts.map((a) => {
-      if (a["provider"] == null) { const { provider: _p, ...rest } = a; return rest; }
+      const p = a["provider"];
+      if (p == null || p === "") { const { provider: _p, ...rest } = a; return rest; }
       return a;
     });
     const verdicts = tree.verdicts.map((v) => {
-      if (v["judge_provider"] == null) { const { judge_provider: _jp, ...rest } = v; return rest; }
+      const jp = v["judge_provider"];
+      if (jp == null || jp === "") { const { judge_provider: _jp, ...rest } = v; return rest; }
       return v;
     });
     return { ...tree, attempts, verdicts };

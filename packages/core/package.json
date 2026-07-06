@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run build && node test/ecosystem.unit.mjs && node test/ecosystem-guard.unit.mjs && node test/projects-migration.unit.mjs && node test/tdd-parser.unit.mjs && node test/missability.unit.mjs && node test/janitor.unit.mjs && node test/runs-pagination.unit.mjs && node --test test/finalize-gates-b.unit.mjs test/finalize-gates-c.unit.mjs test/fable-tier.unit.mjs test/findings-provenance.unit.mjs test/gemini-disable.unit.mjs test/missability-evidence-ref.unit.mjs test/rejudge-gate.unit.mjs test/retract-verdict.unit.mjs test/tail-fix-select.unit.mjs test/team-bon-policy.unit.mjs test/agents-library.unit.mjs test/team-recommend.unit.mjs test/skills-loader.unit.mjs test/team-skills.unit.mjs test/evolution-commit.unit.mjs test/profile-promote-blueprint.unit.mjs test/cli-login.unit.mjs"
+    "test": "pnpm run build && node test/ecosystem.unit.mjs && node test/ecosystem-guard.unit.mjs && node test/projects-migration.unit.mjs && node test/provider-columns.unit.mjs && node test/tdd-parser.unit.mjs && node test/missability.unit.mjs && node test/janitor.unit.mjs && node test/runs-pagination.unit.mjs && node --test test/finalize-gates-b.unit.mjs test/finalize-gates-c.unit.mjs test/fable-tier.unit.mjs test/findings-provenance.unit.mjs test/gemini-disable.unit.mjs test/missability-evidence-ref.unit.mjs test/rejudge-gate.unit.mjs test/retract-verdict.unit.mjs test/tail-fix-select.unit.mjs test/team-bon-policy.unit.mjs test/agents-library.unit.mjs test/team-recommend.unit.mjs test/skills-loader.unit.mjs test/team-skills.unit.mjs test/evolution-commit.unit.mjs test/profile-promote-blueprint.unit.mjs test/cli-login.unit.mjs"
   },
   "engines": {
     "node": ">=22.19.0"

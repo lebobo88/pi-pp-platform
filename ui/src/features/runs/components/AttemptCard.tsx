@@ -31,7 +31,7 @@ export function AttemptCard({
           {winner && <span className="text-accent" title="winner">★</span>}
           <VendorChip vendor={attempt.producer} />
           {attempt.provider && (
-            <Pill tone="default" title="provider">{attempt.provider}</Pill>
+            <VendorChip vendor={attempt.provider} />
           )}
           <span className="mono truncate text-[12px] text-ink-1">{attempt.model_id}</span>
           <TierChip tier={attempt.attempted_tier} />

@@ -132,6 +132,9 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       agentsMd: loadAgentsMdForPrompt(ctx.projectPath) ?? undefined,
     });
     const genProvider = providerForModel(rot.model_id);
+    if (!genProvider) {
+      console.warn(`[pp/pilot best-of] providerForModel returned no provider for model "${rot.model_id}"; candidate attempt will persist provider=NULL and omit provider from SSE frames`);
+    }
     if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
       throw new Error(
         `generation model "${rot.model_id}" requires a key for provider "${genProvider}", which is not configured. ` +

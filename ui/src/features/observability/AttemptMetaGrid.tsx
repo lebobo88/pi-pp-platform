@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import {
   VerdictChip,
   TierChip,
+  VendorChip,
   Pill,
 } from "@/features/common/chips";
 import { formatUsd, formatTokens, shortId } from "@/lib/format";
@@ -77,7 +78,7 @@ function AttemptMetaCard({
           <span className="text-ink-3">·</span>
         )}
         {meta.provider && (
-          <Pill tone="default" title="provider">{meta.provider}</Pill>
+          <VendorChip vendor={meta.provider} />
         )}
         {meta.model && (
           <span className="mono text-[12px] text-ink-1">{meta.model}</span>
@@ -180,7 +181,7 @@ function AttemptMetaCard({
             <span className="mono text-[11px] text-ink-3">{judgeModel}</span>
           )}
           {judgeProvider && (
-            <Pill tone="judge" title="judge provider">{judgeProvider}</Pill>
+            <VendorChip vendor={judgeProvider} />
           )}
           {crossVendor && <CrossVendorBadge />}
         </div>
