@@ -51,8 +51,11 @@ export function checkRetryEligible(opts: {
     | undefined;
   if (!att) return { ok: false, reason: `attempt ${opts.attempt_id} not found` };
 
-  if (att.retry_index >= 1) {
-    return { ok: false, reason: `Reflexion ×1 invariant: this attempt is already a retry (retry_index=${att.retry_index})` };
+  // The Reflexion ×1 invariant binds the AUTOMATIC retry path. budget_override
+  // is the operator's deliberate, audited bypass (the run-control retry
+  // endpoint logs it) — it unlocks BOTH this check and the loop ceiling below.
+  if (att.retry_index >= 1 && !opts.budget_override) {
+    return { ok: false, reason: `Reflexion ×1 invariant: this attempt is already a retry (retry_index=${att.retry_index}). Pass budget_override=true (operator override) to force.` };
   }
 
   const stage = db()

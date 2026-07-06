@@ -42,6 +42,9 @@ export type PostHocOptions = {
   engine: Engine;
   bus?: EventBus;
   signal?: AbortSignal;
+  /** Operator override of the Reflexion ×1 budget (deliberate, audited by the
+   * caller). Without it a retry on an exhausted stage surfaces immediately. */
+  override?: boolean;
 };
 
 type Reconstructed = {
@@ -190,6 +193,15 @@ export async function retryStage(opts: PostHocOptions): Promise<PostHocResult> {
   if (!r.latestCritique) {
     return { ok: false, stage_id: opts.stageId, reason: "no critique on record to drive a Reflexion retry" };
   }
-  const outcome = await reflexion(r.ctx, r.stage, opts.stageId, r.latestAttemptId, r.initialTier, r.latestCritique);
+  const outcome = await reflexion(
+    r.ctx,
+    r.stage,
+    opts.stageId,
+    r.latestAttemptId,
+    r.initialTier,
+    r.latestCritique,
+    r.artifactText,
+    { budgetOverride: opts.override === true },
+  );
   return { ok: outcome !== "aborted", stage_id: opts.stageId, outcome };
 }

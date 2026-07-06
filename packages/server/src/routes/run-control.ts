@@ -173,8 +173,10 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
       );
     }
 
-    // Actually re-drive the stage (critique fed back, tier +1, regenerate, re-judge).
-    const res = await retryStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps) });
+    // Actually re-drive the stage (critique fed back, tier +1, regenerate,
+    // re-judge). The operator override must reach the pilot, or an exhausted
+    // stage silently re-surfaces without ever generating.
+    const res = await retryStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps), override: overridden });
     if (!res.ok) return reply.code(409).send({ error: "retry_unavailable", reason: res.reason });
     return reply.code(202).send({
       run_id: id,

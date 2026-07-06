@@ -689,8 +689,15 @@ export async function reflexion(
   critique: string,
   /** The rejected attempt's output, injected as "Your previous attempt" context. */
   priorArtifactText?: string,
+  /** budgetOverride: operator-audited bypass of the Reflexion ×1 budget (the
+   * run-control retry endpoint's explicit override). The automatic in-run
+   * path never sets it, so the invariant holds implicitly. */
+  opts?: { budgetOverride?: boolean },
 ): Promise<StageOutcome> {
-  const eligible = checkRetryEligible({ attempt_id: parentAttemptId, budget_override: false });
+  const eligible = checkRetryEligible({
+    attempt_id: parentAttemptId,
+    budget_override: opts?.budgetOverride === true,
+  });
   if (!eligible.ok) {
     return surface(ctx, stage_id, `Reflexion not eligible: ${eligible.reason}`);
   }
