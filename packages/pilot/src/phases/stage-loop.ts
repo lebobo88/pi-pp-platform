@@ -112,15 +112,35 @@ export function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSele
   return { injected, skipped };
 }
 
+/** Synchronous sleep (git retry backoff) — the stage loop is already blocking here. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run git, retrying once after a short backoff. A coding session may still be
+ * releasing index.lock (its own `git commit`) when the harness runs its
+ * bookkeeping — a transient failure here must NOT be silent: it previously
+ * read as "no diff" and falsely zero-changed real attempts (judge skipped,
+ * run surfaced). Failures are logged with git's stderr.
+ */
 function git(cwd: string, args: string[]): string | null {
-  try {
-    return execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    });
-  } catch {
-    return null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return execFileSync("git", args, {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch (e) {
+      const stderr = (e as { stderr?: Buffer | string }).stderr?.toString?.().trim();
+      if (attempt === 0) {
+        sleepSync(250);
+        continue;
+      }
+      console.warn(`[pilot] git ${args[0]} failed after retry${stderr ? `: ${stderr.slice(0, 300)}` : ""}`);
+      return null;
+    }
   }
 }
 
@@ -148,7 +168,15 @@ export function gitDiffRange(cwd: string, baseSha: string | null): string | null
   if (!baseSha) return git(cwd, ["show", "--stat", "--patch", "HEAD", "--", ".", ...EXCLUDE_HARNESS]);
   const head = gitHeadSha(cwd);
   if (!head || head === baseSha) return null;
-  return git(cwd, ["diff", "--stat", "--patch", baseSha, "HEAD", "--", ".", ...EXCLUDE_HARNESS]);
+  const diff = git(cwd, ["diff", "--stat", "--patch", baseSha, "HEAD", "--", ".", ...EXCLUDE_HARNESS]);
+  if (diff !== null) return diff;
+  // HEAD moved but the diff command failed (lock/AV transient). The attempt
+  // DID change the tree — never classify this as zero-change. Try log -p as a
+  // fallback renderer; as a last resort return an explicit marker so the
+  // caller records a real (if unrenderable) change instead of a false zero.
+  const logp = git(cwd, ["log", "--stat", "--patch", `${baseSha}..HEAD`, "--", ".", ...EXCLUDE_HARNESS]);
+  if (logp !== null) return logp;
+  return `[pilot] git diff unavailable after retries, but HEAD moved ${baseSha.slice(0, 8)}..${head.slice(0, 8)} — the attempt committed changes; see git log for the real diff.`;
 }
 
 /**
@@ -293,9 +321,10 @@ async function generate(
     priorArtifact,
   });
   // Resolve the generator's provider FROM the model (effective ladder), not the
-  // legacy hardcoded "anthropic". Preflight the credential so a missing key
-  // surfaces a clear, actionable reason instead of pi's raw auth error.
-  const genProvider = providerForModel(modelId);
+  // legacy hardcoded "anthropic" — credential-aware, so ambiguous ids land on
+  // a keyed provider. Preflight the credential so a missing key surfaces a
+  // clear, actionable reason instead of pi's raw auth error.
+  const genProvider = providerForModel(modelId, ctx.engine.authStorage);
   if (!genProvider) {
     // REQ-P-4: defensive log when providerForModel fails to resolve. In
     // practice a launched attempt should always resolve (preflight below
@@ -679,13 +708,15 @@ export async function reflexion(
 
   const gen1 = await generate(ctx, stage, stage_id, esc.model_id, esc.tier, 1, parentAttemptId, [critique], priorArtifactText);
 
-  // Zero-change retry: still nothing on disk. Surface with the real reason —
-  // do not burn a judge call on an empty diff.
+  // Zero-change retry: HEAD genuinely didn't move (git failures no longer
+  // read as zero-change). Surface with an honest reason — do not burn a judge
+  // call on an empty diff. Note: a retry that verifies the prior attempt and
+  // correctly changes nothing lands here too; the human reviews HEAD as-is.
   if (gen1.zeroChange) {
     return surface(
       ctx,
       stage_id,
-      "code stage produced zero file changes after Reflexion ×1 (model emitted text instead of tool calls)",
+      "code stage produced zero file changes after Reflexion ×1 — the retry session ran but committed no changes (it may have verified the prior attempt as already correct); review HEAD",
     );
   }
 

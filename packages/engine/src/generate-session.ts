@@ -73,6 +73,14 @@ export interface CodingSessionOpts {
 const MUTATING_TOOLS = new Set(["bash", "write", "edit"]);
 
 /**
+ * Tools that directly write files. `bash` stays in MUTATING_TOOLS (a session
+ * can legitimately produce its changes via shell), but a bash-only session
+ * that merely ran tests must not report files_changed — that flag previously
+ * lied whenever a session ran a single command.
+ */
+const FILE_WRITING_TOOLS = new Set(["write", "edit"]);
+
+/**
  * openai-compat APIs where (a) `tool_choice` is honored in the request payload
  * and (b) models are known to sometimes answer coding prompts as prose instead
  * of tool calls. Anthropic sessions are left untouched — their loop already
@@ -139,10 +147,12 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     });
   };
 
+  let fileWritingCalls = 0;
   const trackToolEvents = (event: AgentSessionEvent): void => {
     if (event.type === "tool_execution_start") toolCallCount++;
-    if (event.type === "tool_execution_end" && !event.isError && MUTATING_TOOLS.has(event.toolName)) {
-      mutatingToolCalls++;
+    if (event.type === "tool_execution_end" && !event.isError) {
+      if (MUTATING_TOOLS.has(event.toolName)) mutatingToolCalls++;
+      if (FILE_WRITING_TOOLS.has(event.toolName)) fileWritingCalls++;
     }
     opts.onEvent?.(event);
   };
@@ -249,12 +259,16 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     }
   }
 
-  const files_changed = mutatingToolCalls > 0 || materialized_files > 0;
+  // files_changed reports actual file writes (write/edit tools or the
+  // materializer). The looser mutatingToolCalls (bash included) still governs
+  // the recovery prompt and the no_tool_calls stop reason — a session that
+  // produced its change purely via bash is not a "no tool calls" session.
+  const files_changed = fileWritingCalls > 0 || materialized_files > 0;
   const stop_reason = timedOut
     ? "timeout"
     : opts.signal?.aborted
       ? "aborted"
-      : opts.toolPolicy === "coding" && !files_changed
+      : opts.toolPolicy === "coding" && mutatingToolCalls === 0 && materialized_files === 0
         ? "no_tool_calls"
         : "stop";
 

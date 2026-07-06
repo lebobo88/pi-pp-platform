@@ -13,6 +13,7 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { catalog, normalizeProviderAlias, detectCliLogin, CLI_LOGIN_PROVIDERS } from "@pp/core";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { createPlatformAuthStorage } from "./auth.js";
 
 export interface PiModelInfo {
   id: string;
@@ -110,23 +111,56 @@ export function allPiModels(): PiModelInfo[] {
   }
 }
 
-let _modelProviderMap: Map<string, string> | null = null;
+let _modelProvidersMap: Map<string, string[]> | null = null;
 
-/** The provider that owns a given model id (pi catalog ∪ platform catalog
- * customs). Falls back to a provider-alias fold, else "anthropic". */
-export function providerForModel(modelId: string): string {
-  if (!_modelProviderMap) {
-    _modelProviderMap = new Map();
-    for (const m of allPiModels()) {
-      if (!_modelProviderMap.has(m.id)) _modelProviderMap.set(m.id, m.provider);
-    }
+/** Every provider that serves a given model id, in catalog enumeration order. */
+function providersForModelId(modelId: string): string[] {
+  if (!_modelProvidersMap) {
+    _modelProvidersMap = new Map();
+    const add = (id: string, provider: string) => {
+      const list = _modelProvidersMap!.get(id);
+      if (!list) _modelProvidersMap!.set(id, [provider]);
+      else if (!list.includes(provider)) list.push(provider);
+    };
+    for (const m of allPiModels()) add(m.id, m.provider);
     for (const [provider, p] of Object.entries(catalog().providers)) {
-      for (const id of Object.keys(p.models)) {
-        if (!_modelProviderMap.has(id)) _modelProviderMap.set(id, provider);
-      }
+      for (const id of Object.keys(p.models)) add(id, provider);
     }
   }
-  return _modelProviderMap.get(modelId) ?? normalizeProviderAlias(modelId) ?? "anthropic";
+  return _modelProvidersMap.get(modelId) ?? [];
+}
+
+/** Lazy default storage for credential-aware resolution (tests inject their own). */
+let _resolverStorage: AuthStorage | null = null;
+function resolverStorage(): AuthStorage {
+  if (!_resolverStorage) {
+    _resolverStorage = createPlatformAuthStorage();
+  }
+  return _resolverStorage;
+}
+
+/**
+ * The provider that owns a given model id (pi catalog ∪ platform catalog
+ * customs). Ambiguous ids (served by several vendors — every gpt-* id exists
+ * under azure-openai-responses, github-copilot, openai-codex, …) prefer a
+ * provider that actually holds a credential, so a keyed openai/openai-codex
+ * wins over an unkeyed azure that merely enumerates first. Falls back to a
+ * provider-alias fold, else "anthropic".
+ */
+export function providerForModel(modelId: string, storage?: AuthStorage): string {
+  const providers = providersForModelId(modelId);
+  if (providers.length === 0) return normalizeProviderAlias(modelId) ?? "anthropic";
+  if (providers.length === 1) return providers[0]!;
+  let auth: AuthStorage;
+  try {
+    auth = storage ?? resolverStorage();
+  } catch {
+    return providers[0]!;
+  }
+  for (const p of providers) {
+    if (hasCredential(auth, p)) return p;
+  }
+  return providers[0]!;
 }
 
 /** True when a provider has a usable stored/ambient credential (no key exposed). */

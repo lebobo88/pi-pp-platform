@@ -47,6 +47,8 @@ export interface GenerationModel {
  * + model-derived provider, resolved through pi's ModelRegistry. */
 export function resolveGenerationModel(engine: Engine, tier: string): GenerationModel {
   const model_id = generationModelIdForTier(tier);
-  const provider = providerForModel(model_id);
+  // Credential-aware: ambiguous ids resolve to a provider the engine can
+  // actually authenticate against, not whichever vendor enumerates first.
+  const provider = providerForModel(model_id, engine.authStorage);
   return { provider, model_id, model: engine.catalog.resolve(provider, model_id) };
 }
