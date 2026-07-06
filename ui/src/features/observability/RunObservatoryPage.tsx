@@ -110,21 +110,25 @@ export function RunObservatoryPage() {
   // filter other panes (attempts, gate feed, logs are already scoped by
   // running-attempt / newest-first), so this is purely visual for the pipeline.
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
-  useEffect(() => {
-    // Default: latest stage in the pipeline (last element), or null if empty.
-    const defaultStageId =
-      pipeline.length > 0 ? pipeline[pipeline.length - 1]!.stageId : null;
-    // Keep the current selection only when it is genuinely present in this
-    // run's pipeline. This handles both route changes (runId) and mid-session
-    // stage-list mutations where the selected stage disappears.
+  // Derive the effective selection at render time so navigation between runs
+  // (or a mid-session stage-list mutation that drops the current selection)
+  // never renders a single frame with a stale/invalid selectedStage — a bare
+  // useEffect would run after render and cause a placeholder flash.
+  const effectiveSelectedStage = useMemo(() => {
     const stagePresent =
       selectedStage != null &&
       pipeline.some((s) => s.stageId === selectedStage);
-    const next = stagePresent ? selectedStage : defaultStageId;
-    if (selectedStage !== next) {
-      setSelectedStage(next);
+    if (stagePresent) return selectedStage;
+    return pipeline.length > 0 ? pipeline[pipeline.length - 1]!.stageId : null;
+  }, [selectedStage, pipeline]);
+  // Sync state to the derived value so subsequent renders and any external
+  // consumers of setSelectedStage observe a consistent id. Guarded by an
+  // equality check to avoid an update loop.
+  useEffect(() => {
+    if (selectedStage !== effectiveSelectedStage) {
+      setSelectedStage(effectiveSelectedStage);
     }
-  }, [runId, pipeline, selectedStage]);
+  }, [selectedStage, effectiveSelectedStage, runId]);
 
   // Find most-recent running attempt for the LogPane
   const attempts = overlay.attempts ?? {};
@@ -281,7 +285,7 @@ export function RunObservatoryPage() {
               <PhaseTimeline entries={overlay.phaseTimeline ?? []} />
               <StagePipeline
                 nodes={pipeline}
-                selectedStageId={selectedStage}
+                selectedStageId={effectiveSelectedStage}
                 onSelect={setSelectedStage}
               />
             </div>
