@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS verdicts (
   critique_md         TEXT,
   score_json          TEXT,
   cross_vendor        INTEGER NOT NULL DEFAULT 0,          -- 1 if judge vendor != generator vendor
+  -- v9: judge-usage cost attribution. NULL unless the judge reported spend;
+  -- when present these are also credited to the run:/day:/model:<judge_model_id>
+  -- budget scopes via tallyBudgets.
+  tokens_in           INTEGER,
+  tokens_out          INTEGER,
+  cost_usd            REAL,
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_attempt ON verdicts(attempt_id);
