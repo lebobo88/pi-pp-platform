@@ -170,12 +170,19 @@ function refinalizeRunIfClear(ctx: RunContext): void {
     .prepare(`SELECT COUNT(*) AS n FROM stages WHERE run_id = ? AND status NOT IN ('passed', 'complete')`)
     .get(ctx.run_id) as { n: number };
   if (open.n > 0) return;
-  const result = finalizeRun({ run_id: ctx.run_id, status: "complete" });
-  emit(ctx, "run.finalized", {
-    status: result.effective_status,
-    requested_status: result.requested_status,
-    post_hoc: true,
-  });
+  try {
+    const result = finalizeRun({ run_id: ctx.run_id, status: "complete" });
+    emit(ctx, "run.finalized", {
+      status: result.effective_status,
+      requested_status: result.requested_status,
+      post_hoc: true,
+    });
+  } catch (e) {
+    // A finalize guard (PP-VG-*) refusing "complete" must not fail the
+    // regate/retry HTTP request that merely triggered the recheck — the run
+    // simply stays in its current status and the reason is logged.
+    console.warn(`[pilot] post-hoc run re-finalize blocked: ${(e as Error).message}`);
+  }
 }
 
 /**
@@ -184,6 +191,9 @@ function refinalizeRunIfClear(ctx: RunContext): void {
  */
 export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> {
   const r = reconstruct(opts);
+  const stageWasPassed =
+    ((db().prepare(`SELECT status FROM stages WHERE id = ?`).get(opts.stageId) as { status?: string } | undefined)
+      ?.status ?? "") === "passed";
   const judged = await judge(r.ctx, r.stage, opts.stageId, r.latestAttemptId, r.generatorModel, r.artifactText, false);
   if (judged === "abort") {
     return { ok: false, stage_id: opts.stageId, reason: "judge tool failure during re-gate" };
@@ -191,6 +201,14 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
   emit(r.ctx, "verdict.recorded", { outcome: judged.outcome, regate: true }, { stage_id: opts.stageId, attempt_id: r.latestAttemptId });
 
   if (judged.outcome === "pass") {
+    // Already-finalized stage + fresh pass: there is nothing to re-drive —
+    // readiness would refuse a second finalize and the fallback used to
+    // DEMOTE the passed stage to surfaced. Record the concurring verdict and
+    // let the run row catch up to stage reality.
+    if (stageWasPassed) {
+      refinalizeRunIfClear(r.ctx);
+      return { ok: true, stage_id: opts.stageId, outcome: "passed" };
+    }
     const settled = await driveReadiness(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
     if (settled.action === "finalize") {
       const outcome = await finalizePassed(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
@@ -201,7 +219,10 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
     return { ok: true, stage_id: opts.stageId, outcome };
   }
 
-  // fail / revise on re-gate: the stage stays open — the operator can /pp:retry.
+  // fail / revise on re-gate: the stage's status is untouched (a passed stage
+  // stays passed — the dissenting verdict is recorded, not enforced). The run
+  // row must still track stage reality: if every stage is passed, finalize.
+  refinalizeRunIfClear(r.ctx);
   return { ok: true, stage_id: opts.stageId, outcome: judged.outcome };
 }
 

@@ -1698,6 +1698,7 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       | undefined;
 
     const requiredKinds = new Set<string>();
+    let trivialScope = false;
 
     // Parse taxonomy_mapping_json: sections[].required_artifacts
     // Treat null AND empty/whitespace-only strings as ABSENT (no required kinds).
@@ -1728,7 +1729,18 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       // An empty object {}, a missing sections key, or sections=null all indicate
       // a malformed snapshot that should fail closed rather than silently yielding
       // zero required kinds.
-      const mapping = parsed as { sections?: unknown };
+      const mapping = parsed as { sections?: unknown; scope?: unknown };
+      // Trivial-scope runs execute a minimum pipeline (often code-only) — the
+      // taxonomy's aspirational artifact kinds (gdd, performance_profile, …)
+      // have no producing stage, so enforcing them makes trivial runs
+      // permanently un-completable. Standard/major runs keep the full gate.
+      if (mapping.scope === "trivial") {
+        trivialScope = true;
+        log.info(
+          { run_id: input.run_id },
+          "PP-VG-2 skipped: trivial-scope run — taxonomy artifact kinds are advisory for the minimum pipeline",
+        );
+      } else {
       if (!Array.isArray(mapping.sections)) {
         throw new ArtifactAvailabilityGateViolation(
           `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
@@ -1775,6 +1787,7 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
             requiredKinds.add(k);
           }
         }
+      }
       }
     }
 
@@ -1830,6 +1843,9 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
 
     // For each required kind, verify at least ONE artifact exists RUN-WIDE
     // (across any stage of this run — the kind can live in a dedicated stage).
+    // Trivial scope: profile/taxonomy artifact kinds are advisory (no producing
+    // stages ran) — see the PP-VG-2 skip above.
+    if (trivialScope) requiredKinds.clear();
     if (requiredKinds.size > 0) {
       const archivedKinds = new Set<string>(
         (db()
@@ -1882,6 +1898,16 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       | { taxonomy_mapping_json: string | null; project_path: string }
       | undefined;
     if (!vg1Row) throw new Error(`run ${input.run_id} not found during VG-1 resolution`);
+    // Trivial-scope runs: master-plan population is advisory for the minimum
+    // pipeline — the taxonomy's responsible sections have no producing stages.
+    // (Same rationale as the PP-VG-2 trivial skip above.)
+    try {
+      const vg1Scope = (JSON.parse(vg1Row.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
+      if (vg1Scope === "trivial") {
+        log.info({ run_id: input.run_id }, "PP-VG-1 skipped: trivial-scope run");
+        vg1Row.taxonomy_mapping_json = null;
+      }
+    } catch { /* malformed json falls through to the strict checks below */ }
 
     const responsibleMasterSections = new Set<string>();
 
@@ -2060,7 +2086,22 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   // silently treat as "no required checks".
   // Advisory (non-required) failed checks do NOT block.
   // Only fires on finalize(complete); surfaced/aborted are not blocked.
-  if (input.status === "complete") {
+  if (input.status === "complete" && !(() => {
+    // Trivial-scope runs execute the minimum pipeline — missability evidence
+    // has no producing stage, so required checks are advisory here (same
+    // rationale as the PP-VG-1/VG-2 trivial skips above).
+    try {
+      const row = db().prepare(`SELECT taxonomy_mapping_json FROM runs WHERE id = ?`).get(input.run_id) as
+        | { taxonomy_mapping_json: string | null }
+        | undefined;
+      const scope = (JSON.parse(row?.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
+      if (scope === "trivial") {
+        log.info({ run_id: input.run_id }, "PP-VG-4 skipped: trivial-scope run");
+        return true;
+      }
+    } catch { /* malformed json → keep the gate */ }
+    return false;
+  })()) {
     // Read all three sources for the required check set.
     const vg4Row = db()
       .prepare(`SELECT profile_snapshot_json, team, forum, project_path FROM runs WHERE id = ?`)
