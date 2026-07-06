@@ -58,6 +58,14 @@ export interface CodingSessionOpts {
   timeoutMs?: number;
   signal?: AbortSignal;
   onEvent?: (event: AgentSessionEvent) => void;
+  /**
+   * Convenience stream of incremental assistant text as the model generates it.
+   * Fired for each streamed text delta so callers (the pilot) can surface live
+   * output WITHOUT knowing pi's event union — see extractAssistantTextDelta,
+   * which degrades to silence rather than guessing field names if pi's shape
+   * changes. Independent of `onEvent`, which still receives the raw events.
+   */
+  onOutputDelta?: (chunk: string) => void;
   /** Directory that holds the session's <role>-<attempt>.jsonl file. */
   sessionDir: string;
   toolPolicy: ToolPolicy;
@@ -71,6 +79,29 @@ export interface CodingSessionOpts {
 
 /** Tool names whose successful execution means the working tree may have changed. */
 const MUTATING_TOOLS = new Set(["bash", "write", "edit"]);
+
+/**
+ * Pull an assistant text delta out of a streaming session event WITHOUT
+ * hard-coding pi's event union: we read through `unknown` and degrade to a
+ * no-op (undefined) whenever the shape isn't the text delta we expect. pi
+ * emits incremental assistant text as `message_update` events whose
+ * `assistantMessageEvent` is a `text_delta`; the readable text lives on
+ * `.delta` (falling back to `.text`). If a future pi renames these fields the
+ * live stream simply goes quiet rather than throwing or emitting garbage — the
+ * persisted artifact/diff is unaffected either way.
+ */
+function extractAssistantTextDelta(event: AgentSessionEvent): string | undefined {
+  const e = event as unknown as { type?: string; assistantMessageEvent?: unknown };
+  if (e.type !== "message_update") return undefined;
+  const ame = e.assistantMessageEvent as
+    | { type?: string; delta?: unknown; text?: unknown }
+    | null
+    | undefined;
+  if (!ame || ame.type !== "text_delta") return undefined;
+  const delta =
+    typeof ame.delta === "string" ? ame.delta : typeof ame.text === "string" ? ame.text : undefined;
+  return delta && delta.length > 0 ? delta : undefined;
+}
 
 /**
  * Tools that directly write files. `bash` stays in MUTATING_TOOLS (a session
@@ -153,6 +184,10 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
     if (event.type === "tool_execution_end" && !event.isError) {
       if (MUTATING_TOOLS.has(event.toolName)) mutatingToolCalls++;
       if (FILE_WRITING_TOOLS.has(event.toolName)) fileWritingCalls++;
+    }
+    if (opts.onOutputDelta) {
+      const delta = extractAssistantTextDelta(event);
+      if (delta) opts.onOutputDelta(delta);
     }
     opts.onEvent?.(event);
   };

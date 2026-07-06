@@ -35,7 +35,7 @@ import {
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { generationModelIdForTier } from "../generation-model.js";
 import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
-import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty } from "./stage-loop.js";
+import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty, makeOutputStreamer } from "./stage-loop.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -115,11 +115,14 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     const rot = rotationFor(c.candidate_index);
     const sessionDir = join(ctx.artifact_dir, stage.kind, `candidate-${c.candidate_index}`);
     mkdirSync(sessionDir, { recursive: true });
+    // Candidate slots are pre-minted by startBestOfStage (c.attempt_slot_id) and
+    // passed verbatim to record_attempt below, so attempt.started, the live
+    // output stream, and the persisted row all key on the same id.
     emit(
       ctx,
       "attempt.started",
       { candidate_index: c.candidate_index, model: rot.model_id, tier: rot.tier, seed: rot.seed, judge_position: c.judge_position, provider: providerForModel(rot.model_id) || undefined },
-      { stage_id },
+      { stage_id, attempt_id: c.attempt_slot_id },
     );
 
     const systemPrompt = renderSystemPrompt(role, {
@@ -143,6 +146,8 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     }
     const model = ctx.engine.catalog.resolve(genProvider, rot.model_id);
     const baseSha = gitHeadSha(c.worktree_path);
+    // Live-stream this candidate's incremental output keyed on its slot id.
+    const streamer = makeOutputStreamer(ctx, stage_id, c.attempt_slot_id);
     const gen = await ctx.engine.runCodingSession({
       cwd: c.worktree_path,
       systemPrompt,
@@ -153,7 +158,9 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       role: stage.agent,
       attempt: c.candidate_index,
       signal: ctx.signal,
+      onOutputDelta: (chunk) => streamer.push(chunk),
     });
+    streamer.flush();
 
     const attempt = recordAttempt({
       stage_id,
