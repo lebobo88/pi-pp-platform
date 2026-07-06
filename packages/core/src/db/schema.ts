@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS verdicts (
   cross_vendor        INTEGER NOT NULL DEFAULT 0,
   -- v7: TheEights memory linkage for this verdict.
   eights_memory_id    TEXT,
+  -- v9: judge-usage cost attribution. NULL on legacy rows and on verdicts
+  -- recorded without usage; when present, the same values are credited to the
+  -- run:/day:/model:<judge_model_id> budget scopes via tallyBudgets so judge
+  -- spend shows up alongside generator spend.
+  tokens_in           INTEGER,
+  tokens_out          INTEGER,
+  cost_usd            REAL,
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_attempt ON verdicts(attempt_id);

@@ -626,6 +626,16 @@ export type RecordVerdictInput = {
   score_json?: unknown;
   /** Provider id resolved for the judge model (e.g. "anthropic-messages"). Omit when unresolvable. */
   judge_provider?: string;
+  /**
+   * v9 judge-usage cost attribution (all optional). When any is a positive
+   * finite number the verdict row records it AND the spend is credited to the
+   * run:/day:/model:<judge_model_id> budget scopes via tallyBudgets. Omitting
+   * them (or passing 0 / undefined / non-finite) records the verdict exactly
+   * as before with no budget rows.
+   */
+  tokens_in?: number;
+  tokens_out?: number;
+  cost_usd?: number;
 };
 export type RecordVerdictOutput = { verdict_id: string; cross_vendor: boolean };
 
@@ -676,6 +686,27 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
     attempt_id: input.attempt_id,
   });
 
+  // Hoisted above the transaction so run_id is available to tallyBudgets
+  // inside it. Also reused (below) for the fire-and-forget evaluation memory.
+  const stageJoin = db()
+    .prepare(
+      `SELECT stages.kind AS stage_kind, runs.project_path AS project_path, runs.id AS run_id
+         FROM attempts
+         JOIN stages ON stages.id = attempts.stage_id
+         JOIN runs   ON runs.id   = stages.run_id
+        WHERE attempts.id = ?`
+    )
+    .get(input.attempt_id) as
+    | { stage_kind: string; project_path: string; run_id: string }
+    | undefined;
+
+  // v9 judge-usage: only coerce to a number when the value is a positive
+  // finite number; otherwise NULL on the row and 0 (no-op) for the tally.
+  const usageTokensIn = positiveFinite(input.tokens_in);
+  const usageTokensOut = positiveFinite(input.tokens_out);
+  const usageCostUsd = positiveFinite(input.cost_usd);
+  const hasUsage = usageTokensIn > 0 || usageTokensOut > 0 || usageCostUsd > 0;
+
   txImmediate(() => {
     db()
       .prepare(
@@ -684,8 +715,9 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
           outcome, critique_md, score_json, cross_vendor,
           hallucination_suspected, hallucination_details,
           judge_provider,
+          tokens_in, tokens_out, cost_usd,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -700,24 +732,29 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
         provenanceCheck.hallucination_suspected ? 1 : 0,
         provenanceCheck.details_json,
         (input.judge_provider && input.judge_provider.trim()) ? input.judge_provider : null,
+        usageTokensIn > 0 ? usageTokensIn : null,
+        usageTokensOut > 0 ? usageTokensOut : null,
+        usageCostUsd > 0 ? usageCostUsd : null,
         now()
       );
+
+    // Credit judge spend to the run:/day:/model:<judge_model_id> scopes.
+    // budgets stays single-writer via tallyBudgets. No usage → no rows.
+    if (hasUsage && stageJoin) {
+      tallyBudgets(
+        stageJoin.run_id,
+        input.judge_model_id,
+        null,
+        usageTokensIn,
+        usageTokensOut,
+        usageCostUsd,
+      );
+    }
   });
 
   // Fire-and-forget: record the verdict as an evaluation memory. The
   // wrapper joins back to stage_kind + project_path so cross-run reflexion
   // searches (list_prior_critiques) can scope by stage type.
-  const stageJoin = db()
-    .prepare(
-      `SELECT stages.kind AS stage_kind, runs.project_path AS project_path, runs.id AS run_id
-         FROM attempts
-         JOIN stages ON stages.id = attempts.stage_id
-         JOIN runs   ON runs.id   = stages.run_id
-        WHERE attempts.id = ?`
-    )
-    .get(input.attempt_id) as
-    | { stage_kind: string; project_path: string; run_id: string }
-    | undefined;
   if (stageJoin) {
     void writeVerdictMemory({
       run_id: stageJoin.run_id,
@@ -2997,6 +3034,37 @@ function ensureRunOpen(run_id: string): void {
   if (!run) throw new Error(`run ${run_id} not found`);
   if (run.status !== "running" && run.status !== "pending") {
     throw new Error(`run ${run_id} is not open (status=${run.status})`);
+  }
+}
+
+/**
+ * Coerce a usage value to a non-negative number, treating anything that isn't
+ * a positive finite number (undefined, NaN, Infinity, ≤ 0) as 0. Keeps
+ * tallyBudgets free of NaN/Infinity and ensures zero/undefined usage never
+ * creates a budget row.
+ */
+function positiveFinite(n: number | undefined | null): number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Credit judge spend to the run:/day:/model:<judge_model_id> budget scopes
+ * without a verdict row. Used by callers that have judge usage but no verdict
+ * to hang it on — e.g. best-of-N losers whose critiques are discarded. Values
+ * are validated the same way recordVerdict validates them: only positive
+ * finite numbers are credited, and if none is present this is a no-op (no
+ * budget rows). budgets stays single-writer via tallyBudgets.
+ */
+export function tallyJudgeUsage(
+  run_id: string,
+  judge_model_id: string,
+  usage: { tokens_in?: number; tokens_out?: number; cost_usd?: number },
+): void {
+  const tokens_in = positiveFinite(usage.tokens_in);
+  const tokens_out = positiveFinite(usage.tokens_out);
+  const cost_usd = positiveFinite(usage.cost_usd);
+  if (tokens_in > 0 || tokens_out > 0 || cost_usd > 0) {
+    tallyBudgets(run_id, judge_model_id, null, tokens_in, tokens_out, cost_usd);
   }
 }
 

@@ -180,6 +180,19 @@ function applyMigrations(conn: Database.Database): void {
   if (!verdictCols.some(c => c.name === "judge_provider")) {
     conn.exec("ALTER TABLE verdicts ADD COLUMN judge_provider TEXT");
   }
+  // v9: judge-usage cost attribution. Nullable, additive-only. When a verdict
+  // is recorded with judge spend, these persist on the row AND the same values
+  // are tallied to the run:/day:/model:<judge_model_id> budget scopes so judge
+  // cost is attributed alongside generator cost. NULL on legacy rows.
+  if (!verdictCols.some(c => c.name === "tokens_in")) {
+    conn.exec("ALTER TABLE verdicts ADD COLUMN tokens_in INTEGER");
+  }
+  if (!verdictCols.some(c => c.name === "tokens_out")) {
+    conn.exec("ALTER TABLE verdicts ADD COLUMN tokens_out INTEGER");
+  }
+  if (!verdictCols.some(c => c.name === "cost_usd")) {
+    conn.exec("ALTER TABLE verdicts ADD COLUMN cost_usd REAL");
+  }
 
   // Refresh attemptCols for provider column check (earlier adds may have occurred).
   const attemptColsFinal = conn.prepare("PRAGMA table_info(attempts)").all() as Array<{ name: string }>;
