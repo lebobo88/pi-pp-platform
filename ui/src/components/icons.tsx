@@ -89,6 +89,18 @@ export const IconChevron = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+export const IconObservability = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    {/* Radar-style icon: outer ring, cross-hairs, center dot */}
+    <circle cx="8" cy="8" r="5.5" />
+    <circle cx="8" cy="8" r="2" />
+    <path d="M8 2.5v1M8 12.5v1M2.5 8h1M12.5 8h1" />
+    <path d="M8 6V2M8 10v4M6 8H2M10 8h4" strokeWidth="0" />
+    {/* Sweep line */}
+    <path d="M8 8l3.5-3.5" strokeWidth="1.2" />
+  </Icon>
+);
+
 export const IconExternal = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5V10M9 2h5v5M14 2 7 9" />
