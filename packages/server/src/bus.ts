@@ -37,7 +37,10 @@ export interface BusPort {
   publish(input: SsePublish): SseFrame;
 }
 
-const DEFAULT_RING = 512;
+// Raised from 512 to hold late-joiner backfill through a live attempt.output
+// stream: high-frequency output frames can otherwise evict run/stage frames
+// from the replay ring before a client reconnects.
+const DEFAULT_RING = 2048;
 
 export function createInMemoryBus(ringSize = DEFAULT_RING): BusPort {
   let seq = 0;

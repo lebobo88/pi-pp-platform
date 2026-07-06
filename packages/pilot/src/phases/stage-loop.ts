@@ -10,6 +10,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { join, isAbsolute } from "node:path";
 import { mkdirSync } from "node:fs";
 import {
@@ -110,6 +111,61 @@ export function selectStageSkills(ctx: RunContext, stage: StageSpec): SkillsSele
     if (!specs.some((s) => s.id === id) && !skipped.includes(id)) skipped.push(id);
   }
   return { injected, skipped };
+}
+
+/**
+ * Pre-mint an attempt id in the driver so `attempt.started`, the live
+ * `attempt.output` stream, AND the persisted attempt row all share ONE id.
+ * The UI keys its log pane on the attempt id, so a streamed chunk MUST carry
+ * the same id `record_attempt` will use — we pass this value as
+ * `attempt_slot_id` (core uses it verbatim as the row id). Format mirrors
+ * core's `attempt_<id>` slugs; exact entropy is irrelevant (a handful of
+ * attempts per run), only per-run uniqueness matters.
+ */
+export function mintAttemptId(): string {
+  return `attempt_${randomBytes(8).toString("hex")}`;
+}
+
+/**
+ * Lightly coalesces streamed assistant text into `attempt.output` frames so a
+ * fast token stream becomes a handful of SSE frames per line instead of one
+ * per token: buffer deltas and flush on a newline, on a soft size cap, or after
+ * ~100ms of silence. The idle timer is unref'd so a trailing buffer never keeps
+ * the process alive; callers MUST call flush() once the session ends to emit the
+ * final partial line. attempt_id is threaded top-level (the server folds it into
+ * the frame's data, where the UI reads it) alongside the {chunk} payload.
+ */
+export function makeOutputStreamer(
+  ctx: Pick<RunContext, "bus" | "run_id">,
+  stage_id: string,
+  attempt_id: string,
+): { push: (delta: string) => void; flush: () => void } {
+  let buf = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (buf.length === 0) return;
+    const chunk = buf;
+    buf = "";
+    emit(ctx, "attempt.output", { chunk }, { stage_id, attempt_id });
+  };
+  return {
+    push(delta: string): void {
+      buf += delta;
+      if (buf.length >= 4000 || delta.includes("\n")) {
+        flush();
+        return;
+      }
+      if (!timer) {
+        timer = setTimeout(flush, 100);
+        timer.unref?.();
+      }
+    },
+    flush,
+  };
 }
 
 /** Synchronous sleep (git retry backoff) — the stage loop is already blocking here. */
@@ -342,7 +398,12 @@ async function generate(
   const sessionDir = join(ctx.artifact_dir, stage.kind);
   mkdirSync(sessionDir, { recursive: true });
 
-  emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex, provider: genProvider || undefined }, { stage_id });
+  // Pre-mint the attempt id BEFORE generation so attempt.started, the live
+  // output stream, and the persisted attempt row (via attempt_slot_id) all key
+  // on the same id — the UI's log pane depends on that equality.
+  const attemptSlotId = mintAttemptId();
+
+  emit(ctx, "attempt.started", { agent: stage.agent, model: modelId, tier, retry_index: retryIndex, provider: genProvider || undefined }, { stage_id, attempt_id: attemptSlotId });
 
   let artifactText: string;
   let artifactPath: string;
@@ -352,6 +413,10 @@ async function generate(
   if (execution === "session-coding" || execution === "session-readonly") {
     const coding = execution === "session-coding";
     const baseSha = coding ? gitHeadSha(ctx.projectPath) : null;
+    // Live-stream the model's incremental output into attempt.output frames so
+    // the UI log pane fills DURING generation, not only on completion. Flushed
+    // right after the session ends (below) to emit any trailing partial line.
+    const streamer = makeOutputStreamer(ctx, stage_id, attemptSlotId);
     genResult = await ctx.engine.runCodingSession({
       cwd: ctx.projectPath,
       systemPrompt,
@@ -362,7 +427,9 @@ async function generate(
       role: stage.agent,
       attempt: retryIndex,
       signal: ctx.signal,
+      onOutputDelta: (chunk) => streamer.push(chunk),
     });
+    streamer.flush();
     if (coding) {
       // The harness owns the commit; then the judge sees exactly what this
       // attempt changed (baseSha..HEAD), never a stale pre-existing commit.
@@ -419,6 +486,9 @@ async function generate(
     attempted_tier: tier,
     agent_type: stage.agent,
     provider: genProvider || undefined,
+    // Bind the row to the pre-minted id so the streamed attempt.output frames
+    // and this persisted attempt share one id (constraint: they MUST match).
+    attempt_slot_id: attemptSlotId,
   });
 
   // Record the engine session (transcript file) for replay/audit when one exists
