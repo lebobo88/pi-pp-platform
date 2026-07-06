@@ -15,6 +15,7 @@ import {
 } from "@pp/core";
 import type { GenProvider } from "./envelope.js";
 import { projectCatalogModelsJson } from "./catalog-to-modelsjson.js";
+import { splitQualifiedModelId } from "./models.js";
 
 /** Default-ladder tier names. Open string: a ladder can define any tier set. */
 export type Tier = string;
@@ -96,13 +97,17 @@ export class ModelCatalog {
     this.registry = ModelRegistry.create(authStorage, path);
   }
 
-  /** Resolve a concrete model. Throws if the provider/id is not in the registry. */
+  /** Resolve a concrete model. Throws if the provider/id is not in the registry.
+   * Accepts provider-qualified ids ("openai/gpt-5.5") wherever a bare id is
+   * legal: when the qualifier names the same provider, the bare id resolves. */
   resolve(provider: string, id: string): Model<Api> {
-    const model = this.registry.find(provider, id);
+    const qualified = splitQualifiedModelId(id);
+    const bareId = qualified.provider === provider ? qualified.model : id;
+    const model = this.registry.find(provider, bareId);
     if (!model) {
       const err = this.registry.getError();
       throw new Error(
-        `model "${provider}/${id}" not found in ModelRegistry` + (err ? ` (models.json error: ${err})` : ""),
+        `model "${provider}/${bareId}" not found in ModelRegistry` + (err ? ` (models.json error: ${err})` : ""),
       );
     }
     return model;

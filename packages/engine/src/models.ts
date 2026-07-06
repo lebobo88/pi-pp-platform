@@ -140,14 +140,34 @@ function resolverStorage(): AuthStorage {
 }
 
 /**
+ * Split a provider-qualified model id ("openai/gpt-5.5" → openai + gpt-5.5).
+ * The prefix must name a KNOWN provider — openrouter-style ids whose first
+ * segment is an org name ("meta-llama/llama-3…") pass through untouched.
+ */
+export function splitQualifiedModelId(id: string): { provider: string | null; model: string } {
+  const slash = id.indexOf("/");
+  if (slash > 0) {
+    const prefix = id.slice(0, slash);
+    const known =
+      Object.prototype.hasOwnProperty.call(catalog().providers, prefix) ||
+      allPiModels().some((m) => m.provider === prefix);
+    if (known) return { provider: prefix, model: id.slice(slash + 1) };
+  }
+  return { provider: null, model: id };
+}
+
+/**
  * The provider that owns a given model id (pi catalog ∪ platform catalog
- * customs). Ambiguous ids (served by several vendors — every gpt-* id exists
- * under azure-openai-responses, github-copilot, openai-codex, …) prefer a
- * provider that actually holds a credential, so a keyed openai/openai-codex
- * wins over an unkeyed azure that merely enumerates first. Falls back to a
- * provider-alias fold, else "anthropic".
+ * customs). A provider-qualified id ("openai/gpt-5.5") pins the provider
+ * outright. Otherwise, ambiguous ids (served by several vendors — every
+ * gpt-* id exists under azure-openai-responses, github-copilot, openai-codex,
+ * …) prefer a provider that actually holds a credential, so a keyed
+ * openai/openai-codex wins over an unkeyed azure that merely enumerates
+ * first. Falls back to a provider-alias fold, else "anthropic".
  */
 export function providerForModel(modelId: string, storage?: AuthStorage): string {
+  const qualified = splitQualifiedModelId(modelId);
+  if (qualified.provider) return qualified.provider;
   const providers = providersForModelId(modelId);
   if (providers.length === 0) return normalizeProviderAlias(modelId) ?? "anthropic";
   if (providers.length === 1) return providers[0]!;

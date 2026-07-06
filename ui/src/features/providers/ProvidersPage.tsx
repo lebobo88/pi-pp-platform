@@ -236,8 +236,15 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
   );
   const catalogIds = useMemo(() => new Set(models.map((m) => m.id)), [models]);
 
-  /** Provider for a model id: priced catalog first, then each provider's live list. */
+  /** Provider for a model id: a provider-qualified id ("openai/gpt-5.5") pins
+   * the vendor outright when that vendor is configured; else priced catalog,
+   * then each provider's live list. */
   const vendorFor = (id: string): string | null => {
+    const slash = id.indexOf("/");
+    if (slash > 0) {
+      const prefix = id.slice(0, slash);
+      if (configuredVendorList.includes(prefix)) return prefix;
+    }
     const m = models.find((x) => x.id === id);
     if (m) return m.vendor;
     for (const v of configuredVendorList) {
