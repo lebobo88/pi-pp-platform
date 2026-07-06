@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import type { RunTree } from "@shared/api-types";
 import type { LiveRunOverlay } from "@/stores/liveRunStore";
 import type { SseStatus } from "@/api/sse";
@@ -61,6 +62,14 @@ export function RunHeader({
             <CopyButton value={run.id} title="Copy run id" />
             <span className="text-ink-3">·</span>
             <span className="mono text-[11px] text-ink-3">{basename(run.project_path)}</span>
+            <span className="text-ink-3">·</span>
+            <Link
+              to={`/runs/${run.id}/live`}
+              className="mono text-[11px] text-accent hover:underline"
+              title="Open Run Observatory"
+            >
+              Live ↗
+            </Link>
           </div>
         </div>
 

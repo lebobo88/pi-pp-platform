@@ -32,6 +32,7 @@ const TaxonomyPage = lazy(() => import("@/features/library/TaxonomyPage").then((
 const SystemPage = lazy(() => import("@/features/system/SystemPage").then((m) => ({ default: m.SystemPage })));
 const KitchenSinkPage = lazy(() => import("@/routes/KitchenSink").then((m) => ({ default: m.KitchenSinkPage })));
 const NotFoundPage = lazy(() => import("@/routes/stubs").then((m) => ({ default: m.NotFoundPage })));
+const RunObservatoryPage = lazy(() => import("@/features/observability/RunObservatoryPage").then((m) => ({ default: m.RunObservatoryPage })));
 
 const queryClient = createQueryClient();
 
@@ -45,6 +46,7 @@ const router = createBrowserRouter([
       { path: "/runs", element: <RunsPage /> },
       { path: "/runs/new", element: <NewRunPage /> },
       { path: "/runs/:runId", element: <RunDetailPage /> },
+      { path: "/runs/:runId/live", element: <RunObservatoryPage /> },
       { path: "/providers", element: <ProvidersPage /> },
       { path: "/budgets", element: <BudgetsPage /> },
       { path: "/evolution", element: <EvolutionPage /> },
