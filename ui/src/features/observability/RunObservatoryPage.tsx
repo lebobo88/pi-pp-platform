@@ -111,12 +111,20 @@ export function RunObservatoryPage() {
   // running-attempt / newest-first), so this is purely visual for the pipeline.
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
   useEffect(() => {
-    if (pipeline.length === 0) return;
-    if (selectedStage == null) {
-      const running = pipeline.find((n) => n.state === "running");
-      setSelectedStage((running ?? pipeline[0]!).stageId);
+    // Default: latest stage in the pipeline (last element), or null if empty.
+    const defaultStageId =
+      pipeline.length > 0 ? pipeline[pipeline.length - 1]!.stageId : null;
+    // Keep the current selection only when it is genuinely present in this
+    // run's pipeline. This handles both route changes (runId) and mid-session
+    // stage-list mutations where the selected stage disappears.
+    const stagePresent =
+      selectedStage != null &&
+      pipeline.some((s) => s.stageId === selectedStage);
+    const next = stagePresent ? selectedStage : defaultStageId;
+    if (selectedStage !== next) {
+      setSelectedStage(next);
     }
-  }, [pipeline, selectedStage]);
+  }, [runId, pipeline, selectedStage]);
 
   // Find most-recent running attempt for the LogPane
   const attempts = overlay.attempts ?? {};
@@ -147,10 +155,14 @@ export function RunObservatoryPage() {
   const showBestOfBoard = hasBestOf || liveBordaHasData;
 
   const status = overlay.status ?? tree?.run.status ?? null;
-  // Prefer live overlay cost; fall back to sum of attempt cost_usd (historical /
-  // completed runs, or before the overlay has accumulated its first budget.tick).
+  // Prefer live overlay cost when there is any live signal for this run;
+  // otherwise fall back to the historical run-row cost. Never mix the two
+  // with max() — that silently picks whichever source happened to be larger.
   const historicalCostUsd = tree ? runTotals(tree).costUsd : 0;
-  const costUsd = Math.max(overlay.costUsd ?? 0, historicalCostUsd);
+  const liveCost = overlay.costUsd ?? 0;
+  const liveHasSignal =
+    liveCost > 0 || (overlay.costSeries?.length ?? 0) > 0;
+  const costUsd = liveHasSignal ? liveCost : historicalCostUsd;
 
   /* ── Loading / error states ──────────────────────────────────────────── */
 

@@ -250,23 +250,39 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
     );
   }
 
-  // Sort newest first. Prefer startedAt; when either side lacks a timestamp,
-  // tie-break by retryIndex desc, then candidateIndex desc, then attemptId desc
-  // so we get a deterministic newest-first order instead of collapsing to the
-  // Object.values() order.
-  const sorted = [...entries].sort((a, b) => {
-    const ta = a.startedAt ? Date.parse(a.startedAt) : NaN;
-    const tb = b.startedAt ? Date.parse(b.startedAt) : NaN;
-    if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) {
-      return tb - ta;
+  // Build a [timestamp, retryIndex, candidateIndex, attemptId] tuple for each
+  // attempt so every pair is compared using the same key structure — a strict
+  // weak ordering is required for Array.prototype.sort to be well-defined.
+  function toSortKey(a: AttemptMeta): [number, number, number, string] {
+    let ts: number;
+    if (typeof a.startedAt === "number") {
+      ts = a.startedAt;
+    } else if (typeof a.startedAt === "string") {
+      const parsed = Date.parse(a.startedAt);
+      ts = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    } else {
+      ts = Number.NEGATIVE_INFINITY;
     }
-    const ra = a.retryIndex ?? 0;
-    const rb = b.retryIndex ?? 0;
-    if (ra !== rb) return rb - ra;
-    const ca = a.candidateIndex ?? 0;
-    const cb = b.candidateIndex ?? 0;
-    if (ca !== cb) return cb - ca;
-    return b.attemptId.localeCompare(a.attemptId);
+    return [
+      ts,
+      a.retryIndex ?? -1,
+      a.candidateIndex ?? -1,
+      typeof a.attemptId === "string" ? a.attemptId : "",
+    ];
+  }
+
+  // Sort newest first by the same tuple for every pair (strictly weak ordering).
+  const sorted = [...entries].sort((a, b) => {
+    const ka = toSortKey(a);
+    const kb = toSortKey(b);
+    // startedAt desc
+    if (ka[0] !== kb[0]) return kb[0] - ka[0];
+    // retryIndex desc
+    if (ka[1] !== kb[1]) return kb[1] - ka[1];
+    // candidateIndex desc
+    if (ka[2] !== kb[2]) return kb[2] - ka[2];
+    // attemptId asc (lexicographic total-ordering tie-breaker)
+    return ka[3] < kb[3] ? -1 : ka[3] > kb[3] ? 1 : 0;
   });
 
   return (
