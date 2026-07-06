@@ -5,13 +5,13 @@
  *   Header strip: run id, status chip, live dot, last signal, elapsed, budget meters
  *   Main grid: PhaseTimeline | StagePipeline | AttemptMetaGrid | GateFeed | LogPane
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useRun } from "@/api/queries/runs";
 import { useCaps } from "@/api/queries/budgets";
 import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
-import { buildPipeline, runElapsedMs, isBestOfStage, stageAttempts } from "@/lib/runModel";
+import { buildPipeline, runElapsedMs, isBestOfStage, stageAttempts, runTotals } from "@/lib/runModel";
 import { formatUsd, formatRelative, formatDuration } from "@/lib/format";
 import { Card } from "@/components/Card";
 import { Meter } from "@/components/Meter";
@@ -106,21 +106,17 @@ export function RunObservatoryPage() {
     [tree, overlay],
   );
 
+  // Local pipeline highlight — the Observatory does not use selection to
+  // filter other panes (attempts, gate feed, logs are already scoped by
+  // running-attempt / newest-first), so this is purely visual for the pipeline.
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
-  const pinnedRef = useRef(false);
-
   useEffect(() => {
-    if (!tree) return;
-    if (selectedStage == null && pipeline.length > 0) {
-      setSelectedStage(pipeline[0]!.stageId);
-    }
-    if (!pinnedRef.current) {
+    if (pipeline.length === 0) return;
+    if (selectedStage == null) {
       const running = pipeline.find((n) => n.state === "running");
-      if (running && running.stageId !== selectedStage) {
-        setSelectedStage(running.stageId);
-      }
+      setSelectedStage((running ?? pipeline[0]!).stageId);
     }
-  }, [tree, pipeline, selectedStage]);
+  }, [pipeline, selectedStage]);
 
   // Find most-recent running attempt for the LogPane
   const attempts = overlay.attempts ?? {};
@@ -135,7 +131,7 @@ export function RunObservatoryPage() {
   const logAttemptId = runningAttempt?.attemptId ?? latestAttempt?.attemptId;
 
   // Count open-stage attempts for reflexion meter
-  const openStageIds = Object.entries(overlay.stageStatus)
+  const openStageIds = Object.entries(overlay.stageStatus ?? {})
     .filter(([, s]) => s === "open")
     .map(([id]) => id);
   const openStageAttemptCount = openStageIds.reduce((sum, sid) => {
@@ -147,16 +143,14 @@ export function RunObservatoryPage() {
   const hasBestOf =
     tree != null &&
     tree.stages.some((s) => isBestOfStage(stageAttempts(tree, s.id)));
-  const liveBordaHasData = Object.keys(overlay.borda).length > 0;
+  const liveBordaHasData = Object.keys(overlay.borda ?? {}).length > 0;
   const showBestOfBoard = hasBestOf || liveBordaHasData;
 
   const status = overlay.status ?? tree?.run.status ?? null;
-  const costUsd =
-    overlay.costUsd > 0
-      ? overlay.costUsd
-      : tree?.run
-        ? 0
-        : 0;
+  // Prefer live overlay cost; fall back to sum of attempt cost_usd (historical /
+  // completed runs, or before the overlay has accumulated its first budget.tick).
+  const historicalCostUsd = tree ? runTotals(tree).costUsd : 0;
+  const costUsd = Math.max(overlay.costUsd ?? 0, historicalCostUsd);
 
   /* ── Loading / error states ──────────────────────────────────────────── */
 
@@ -276,10 +270,7 @@ export function RunObservatoryPage() {
               <StagePipeline
                 nodes={pipeline}
                 selectedStageId={selectedStage}
-                onSelect={(id) => {
-                  pinnedRef.current = true;
-                  setSelectedStage(id);
-                }}
+                onSelect={setSelectedStage}
               />
             </div>
 

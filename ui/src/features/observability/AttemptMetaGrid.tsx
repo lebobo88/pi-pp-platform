@@ -205,7 +205,7 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
 
   // Build verdict lookup: attemptId → VerdictOutcome
   const verdictByAttempt: Record<string, VerdictOutcome> = {};
-  for (const [id, outcome] of Object.entries(overlay.verdicts)) {
+  for (const [id, outcome] of Object.entries(overlay.verdicts ?? {})) {
     verdictByAttempt[id] = outcome;
   }
 
@@ -220,16 +220,22 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
     }
   }
 
-  // Build escalation lookup: stageId → escalation note (from reflexion gate events)
+  // Build escalation lookup. Prefer keying by attemptId when the reflexion
+  // event references one — stops us from smearing a single escalation across
+  // every attempt in the stage (incl. attempts that predate the escalation).
+  // Falls back to a per-stage note applied only to the CHILD attempt of the
+  // retry (retryIndex > 0) so the initial attempt never wears the badge.
+  const escalationByAttempt: Record<string, string> = {};
   const escalationByStage: Record<string, string> = {};
   for (const ev of gateEvents) {
-    if (ev.kind === "reflexion" && ev.stageId && ev.detail) {
-      // detail format: "haiku→sonnet critique_excerpt"
-      const tierMatch = /^([a-z]+)→([a-z]+)/.exec(ev.detail);
-      if (tierMatch) {
-        escalationByStage[ev.stageId] =
-          `escalated ${tierMatch[1]} → ${tierMatch[2]}`;
-      }
+    if (ev.kind !== "reflexion" || !ev.detail) continue;
+    const tierMatch = /^([a-z]+)→([a-z]+)/.exec(ev.detail);
+    if (!tierMatch) continue;
+    const note = `escalated ${tierMatch[1]} → ${tierMatch[2]}`;
+    if (ev.attemptId) {
+      escalationByAttempt[ev.attemptId] = note;
+    } else if (ev.stageId) {
+      escalationByStage[ev.stageId] = note;
     }
   }
 
@@ -244,12 +250,23 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
     );
   }
 
-  // Sort newest first (by startedAt descending, fallback: reverse order)
+  // Sort newest first. Prefer startedAt; when either side lacks a timestamp,
+  // tie-break by retryIndex desc, then candidateIndex desc, then attemptId desc
+  // so we get a deterministic newest-first order instead of collapsing to the
+  // Object.values() order.
   const sorted = [...entries].sort((a, b) => {
-    if (a.startedAt && b.startedAt) {
-      return Date.parse(b.startedAt) - Date.parse(a.startedAt);
+    const ta = a.startedAt ? Date.parse(a.startedAt) : NaN;
+    const tb = b.startedAt ? Date.parse(b.startedAt) : NaN;
+    if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) {
+      return tb - ta;
     }
-    return 0;
+    const ra = a.retryIndex ?? 0;
+    const rb = b.retryIndex ?? 0;
+    if (ra !== rb) return rb - ra;
+    const ca = a.candidateIndex ?? 0;
+    const cb = b.candidateIndex ?? 0;
+    if (ca !== cb) return cb - ca;
+    return b.attemptId.localeCompare(a.attemptId);
   });
 
   return (
@@ -266,7 +283,12 @@ export function AttemptMetaGrid({ overlay }: AttemptMetaGridProps) {
             crossVendor={
               verdictDetailByAttempt[meta.attemptId]?.crossVendor
             }
-            escalationNote={escalationByStage[meta.stageId]}
+            escalationNote={
+              escalationByAttempt[meta.attemptId] ??
+              (meta.retryIndex != null && meta.retryIndex > 0
+                ? escalationByStage[meta.stageId]
+                : undefined)
+            }
           />
         ))}
       </div>
