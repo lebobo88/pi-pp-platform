@@ -16,7 +16,7 @@
  */
 import { RunPilot, EventBus, type PilotEvent } from "@pp/pilot";
 import type { Engine } from "@pp/engine";
-import { budgetStatus, getBudgetCaps, touchLastRun } from "@pp/core";
+import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey } from "@pp/core";
 import type { BusPort } from "./bus.js";
 
 export interface StartRunInput {
@@ -46,7 +46,8 @@ interface RunEntry {
   firedTripwires: Set<string>;
 }
 
-const DAY = () => new Date().toISOString().slice(0, 10);
+// Local-time day key — must match core tallyBudgets bucketing (see localDayKey).
+const DAY = () => localDayKey();
 
 export class RunSupervisor {
   private readonly active = new Map<string, RunEntry>();

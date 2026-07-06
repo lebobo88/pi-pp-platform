@@ -46,6 +46,9 @@ export function FleetRunCard({ run, fleetEntry, compact = false }: FleetRunCardP
             {shortId(run.id, 14)}
           </Link>
           <RunStatusChip status={liveStatus} />
+          <span className="min-w-0 truncate text-[11px] text-ink-3" title={run.request_text}>
+            {run.request_text}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[11px] text-ink-3 mono">
           <span>{formatRelative(run.started_at)}</span>
@@ -91,6 +94,11 @@ export function FleetRunCard({ run, fleetEntry, compact = false }: FleetRunCardP
           <RunStatusChip status={liveStatus} />
         </div>
       </div>
+
+      {/* Intent — what this run is doing, straight from the request */}
+      <p className="text-[11px] leading-snug text-ink-2 line-clamp-2" title={run.request_text}>
+        {run.request_text}
+      </p>
 
       {/* Mode + elapsed */}
       <div className="flex items-center gap-2 flex-wrap">

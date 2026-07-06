@@ -21,12 +21,23 @@ function contentKind(path: string): string {
 export function registerRunRoutes(app: FastifyInstance): void {
   app.get(`${V1}/runs`, async (req) => {
     const q = req.query as { project_path?: string; status?: string; limit?: string; cursor?: string };
-    return listRuns({
+    const page = listRuns({
       project_path: q.project_path,
       status: q.status as RunStatus | undefined,
       limit: q.limit ? Number(q.limit) : undefined,
       cursor: q.cursor,
     });
+    // Fill cost from the budgets ledger (scope run:<id>) — the runs table has
+    // no cost column, and "—" for every finished run misreads as free.
+    const costStmt = db().prepare("SELECT cost_usd FROM budgets WHERE scope = ?");
+    const items = (page.items as Array<Record<string, unknown>>).map((r) => {
+      if (r["cost_usd"] == null && typeof r["id"] === "string") {
+        const b = costStmt.get(`run:${r["id"]}`) as { cost_usd: number } | undefined;
+        if (b) return { ...r, cost_usd: b.cost_usd };
+      }
+      return r;
+    });
+    return { ...page, items };
   });
 
   // Sub-resources before the bare :id.
@@ -85,6 +96,16 @@ export function registerRunRoutes(app: FastifyInstance): void {
       if (jp == null || jp === "") { const { judge_provider: _jp, ...rest } = v; return rest; }
       return v;
     });
+    // The runs table never carried per-run cost; the budgets ledger does
+    // (scope run:<id>). Fill run.cost_usd from it so REST readers see the
+    // same number the SSE budget ticks report.
+    const runRow = tree.run as Record<string, unknown>;
+    if (runRow && (runRow["cost_usd"] == null)) {
+      const b = db()
+        .prepare("SELECT cost_usd FROM budgets WHERE scope = ?")
+        .get(`run:${id}`) as { cost_usd: number } | undefined;
+      if (b) runRow["cost_usd"] = b.cost_usd;
+    }
     return { ...tree, attempts, verdicts };
   });
 

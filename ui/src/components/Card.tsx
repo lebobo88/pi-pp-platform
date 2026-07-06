@@ -20,11 +20,13 @@ export function Card({ title, actions, flush, className, children, ...rest }: Ca
       {...rest}
     >
       {(title != null || actions != null) && (
-        <div className="flex items-center justify-between gap-3 border-b border-line-1 px-3 py-2">
-          <div className="text-[12px] font-medium uppercase tracking-wide text-ink-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line-1 px-3 py-2">
+          <div className="min-w-0 text-[12px] font-medium uppercase tracking-wide text-ink-2">
             {title}
           </div>
-          {actions != null && <div className="flex items-center gap-1.5">{actions}</div>}
+          {/* flex-wrap + justify-end: action rows (Retry / Override / Re-gate)
+              must never overflow the card into unclickable off-viewport space. */}
+          {actions != null && <div className="flex flex-wrap items-center justify-end gap-1.5">{actions}</div>}
         </div>
       )}
       <div className={cn(!flush && "p-3")}>{children}</div>

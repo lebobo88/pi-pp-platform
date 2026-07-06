@@ -21,6 +21,7 @@ import {
   db,
   loadProjectProfile,
   isClaudeTier,
+  finalizeRun,
   type Scope,
   type ClaudeTier,
 } from "@pp/core";
@@ -159,6 +160,25 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
 }
 
 /**
+ * A post-hoc stage pass can clear the LAST blocker of a surfaced run: when no
+ * stage remains un-passed, re-finalize the run so the run row doesn't read
+ * "surfaced" forever after the operator fixed it. finalizeRun's own guards
+ * (PP-VG-*) still apply — a downgrade is surfaced back to the caller's bus.
+ */
+function refinalizeRunIfClear(ctx: RunContext): void {
+  const open = db()
+    .prepare(`SELECT COUNT(*) AS n FROM stages WHERE run_id = ? AND status NOT IN ('passed', 'complete')`)
+    .get(ctx.run_id) as { n: number };
+  if (open.n > 0) return;
+  const result = finalizeRun({ run_id: ctx.run_id, status: "complete" });
+  emit(ctx, "run.finalized", {
+    status: result.effective_status,
+    requested_status: result.requested_status,
+    post_hoc: true,
+  });
+}
+
+/**
  * Judge-only re-run on a stage's most recent attempt (no regeneration). On a
  * fresh pass the stage is finalized passed; otherwise it is surfaced.
  */
@@ -174,6 +194,7 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
     const settled = await driveReadiness(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
     if (settled.action === "finalize") {
       const outcome = await finalizePassed(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
+      refinalizeRunIfClear(r.ctx);
       return { ok: true, stage_id: opts.stageId, outcome };
     }
     const outcome = await surface(r.ctx, opts.stageId, settled.action === "surface" ? settled.reason : "re-gate blocked by finalize readiness");
@@ -203,5 +224,6 @@ export async function retryStage(opts: PostHocOptions): Promise<PostHocResult> {
     r.artifactText,
     { budgetOverride: opts.override === true },
   );
+  if (outcome === "passed") refinalizeRunIfClear(r.ctx);
   return { ok: outcome !== "aborted", stage_id: opts.stageId, outcome };
 }

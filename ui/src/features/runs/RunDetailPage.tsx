@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/api/queryKeys";
 import { Page } from "@/layout/Page";
 import { Tabs } from "@/components/Tabs";
 import { EmptyState } from "@/components/EmptyState";
@@ -36,6 +38,18 @@ export function RunDetailPage() {
   const [tab, setTab] = useState<TabId>("pipeline");
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
   const pinnedRef = useRef(false);
+
+  // Keep the REST tree fresh while post-hoc work streams in: every discrete
+  // gate event (gen / verdict / surfaced — incl. operator retries on a
+  // finished run) refetches the run so attempts and verdicts appear without a
+  // manual reload. Debounced so an event burst causes one refetch.
+  const qc = useQueryClient();
+  const gateEventCount = overlay.gateEvents?.length ?? 0;
+  useEffect(() => {
+    if (!runId || gateEventCount === 0) return;
+    const t = setTimeout(() => void qc.invalidateQueries({ queryKey: qk.run(runId) }), 400);
+    return () => clearTimeout(t);
+  }, [gateEventCount, qc, runId]);
 
   const pipeline = useMemo(() => (tree ? buildPipeline(tree, overlay) : []), [tree, overlay]);
 

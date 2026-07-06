@@ -2940,6 +2940,15 @@ export function budgetStatus(scope?: string): unknown {
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Day-budget bucket key in LOCAL time (YYYY-MM-DD). UTC bucketing rolled the
+ * operator's "Today" spend to zero at 8 PM ET — a day budget is an operator
+ * concept and follows the operator's clock.
+ */
+export function localDayKey(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function ensureRunOpen(run_id: string): void {
   const run = db().prepare(`SELECT status FROM runs WHERE id = ?`).get(run_id) as
     | { status: RunStatus }
@@ -2958,7 +2967,7 @@ function tallyBudgets(
   tokens_out: number,
   cost_usd: number,
 ): void {
-  const day = new Date().toISOString().slice(0, 10);
+  const day = localDayKey();
   const stmt = db().prepare(
     `INSERT INTO budgets(scope, tokens_in, tokens_out, cost_usd, updated_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(scope) DO UPDATE SET
