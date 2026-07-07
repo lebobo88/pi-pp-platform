@@ -16,6 +16,7 @@
 export * from "./orchestrator/runs.js";
 export * from "./orchestrator/gates.js";
 export * from "./orchestrator/best-of-n.js";
+export * from "./orchestrator/derive-outcome.js";
 export * from "./orchestrator/taxonomy.js";
 export * from "./orchestrator/missability.js";
 export * from "./orchestrator/profiles.js";

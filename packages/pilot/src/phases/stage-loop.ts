@@ -27,6 +27,7 @@ import {
   runArtifactValidator,
   selectSkillsForStage,
   promoteArtifact,
+  resolveVerdict,
   type GateType,
   type Profile,
   type VerdictOutcome,
@@ -590,6 +591,15 @@ export async function judge(
   }
 
   const verdict = critiqueRes.parsed as { outcome: VerdictOutcome; critique_md?: string; score?: unknown };
+  // Deterministically derive the outcome from the numeric scores (judge label
+  // is advisory). resolveVerdict also sanitizes the score map so the persisted
+  // score_json is always the flat dimension map — including the fallback branch
+  // where no numeric dimensions survive and the judge label is used.
+  const resolved = resolveVerdict({
+    judge_outcome: verdict.outcome,
+    scores: verdict.score,
+    critique_md: verdict.critique_md,
+  });
   const judgeProvider = selection.provider || undefined;
   if (!judgeProvider) {
     // REQ-P-7: defensive log when the judge selection produced no provider.
@@ -600,9 +610,9 @@ export async function judge(
     judge_producer: selection.judge_producer,
     judge_model_id: selection.judge_model,
     rubric_id: selection.rubric_id ?? undefined,
-    outcome: verdict.outcome,
-    critique_md: verdict.critique_md,
-    score_json: verdict.score ?? critiqueRes.parsed,
+    outcome: resolved.outcome,
+    critique_md: resolved.critique_md,
+    score_json: resolved.score_json,
     judge_provider: judgeProvider,
     // v9 judge-usage: credit this critique's spend to the budget scopes and
     // record it on the verdict row (all optional — a test double without them
@@ -615,18 +625,19 @@ export async function judge(
     ctx,
     "verdict.recorded",
     {
-      outcome: verdict.outcome,
+      outcome: resolved.outcome,
       judge_producer: selection.judge_producer,
       judge_model: selection.judge_model,
       cross_vendor: rec.cross_vendor,
       escalated: selection.escalated,
       rubric_id: selection.rubric_id,
       judge_provider: judgeProvider,
+      ...(resolved.disagreed ? { judge_label: resolved.judge_label } : {}),
     },
     { stage_id, attempt_id },
   );
 
-  return { outcome: verdict.outcome, critique_md: verdict.critique_md ?? "" };
+  return { outcome: resolved.outcome, critique_md: resolved.critique_md };
 }
 
 // ── readiness / finalize ─────────────────────────────────────────────────────
