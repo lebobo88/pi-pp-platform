@@ -54,6 +54,14 @@ export function scopeRank(s: Scope): number {
  * triage scope at `standard` so a fresh build is never mistaken for a trivial
  * one-file edit. Established repos (non-empty dir) are left untouched.
  */
+/**
+ * The triage signal string a greenfield build carries in `signals[]`.
+ * Downstream phases (gate rubric selection, tier floor) key on this to make
+ * greenfield-vs-patch aware decisions. Kept as one exported constant so the
+ * producer (heuristicTriage) and consumers never drift on the literal.
+ */
+export const GREENFIELD_SIGNAL = "greenfield-build";
+
 export const GREENFIELD_REQUEST_RE =
   /\b(create|build|implement|make|scaffold|bootstrap|develop|generate|design|start|write)\b[\s\S]{0,60}?\b(app|application|game|website|web ?app|site|service|micro-?service|tool|platform|api|cli|bot|dashboard|extension|plugin|library|sdk|engine|prototype|mvp)\b/i;
 
@@ -127,7 +135,7 @@ export function heuristicTriage(opts: {
   // always recorded so the operator sees why the floor moved (or didn't).
   let floor: Scope = "trivial";
   if (opts.near_empty_dir && GREENFIELD_REQUEST_RE.test(text)) {
-    signals.push("greenfield-build");
+    signals.push(GREENFIELD_SIGNAL);
     floor = "standard";
     if (scopeRank(scope) < scopeRank(floor)) {
       signals.push(`greenfield-floor:${scope}->${floor}`);

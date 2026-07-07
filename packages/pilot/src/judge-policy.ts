@@ -55,6 +55,9 @@ export type JudgeSelectInput = {
   profile?: Profile | null;
   artifactKind?: string | null;
   rubricHint?: string | null;
+  /** True when the run carries the triage `greenfield` signal — swaps the
+   * minimality-bearing default code rubric for the scope-fidelity variant. */
+  greenfield?: boolean;
   /** True on a Reflexion retry — opens the escalated-judge lane. */
   retry?: boolean;
   /** Optional provider hint from a team stage's judge.model_pref. */
@@ -111,7 +114,7 @@ export class JudgePolicy {
   rubricIdFor(
     input: Pick<
       JudgeSelectInput,
-      "gateType" | "generatorProducer" | "generatorModel" | "promptKeywords" | "profile" | "artifactKind" | "rubricHint"
+      "gateType" | "generatorProducer" | "generatorModel" | "promptKeywords" | "profile" | "artifactKind" | "rubricHint" | "greenfield"
     >,
   ): string | null {
     return evaluateGate({
@@ -122,6 +125,7 @@ export class JudgePolicy {
       profile: input.profile ?? null,
       artifact_kind: input.artifactKind ?? null,
       rubric_hint: input.rubricHint ?? null,
+      greenfield: input.greenfield ?? false,
     }).rubric_id;
   }
 
@@ -134,6 +138,7 @@ export class JudgePolicy {
       profile: input.profile ?? null,
       artifact_kind: input.artifactKind ?? null,
       rubric_hint: input.rubricHint ?? null,
+      greenfield: input.greenfield ?? false,
     });
 
     const genProvider = input.generatorProvider ?? producerToProvider(input.generatorProducer);

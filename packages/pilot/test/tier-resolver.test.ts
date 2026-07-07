@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveTier, escalateTierForRetry, parseTierFlag } from "../src/tier-resolver.js";
+import { generationModelIdForTier } from "../src/generation-model.js";
 import { TierResolutionError } from "../src/errors.js";
 import type { ModelTierPolicy } from "@pp/core";
 
@@ -69,6 +70,49 @@ describe("resolveTier — layered precedence", () => {
 
   it("throws when the agent has no tier default", () => {
     expect(() => resolveTier({ ...base, agent: "nonexistent-agent" })).toThrow(TierResolutionError);
+  });
+});
+
+describe("resolveTier — greenfield major tier floor (R7)", () => {
+  it("floors greenfield+major to the ladder top (engineer sonnet → opus) with a trace entry", () => {
+    const r = resolveTier({ ...base, agent: "engineer", scope: "major", greenfield: true });
+    expect(r.tier).toBe("opus");
+    expect(r.model_id).toBe(generationModelIdForTier("opus"));
+    expect(r.trace.some((t) => t.layer === "greenfield_floor")).toBe(true);
+  });
+
+  it("does NOT floor greenfield at standard scope", () => {
+    const r = resolveTier({ ...base, agent: "engineer", scope: "standard", greenfield: true });
+    expect(r.tier).toBe("sonnet");
+    expect(r.trace.some((t) => t.layer === "greenfield_floor")).toBe(false);
+  });
+
+  it("does NOT floor a non-greenfield major run", () => {
+    const r = resolveTier({ ...base, agent: "engineer", scope: "major", greenfield: false });
+    expect(r.tier).toBe("sonnet");
+    expect(r.trace.some((t) => t.layer === "greenfield_floor")).toBe(false);
+  });
+
+  it("an explicit tier_cap still caps a floored greenfield stage (cap wins)", () => {
+    const r = resolveTier({
+      ...base,
+      agent: "engineer",
+      scope: "major",
+      greenfield: true,
+      flags: { tierCap: "sonnet" },
+    });
+    expect(r.tier).toBe("sonnet");
+    // The floor still fired first, then the CLI cap clamped it back down.
+    expect(r.trace.some((t) => t.layer === "greenfield_floor")).toBe(true);
+    expect(r.trace.some((t) => t.layer === "cli_cap")).toBe(true);
+  });
+
+  it("a profile default_cap also clamps a floored greenfield stage (cap wins)", () => {
+    const policy: ModelTierPolicy = { default_cap: "sonnet" };
+    const r = resolveTier({ ...base, agent: "engineer", scope: "major", greenfield: true, profilePolicy: policy });
+    expect(r.tier).toBe("sonnet");
+    expect(r.trace.some((t) => t.layer === "greenfield_floor")).toBe(true);
+    expect(r.trace.some((t) => t.layer === "profile_cap")).toBe(true);
   });
 });
 

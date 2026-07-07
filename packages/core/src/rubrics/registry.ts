@@ -443,6 +443,40 @@ Outcome:
 - fail: definition or grain < 0.5 (without these the metric isn't operable).`,
     schema_json: SCORE_SCHEMA_GENERIC,
   },
+  {
+    id: "code-greenfield@1",
+    kind: "code_style",
+    version: "1",
+    title: "Greenfield code build quality (scope-fidelity, not minimality)",
+    source_url: "https://martinfowler.com/bliki/Yagni.html",
+    markdown: `# Greenfield code build rubric
+
+Use this rubric when the run is a **greenfield build** — "create / build an
+app, game, service, …" against an empty or near-empty target — rather than a
+patch to existing code. The default code fallback grades **minimality** (the
+smallest-possible diff), which is the wrong pressure when the task is to bring
+something new into existence: a from-scratch app legitimately adds many files
+and cannot be judged as if it were a surgical patch. This rubric replaces that
+pressure with **scope_fidelity**.
+
+Score 0..1 per dimension:
+- **correctness**: the build does what the request asked — it runs / compiles,
+  the core happy path works, and the primary acceptance criteria are met.
+- **completeness**: the requested surface is actually present — the features
+  named in the request exist, not a stub, placeholder, or partial skeleton.
+- **scope_fidelity**: built exactly what was asked, no more. Full marks for
+  covering the request without inventing unrequested features, speculative
+  abstractions, or gold-plating (YAGNI). This is NOT minimality: adding the
+  files and modules a from-scratch build genuinely needs is expected and is
+  never penalized — only *unrequested scope expansion* scores this dimension
+  down.
+
+Outcome (the standard envelope):
+- pass: every dimension >= 0.7.
+- revise: any dimension in [0.5, 0.7).
+- fail: any dimension < 0.5.`,
+    schema_json: SCORE_SCHEMA_GENERIC,
+  },
   // ─── Game-dev rubrics ────────────────────────────────────────────────
   {
     id: "game-accessibility-guidelines@1",

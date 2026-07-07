@@ -29,6 +29,7 @@ import {
   promoteArtifact,
   resolveVerdict,
   getSmokeResults,
+  GREENFIELD_SIGNAL,
   type GateType,
   type Profile,
   type VerdictOutcome,
@@ -284,8 +285,15 @@ export function resolveStageRubricMd(
     profile: (ctx.profileName as Profile | undefined) ?? null,
     artifactKind: stage.artifact_kind ?? null,
     rubricHint: stage.rubricHint ?? null,
+    greenfield: runIsGreenfield(ctx),
   });
   return rubricId ? getRubric(rubricId)?.markdown ?? undefined : undefined;
+}
+
+/** True when the run carries the triage `greenfield` signal — drives the
+ * greenfield-aware rubric selection and generator tier floor. */
+export function runIsGreenfield(ctx: RunContext): boolean {
+  return ctx.signals.includes(GREENFIELD_SIGNAL);
 }
 
 /** Drives one stage to a terminal outcome. */
@@ -299,6 +307,7 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
     agent: stage.agent,
     stageKind: stage.kind,
     scope: ctx.scope,
+    greenfield: runIsGreenfield(ctx),
     teamStageModelTier: stage.teamStageModelTier,
     profilePolicy: ctx.profile?.model_tier_policy ?? null,
     ladderOverride: ctx.ladderOverride,
@@ -604,6 +613,7 @@ export async function judge(
       profile: (ctx.profileName as Profile | undefined) ?? null,
       artifactKind: stage.artifact_kind ?? null,
       rubricHint: stage.rubricHint ?? null,
+      greenfield: runIsGreenfield(ctx),
       retry,
     });
   } catch (err) {

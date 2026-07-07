@@ -22,6 +22,7 @@ import {
   shiftTier,
   tierIndex,
   isClaudeTier,
+  TIER_ORDER,
   type ClaudeTier,
   type ModelTierPolicy,
 } from "@pp/core";
@@ -87,6 +88,7 @@ export type TierTraceEntry = {
     | "scope_adjust"
     | "profile_per_stage"
     | "profile_cap"
+    | "greenfield_floor"
     | "cli_cap"
     | "cli_floor"
     | "fable_capability_gate"
@@ -109,6 +111,13 @@ export type TierResolveInput = {
   stageKind: string;
   /** Triage/taxonomy scope, feeds scope_adjust. */
   scope: Scope;
+  /**
+   * True when the run carries the triage `greenfield` signal. A greenfield
+   * build at `major` scope floors the generator tier at the ladder's top tier
+   * (R7) — strongest model on a from-scratch build. A no-op for non-greenfield
+   * runs or any scope other than `major`.
+   */
+  greenfield?: boolean;
   /** team_yaml generator.model_tier, when a team stage pins it. */
   teamStageModelTier?: ClaudeTier;
   /** Profile model_tier_policy, if any. */
@@ -159,6 +168,28 @@ export function resolveTier(input: TierResolveInput): TierResolution {
   if (delta !== 0) {
     tier = shiftTier(tier, delta);
     trace.push({ layer: "scope_adjust", scope: input.scope, delta, tier });
+  }
+
+  // Greenfield major floor (R7): a from-scratch "build an app" at major scope
+  // gets the ladder's top tier — the strongest model on the hardest work. This
+  // is a floor, not an assignment: it only lifts an on-ladder tier that sits
+  // below the top, and it is applied BELOW the profile/CLI cap layers so an
+  // explicit frontmatter/team/profile/CLI cap still clamps it back down and
+  // wins per the documented precedence. Off-ladder tiers (fable) are untouched.
+  const topTier = TIER_ORDER[TIER_ORDER.length - 1]!;
+  if (
+    input.greenfield &&
+    input.scope === "major" &&
+    tierIndex(tier) >= 0 &&
+    tierIndex(tier) < tierIndex(topTier)
+  ) {
+    tier = topTier;
+    trace.push({
+      layer: "greenfield_floor",
+      tier,
+      scope: input.scope,
+      reason: "greenfield major build floored to the ladder's top tier",
+    });
   }
 
   // Layer 4: profile policy (per_stage_override beats default_cap). Skipped
