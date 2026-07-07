@@ -210,11 +210,17 @@ export function resolveTier(input: TierResolveInput): TierResolution {
  * stays; off-ladder unchanged). The CLI floor still applies on retry (ladder
  * tiers only); the CLI cap does NOT — escalation is intentional. Returns the
  * retry tier, model id, and the trace entry to append.
+ *
+ * `rotationIndex` selects the model within the escalated tier's pool (when the
+ * effective ladder configures one): a retry passes its attempt's retry_index so
+ * it draws the NEXT pool model rather than repeating the first attempt's. With
+ * no pool configured the index is ignored and the single-model id is unchanged.
  */
 export function escalateTierForRetry(
   initialTier: ClaudeTier,
   flags: TierFlags,
   verdictOutcome: string,
+  rotationIndex?: number,
 ): { tier: ClaudeTier; model_id: string; trace: TierTraceEntry } {
   let retryTier = shiftTier(initialTier, +1);
   if (
@@ -226,7 +232,7 @@ export function escalateTierForRetry(
   }
   return {
     tier: retryTier,
-    model_id: generationModelIdForTier(retryTier),
+    model_id: generationModelIdForTier(retryTier, rotationIndex),
     trace: { layer: "retry", tier: retryTier, initial: initialTier, reason: `verdict:${verdictOutcome}` },
   };
 }

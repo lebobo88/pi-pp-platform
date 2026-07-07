@@ -92,6 +92,16 @@ export type ProfileSpec = {
   required_validators_strict?: string[];
   // Tier-aware Claude delegation policy. See ModelTierPolicy above.
   model_tier_policy?: ModelTierPolicy;
+  // Project-profile override of the global generation ladder: Claude tier →
+  // concrete model id. Layered ABOVE the operator's harness_settings ladder and
+  // the catalog default (see pilot generation-model.ts:effectiveLadderTiers).
+  // A partial map only overrides the tiers it names.
+  ladder?: Partial<Record<ClaudeTier, string>>;
+  // Project-profile per-tier model POOLS for rotation (Reflexion retry +
+  // best-of candidates). Same rotation semantics as the catalog ladder's
+  // tier_pools; layered ABOVE the catalog pools. Entries may be
+  // provider-qualified ids like "openai/gpt-5.5".
+  tier_pools?: Partial<Record<ClaudeTier, string[]>>;
   // Profile-specific seed content for AGENTS.md (the cross-tool behavioral
   // contract /pp:run step 5c scaffolds via ensure_agents_md). The harness
   // passes these through verbatim to mcp__pp_harness__ensure_agents_md so
@@ -155,6 +165,8 @@ export function resolveProfile(spec: ProfileSpec, seen: Set<string> = new Set())
       ...(resolvedBase.required_validators_strict ?? []),
     ]);
     merged.model_tier_policy = mergeModelTierPolicy(merged.model_tier_policy, resolvedBase.model_tier_policy);
+    merged.ladder = mergeTierRecord(merged.ladder, resolvedBase.ladder);
+    merged.tier_pools = mergeTierRecord(merged.tier_pools, resolvedBase.tier_pools);
     merged.agents_md_template = mergeAgentsMdTemplate(merged.agents_md_template, resolvedBase.agents_md_template);
   }
 
@@ -179,6 +191,8 @@ export function resolveProfile(spec: ProfileSpec, seen: Set<string> = new Set())
     ...(spec.required_validators_strict ?? []),
   ]);
   merged.model_tier_policy = mergeModelTierPolicy(merged.model_tier_policy, spec.model_tier_policy);
+  merged.ladder = mergeTierRecord(merged.ladder, spec.ladder);
+  merged.tier_pools = mergeTierRecord(merged.tier_pools, spec.tier_pools);
   merged.agents_md_template = mergeAgentsMdTemplate(merged.agents_md_template, spec.agents_md_template);
   if (spec.notes) merged.notes = spec.notes;
 
@@ -219,6 +233,20 @@ function mergeModelTierPolicy(
       ...(b?.scope_adjust ?? {}),
     },
   };
+}
+
+/**
+ * Per-tier shallow merge for a profile's `ladder` / `tier_pools` overrides:
+ * the later side (`b`) wins on a tier collision, taking that tier's value
+ * (model id or pool) wholesale. Returns undefined when both sides are absent so
+ * a profile without any override never materializes an empty record.
+ */
+function mergeTierRecord<V>(
+  a: Partial<Record<ClaudeTier, V>> | undefined,
+  b: Partial<Record<ClaudeTier, V>> | undefined,
+): Partial<Record<ClaudeTier, V>> | undefined {
+  if (!a && !b) return undefined;
+  return { ...(a ?? {}), ...(b ?? {}) };
 }
 
 function mergeStringArrayMap(
