@@ -612,6 +612,133 @@ export const CHECK_DEFINITIONS: Array<{
   },
 ];
 
+/**
+ * R1 — producibility map. For each missability check, the artifact KINDS and
+ * taxonomy SECTIONS a run must plan or produce for the check to have any chance
+ * of gathering evidence. Mirrors each check's `triggers` predicate but records
+ * only the SPECIFIC producing surface (not the `|| true` always-on fallbacks
+ * that scan generic text).
+ *
+ * Consumed by finalize_run's PP-VG-4 gate: a REQUIRED check whose producing
+ * surface has an EMPTY intersection with the run's planned artifacts/stages is
+ * structurally impossible to satisfy — no stage in the pipeline can ever emit
+ * its evidence. Such a check is demoted to ADVISORY: it still runs and records a
+ * result, but it can no longer block finalize(complete) or downgrade the run.
+ * This generalises the trivial-scope skip landed in e8662ab (which special-cased
+ * only the minimum pipeline) to every scope and every declared-required source.
+ *
+ * `{ always: true }` marks a check whose evidence any run can produce — generic
+ * text scans (nfrs / doc-ownership / decision-logging) and filesystem or
+ * constitution checks (agents-md-present, constitution-attestation). These are
+ * never demoted. A check id ABSENT from this map ALSO defaults to producible
+ * (see {@link isCheckProducible}) — unknown checks keep full blocking behaviour
+ * so the demotion is fail-safe for governance and never silently relaxes a check
+ * the pipeline could actually satisfy.
+ */
+export type CheckProducibility = { always?: true; kinds?: string[]; sections?: string[] };
+
+export const CHECK_PRODUCIBILITY: Partial<Record<CheckId, CheckProducibility>> = {
+  // ── Core Section-6 library ──
+  "nfrs-declared": { always: true },
+  "authz-model": { sections: ["4.9"], kinds: ["threat_model", "permission_matrix"] },
+  "ui-error-empty-loading": { sections: ["4.4"], kinds: ["screen_state_matrix", "wireframes"] },
+  "workflow-exceptions": { sections: ["4.2", "4.3"] },
+  "retention-deletion": { sections: ["4.5", "4.9"], kinds: ["retention_policy"] },
+  "schema-evolution": { sections: ["4.5", "4.11"], kinds: ["migration_plan"] },
+  "analytics-semantics": { sections: ["4.5"], kinds: ["event_catalog"] },
+  "operational-ownership": { sections: ["4.11", "4.12"] },
+  "feature-flag-lifecycle": { sections: ["4.11"] },
+  "rollout-reversibility": { sections: ["4.11"], kinds: ["rollout_plan"] },
+  "test-data-management": { sections: ["4.10"], kinds: ["test_plan"] },
+  "third-party-failure": { sections: ["4.7", "4.9"], kinds: ["openapi"] },
+  "doc-ownership": { always: true },
+  "supportability": { sections: ["4.12"] },
+  "accessibility-localization": { sections: ["4.4"], kinds: ["screen_state_matrix"] },
+  "security-review-timing": { sections: ["4.9"] },
+  "supply-chain-integrity": { sections: ["4.9"], kinds: ["sbom"] },
+  "deprecation-sunset": { sections: ["4.16"], kinds: ["eol_plan"] },
+  "decision-logging": { always: true },
+  "ai-evals-hitl": { sections: ["4.15"], kinds: ["ai_system_spec"] },
+  "agents-md-present": { always: true },
+  "browser-validation-evidence": { sections: ["4.10"], kinds: ["browser_validation_report"] },
+
+  // ── Game-dev: console / TRC / XR / Lotcheck ──
+  "controller-disconnect-handling": { kinds: ["gdd", "tech_design_doc", "cert_submission_packet"] },
+  "save-data-atomicity": { kinds: ["gdd", "tech_design_doc", "code"] },
+  "save-format-versioning": { kinds: ["gdd", "tech_design_doc"] },
+  "suspend-resume-handling": { kinds: ["cert_submission_packet", "tech_design_doc"] },
+  "language-switch-ux": { kinds: ["localization_plan", "cert_submission_packet"] },
+  "achievement-server-authority": { kinds: ["cert_submission_packet", "tech_design_doc"] },
+  "profile-switch-stability": { kinds: ["cert_submission_packet", "tech_design_doc"] },
+  "region-content-gating": { kinds: ["cert_submission_packet"] },
+  "boot-time-budget": { kinds: ["performance_profile", "cert_submission_packet"] },
+  "mature-content-age-gate": { kinds: ["cert_submission_packet", "iarc_rating_questionnaire"] },
+
+  // ── Game-dev: online / netcode ──
+  "client-trusted-input": { kinds: ["netcode_topology_design", "tech_design_doc"] },
+  "determinism-claimed-not-enforced": { kinds: ["netcode_topology_design"] },
+  "latency-jitter-visualization": { kinds: ["netcode_topology_design"] },
+  "host-migration-recovery": { kinds: ["netcode_topology_design"] },
+
+  // ── Game-dev: live-service / monetization / legal ──
+  "lootbox-jurisdiction-declared": { kinds: ["economy_spreadsheet", "loot_table"] },
+  "lootbox-drop-rates-published": { kinds: ["economy_spreadsheet", "loot_table"] },
+  "coppa-real-money-under-13": { kinds: ["economy_spreadsheet", "dpia"] },
+  "coppa-persistent-id-under-13": { kinds: ["dpia", "data_egress_review"] },
+  "gdpr-k-eu-under-16": { kinds: ["dpia", "data_egress_review"] },
+
+  // ── Game-dev: accessibility ──
+  "subtitles-cinematics": { kinds: ["accessibility_plan", "art_bible", "dialogue_tree_spec"] },
+  "control-remap-core": { kinds: ["accessibility_plan", "mechanic_spec"] },
+  "color-only-information": { kinds: ["accessibility_plan", "art_bible"] },
+  "flashing-strobe-control": { kinds: ["accessibility_plan"] },
+  "timing-accessibility": { kinds: ["accessibility_plan"] },
+  "text-size-tv-distance": { kinds: ["accessibility_plan", "art_bible"] },
+  "accessibility-gag-basic": { sections: ["4.4"], kinds: ["accessibility_plan"] },
+
+  // ── Game-dev: IP / asset / AI provenance ──
+  "audio-license-record": { kinds: ["sound_design_doc", "art_bible"] },
+  "font-embedding-license": { kinds: ["art_bible", "accessibility_plan"] },
+  "ai-voice-consent-record": { kinds: ["sound_design_doc", "dialogue_tree_spec"] },
+  "steam-ai-disclosure-file": { kinds: ["build_release_plan", "ai_system_spec"] },
+  "middleware-licensing-threshold": { kinds: ["sound_design_doc", "tech_design_doc"] },
+  "ai-provenance-record": {
+    kinds: ["image", "audio", "model_3d", "texture", "asset_pack", "gen_ai_asset", "sprite", "video"],
+  },
+
+  // ── Game-dev: perf ──
+  "perf-budget-evidence": { kinds: ["performance_profile"] },
+
+  // ── T2 — Constitution attestation ──
+  // Evidence is the on-disk CONSTITUTION.md, not a pipeline artifact — a
+  // required release/retirement run can always produce it. Never demote.
+  "constitution-attestation": { always: true },
+};
+
+/**
+ * R1 — true when a run whose planned artifact kinds / taxonomy sections are the
+ * given sets could conceivably produce evidence for `checkId`. Empty
+ * intersection ⇒ structurally-impossible ⇒ demote to advisory at PP-VG-4.
+ *
+ * Fail-safe for governance:
+ *   - a check id ABSENT from CHECK_PRODUCIBILITY defaults to producible;
+ *   - an `{ always: true }` entry is always producible.
+ * Only checks with an explicit kinds/sections surface can be demoted, and only
+ * when NONE of that surface is present in the run's plan.
+ */
+export function isCheckProducible(
+  checkId: string,
+  plannedKinds: Set<string>,
+  plannedSections: Set<string>,
+): boolean {
+  const p = (CHECK_PRODUCIBILITY as Record<string, CheckProducibility | undefined>)[checkId];
+  if (!p) return true;          // unknown check → producible (fail-safe)
+  if (p.always) return true;
+  for (const k of p.kinds ?? []) if (plannedKinds.has(k)) return true;
+  for (const s of p.sections ?? []) if (plannedSections.has(s)) return true;
+  return false;
+}
+
 type ArtifactBundle = {
   path: string;
   kind: string | null;

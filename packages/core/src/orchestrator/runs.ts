@@ -44,6 +44,7 @@ import { analyzeAndPropose } from "./autogenesis-analyzer.js";
 import { constitutionSha } from "./constitution.js";
 import { getTeam } from "./teams.js";
 import { getForum } from "./forums.js";
+import { isCheckProducible } from "./missability.js";
 import { isCliLoggedIn } from "../providers/cli-login.js";
 
 const now = () => new Date().toISOString();
@@ -2155,9 +2156,15 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   })()) {
     // Read all three sources for the required check set.
     const vg4Row = db()
-      .prepare(`SELECT profile_snapshot_json, team, forum, project_path FROM runs WHERE id = ?`)
+      .prepare(`SELECT profile_snapshot_json, team, forum, project_path, taxonomy_mapping_json FROM runs WHERE id = ?`)
       .get(input.run_id) as
-      | { profile_snapshot_json: string | null; team: string | null; forum: string | null; project_path: string }
+      | {
+          profile_snapshot_json: string | null;
+          team: string | null;
+          forum: string | null;
+          project_path: string;
+          taxonomy_mapping_json: string | null;
+        }
       | undefined;
     if (!vg4Row) throw new Error(`run ${input.run_id} not found during VG-4 resolution`);
 
@@ -2282,18 +2289,101 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       }
     }
 
+    // ── R1: producibility demotion ────────────────────────────────────────
+    // Generalises the trivial-scope skip from e8662ab to every scope. A REQUIRED
+    // check whose producing artifact kinds / taxonomy sections have an EMPTY
+    // intersection with this run's PLANNED surface can never gather evidence — no
+    // stage in the pipeline emits what it inspects (data-proven offenders:
+    // deprecation-sunset 302/302, all game-cert checks 243/243). Such a check is
+    // demoted to ADVISORY: it still ran and its row is recorded, but it no longer
+    // blocks finalize(complete). Producible checks keep full standard/major
+    // governance — this only removes structurally-impossible requirements.
+    //
+    // Planned surface (fail-safe — the more we count as planned, the fewer
+    // demotions): taxonomy sections[].id (sections) ∪ taxonomy required_artifacts
+    // ∪ profile required_artifacts ∪ actually-archived artifact kinds (kinds).
+    const plannedSections = new Set<string>();
+    const plannedKinds = new Set<string>();
+    if (vg4Row.taxonomy_mapping_json?.trim()) {
+      try {
+        const tax = JSON.parse(vg4Row.taxonomy_mapping_json) as {
+          sections?: Array<{ id?: unknown; required_artifacts?: unknown }>;
+        };
+        for (const s of tax.sections ?? []) {
+          const sid = s?.id;
+          if (typeof sid === "string") plannedSections.add(sid);
+          const reqs = s?.required_artifacts;
+          if (Array.isArray(reqs)) {
+            for (const k of reqs) if (typeof k === "string") plannedKinds.add(k);
+          }
+        }
+      } catch { /* malformed taxonomy → no planned surface from this source */ }
+    }
+    if (vg4Row.profile_snapshot_json?.trim()) {
+      try {
+        const prof = JSON.parse(vg4Row.profile_snapshot_json) as { required_artifacts?: unknown };
+        if (Array.isArray(prof.required_artifacts)) {
+          for (const k of prof.required_artifacts) if (typeof k === "string") plannedKinds.add(k);
+        }
+      } catch { /* already fail-closed above; ignore here */ }
+    }
+    for (const r of db()
+      .prepare(`SELECT DISTINCT kind FROM artifacts WHERE run_id = ? AND kind IS NOT NULL`)
+      .all(input.run_id) as Array<{ kind: string | null }>) {
+      if (r.kind) plannedKinds.add(r.kind);
+    }
+
+    // Partition required checks into producible (still blocking) and
+    // unproducible (demoted to advisory). Log + annotate each demotion so it is
+    // visible in the check record and the run log.
+    const producibleRequired = new Set<string>();
+    for (const checkId of requiredCheckIds) {
+      if (isCheckProducible(checkId, plannedKinds, plannedSections)) {
+        producibleRequired.add(checkId);
+        continue;
+      }
+      const reason =
+        `no planned artifact/stage can produce its evidence ` +
+        `(planned kinds: [${[...plannedKinds].join(", ")}], sections: [${[...plannedSections].join(", ")}])`;
+      log.info(
+        { run_id: input.run_id, check_id: checkId },
+        `PP-VG-4 advisory_unproducible: required missability check '${checkId}' demoted to advisory — ${reason}. ` +
+          `It still ran and its result is recorded, but it no longer blocks finalize(complete).`,
+      );
+      // Annotate the latest persisted row for this check so the demotion is
+      // visible in the check record (additive: a marker appended to evidence_path;
+      // no schema change).
+      try {
+        const latest = db()
+          .prepare(
+            `SELECT id, evidence_path FROM missability_checks
+              WHERE run_id = ? AND check_id = ?
+              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(input.run_id, checkId) as { id: string; evidence_path: string | null } | undefined;
+        if (latest) {
+          const marker = `[advisory_unproducible: ${reason}]`;
+          const next = latest.evidence_path ? `${latest.evidence_path} ${marker}` : marker;
+          db()
+            .prepare(`UPDATE missability_checks SET evidence_path = ? WHERE id = ?`)
+            .run(next, latest.id);
+        }
+      } catch { /* annotation is best-effort; the log line is the durable record */ }
+    }
+
     // Query the latest persisted row per check_id using rowid as the insertion
     // tiebreak so same-millisecond ties are broken deterministically by insertion
     // order (the truly-last-inserted row wins). Uses a correlated subquery rather
     // than GROUP BY / HAVING which can pick a non-last row on ties.
     // Re-use persisted rows — do NOT re-run runMissabilityChecks.
-    if (requiredCheckIds.size > 0) {
+    // Only PRODUCIBLE required checks can block; unproducible ones were demoted above.
+    if (producibleRequired.size > 0) {
       const latestChecks = db()
         .prepare(
           `SELECT check_id, status
              FROM missability_checks m
             WHERE run_id = ?
-              AND check_id IN (${[...requiredCheckIds].map(() => "?").join(", ")})
+              AND check_id IN (${[...producibleRequired].map(() => "?").join(", ")})
               AND rowid = (
                 SELECT rowid FROM missability_checks
                  WHERE run_id = m.run_id AND check_id = m.check_id
@@ -2301,7 +2391,7 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
                  LIMIT 1
               )`,
         )
-        .all(input.run_id, ...[...requiredCheckIds]) as Array<{ check_id: string; status: string }>;
+        .all(input.run_id, ...[...producibleRequired]) as Array<{ check_id: string; status: string }>;
 
       // Build a map of latest status per check_id.
       const latestStatusById = new Map<string, string>(
@@ -2309,7 +2399,7 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       );
 
       const failedRequired: string[] = [];
-      for (const checkId of requiredCheckIds) {
+      for (const checkId of producibleRequired) {
         const status = latestStatusById.get(checkId);
         // A required check with no persisted row counts as 'fail' (hasn't run = unknown = fail-closed).
         if (!status || status === "fail") {
