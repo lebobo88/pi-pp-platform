@@ -131,7 +131,27 @@ Sequencing note: R1+R2 are pure correctness fixes to the harness's own accountin
 
 ---
 
-## 5. Reproduction
+## 5. Addendum (2026-07-06/07): live confirmation during the Phase-2 dispatches
+
+Driving the Phase-2 features through hydra→pp produced 11 dispatches and independently reproduced most root causes live:
+
+| Failure observed | Runs | Maps to |
+|---|---|---|
+| Goal prose mentioning a repo silently targets the wrong repo (needs `--repo`) | 110d2296 | process |
+| 600s generation cap kills any multi-package task ($0 spent, all candidates) | run_iLlnxL2WYAmC | RC-adjacent (PP-VG-5 era) |
+| Auto-detected smoke (`npm test` in a bare worktree) can never pass → judged winner destroyed | run_J9239KN3At0H, run_VH7qKT0n_CD0 | **RC1** |
+| Merge call exceeded the dispatcher's 120s tool timeout → "merge failed: unknown" → passed stage surfaced, winner deleted | run_9wpKjYaV0RIn | **RC1** |
+| Winner selection is smoke-blind: judge's Borda pick (tests failing) chosen over the candidate whose tests passed; both discarded | run_eawskOzIx3TS | **RC1/R1** |
+| Judge withheld pass for "regression confidence" on code whose tests the harness itself had already run green (judge never sees smoke evidence) | run_fL4GeNrIRfaS | **RC3/RC5-adjacent** |
+| Triage scoped "implement calc.js" as trivial → docs-only pipeline, no code stage | run_URGIm9oQxcJ5 | **RC6/R5** |
+| Spec gate burned both attempts on RFC-2119 phrasing nits (author never shown the rubric) — twice | run_C62HDM-R9XGy, run_STHvuiMG6Op8 | **RC3/R3** |
+| Legitimate catch: both candidates shared a real precedence bug; cross-vendor judge flagged it consistently | run_4G36XAdqStzu | judge working |
+
+**Countervailing evidence — what fixed the throughput**: after switching to small, single-package goals with explicit compatibility contracts and a verification note pointing at the harness's own smoke gate, 4 of the last 5 dispatches merged on the first attempt (2b-core, 2b-pilot, 2c-part1, 2c-part2-retry). Dispatch granularity and generator-visible acceptance criteria are first-pass-quality levers we control today, without any harness code changes — which is exactly what R3 (show the generator the rubric) would systematize.
+
+**New recommendation from live evidence — R9: judge sees execution evidence.** Attach recorded smoke/test results (when available) to the judge's context, and re-order the hydra best-of loop to run smoke BEFORE winner selection so Borda can only choose among execution-verified candidates. Locus: hydra `_drive_best_of_loop` ordering + `critique()` contextMd. This directly addresses the run_eawskOzIx3TS and run_fL4GeNrIRfaS losses (~$26 of judged work discarded).
+
+## 6. Reproduction
 
 All queries run read-only against `~/.pair-programmer/state.db` (`file:...?mode=ro`). Key ones:
 
