@@ -28,6 +28,7 @@ import {
   selectSkillsForStage,
   promoteArtifact,
   resolveVerdict,
+  getSmokeResults,
   type GateType,
   type Profile,
   type VerdictOutcome,
@@ -310,6 +311,12 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
   // id shown to the generator is the id recorded on the verdict.
   const rubricMd = resolveStageRubricMd(ctx, stage, resolution.model_id);
 
+  // Capture the stage's ORIGINAL base sha ONCE, before attempt 0's auto-commit
+  // moves HEAD. A later Reflexion retry judges against the cumulative diff from
+  // this base to HEAD (the whole change since the stage started) rather than
+  // just the incremental attempt0→retry diff — see buildRetryContext.
+  const stageBaseSha = gitHeadSha(ctx.projectPath);
+
   // ── Attempt 0: generate → judge ──────────────────────────────────────────
   const gen0 = await generate(ctx, stage, stage_id, resolution.model_id, resolution.tier, 0, undefined, [], undefined, rubricMd);
 
@@ -323,7 +330,7 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
       { reason: "attempt produced zero file changes — judge skipped", gate_type: stage.gate_type, zero_change: true },
       { stage_id },
     );
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText);
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText, { stageBaseSha });
   }
 
   const judged0 = await judge(ctx, stage, stage_id, gen0.attempt_id, resolution.model_id, gen0.artifactText, false);
@@ -334,11 +341,11 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
     if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen0.attempt_id, gen0);
     if (settled.action === "surface") return surface(ctx, stage_id, settled.reason);
     // action === "retry": fall through to Reflexion using the blocker message.
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText);
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText, { stageBaseSha });
   }
 
   // fail / revise → Reflexion ×1.
-  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText);
+  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText, { stageBaseSha });
 }
 
 // ── generation ───────────────────────────────────────────────────────────────
@@ -576,6 +583,10 @@ export async function judge(
   generatorModel: string,
   artifactText: string,
   retry: boolean,
+  /** Cumulative retry context (prior critique, whole-stage diff, execution
+   * evidence) surfaced to the judge on a Reflexion retry. Omitted on first
+   * attempts so their judging stays byte-identical. */
+  contextMd?: string,
 ): Promise<JudgeOut> {
   let selection;
   try {
@@ -611,6 +622,7 @@ export async function judge(
     judgeModel,
     rubricMd,
     artifactText,
+    contextMd,
     cwd: ctx.projectPath,
     signal: ctx.signal,
   });
@@ -805,6 +817,69 @@ async function abortStage(ctx: RunContext, stage_id: string, reason: string): Pr
 
 // ── Reflexion ×1 ──────────────────────────────────────────────────────────────
 
+/**
+ * Per-section char caps for the retry judge's cumulative context (sum ≈ 8k).
+ * The whole-stage diff gets the bulk; the prior critique and execution evidence
+ * keep guaranteed room so a large diff can never crowd them out of the budget.
+ */
+const RETRY_CTX_DIFF_CAP = 4_700;
+const RETRY_CTX_CRITIQUE_CAP = 2_500;
+const RETRY_CTX_EVIDENCE_CAP = 800;
+const RETRY_CTX_TRUNC = "\n…[truncated to fit judge context budget]";
+
+/** heading + body, body truncated (with a marker) to `cap` total chars. */
+function retryContextSection(heading: string, body: string, cap: number): string {
+  const room = Math.max(0, cap - heading.length - 1 - RETRY_CTX_TRUNC.length);
+  const trimmed = body.length > room ? body.slice(0, room) + RETRY_CTX_TRUNC : body;
+  return `${heading}\n${trimmed}`;
+}
+
+/**
+ * Build the cumulative context a Reflexion retry judge sees so it grades the
+ * retry against the whole change since the stage started — with the prior
+ * critique it claims to address and any recorded execution evidence — instead
+ * of only the incremental diff between attempt 0's commit and the retry commit
+ * (which made it re-flag resolved issues and miss regressions; code-gate retry
+ * rescue was only 47%). Budgeted to ~8k chars with per-section truncation
+ * markers. Returns undefined when no section has content, so the judge then
+ * sees no Context block — byte-identical to a first attempt.
+ */
+export function buildRetryContext(
+  ctx: RunContext,
+  stage_id: string,
+  stageBaseSha: string | null | undefined,
+  priorCritique: string,
+): string | undefined {
+  const sections: string[] = [];
+
+  // (a) The whole change since the stage started (harness paths excluded, same
+  // exclusions as the archived attempt diff). Omitted with no base (post-hoc).
+  const cumulativeDiff = stageBaseSha ? gitDiffRange(ctx.projectPath, stageBaseSha) : null;
+  if (cumulativeDiff && cumulativeDiff.trim().length > 0) {
+    sections.push(retryContextSection("## Cumulative diff since stage start", cumulativeDiff, RETRY_CTX_DIFF_CAP));
+  }
+
+  // (b) The failed verdict's critique — the retry claims to address it.
+  if (priorCritique.trim().length > 0) {
+    sections.push(
+      retryContextSection(
+        "## Prior critique (the retry claims to address this — verify rather than re-flag)",
+        priorCritique,
+        RETRY_CTX_CRITIQUE_CAP,
+      ),
+    );
+  }
+
+  // (c) Execution evidence: a recorded smoke/validator result for this stage.
+  const smoke = Object.values(getSmokeResults(stage_id))[0];
+  if (smoke) {
+    const body = `status=${smoke.status}${smoke.reason ? `\nreason=${smoke.reason}` : ""}`;
+    sections.push(retryContextSection("## Execution evidence", body, RETRY_CTX_EVIDENCE_CAP));
+  }
+
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
 export async function reflexion(
   ctx: RunContext,
   stage: StageSpec,
@@ -816,8 +891,11 @@ export async function reflexion(
   priorArtifactText?: string,
   /** budgetOverride: operator-audited bypass of the Reflexion ×1 budget (the
    * run-control retry endpoint's explicit override). The automatic in-run
-   * path never sets it, so the invariant holds implicitly. */
-  opts?: { budgetOverride?: boolean },
+   * path never sets it, so the invariant holds implicitly.
+   * stageBaseSha: the stage's ORIGINAL base sha (captured before attempt 0's
+   * auto-commit) so the retry judge sees the cumulative diff since stage start.
+   * Absent on post-hoc retries — the whole-stage diff section is then omitted. */
+  opts?: { budgetOverride?: boolean; stageBaseSha?: string | null },
 ): Promise<StageOutcome> {
   const eligible = checkRetryEligible({
     attempt_id: parentAttemptId,
@@ -859,7 +937,12 @@ export async function reflexion(
     );
   }
 
-  const judged1 = await judge(ctx, stage, stage_id, gen1.attempt_id, esc.model_id, gen1.artifactText, true);
+  // Give the retry judge cumulative context: the whole-stage diff, the prior
+  // critique it claims to have addressed, and any execution evidence — so it
+  // grades against the full change, not just the incremental attempt0→retry
+  // diff (which made it re-flag resolved issues and miss regressions).
+  const contextMd = buildRetryContext(ctx, stage_id, opts?.stageBaseSha, critique);
+  const judged1 = await judge(ctx, stage, stage_id, gen1.attempt_id, esc.model_id, gen1.artifactText, true, contextMd);
   if (judged1 === "abort") return abortStage(ctx, stage_id, "judge tool failure on retry");
 
   if (judged1.outcome === "pass") {
