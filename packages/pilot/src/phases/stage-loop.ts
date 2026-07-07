@@ -778,7 +778,10 @@ export async function reflexion(
     return surface(ctx, stage_id, `Reflexion not eligible: ${eligible.reason}`);
   }
 
-  const esc = escalateTierForRetry(initialTier, ctx.flags, "retry");
+  // Reflexion is the single retry (attempt index 1), so rotationIndex=1 draws
+  // the NEXT model from the escalated tier's pool (pool[0] was the first
+  // attempt). No pool configured → the index is ignored, model id unchanged.
+  const esc = escalateTierForRetry(initialTier, ctx.flags, "retry", 1);
   ctx.tierTrace.push({
     stage_kind: stage.kind,
     agent: stage.agent,

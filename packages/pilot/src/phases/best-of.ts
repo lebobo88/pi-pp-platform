@@ -59,7 +59,10 @@ const ROTATION: Array<{ tier: ClaudeTier; seed: string }> = [
 
 function rotationFor(candidateIndex: number): { tier: ClaudeTier; seed: string; model_id: string } {
   const slot = ROTATION[(candidateIndex - 1) % ROTATION.length]!;
-  return { tier: slot.tier, seed: slot.seed, model_id: generationModelIdForTier(slot.tier) };
+  // rotationIndex=candidateIndex so candidates draw distinct models from the
+  // tier's pool (when configured); with no pool the single-model id is used and
+  // behavior is unchanged.
+  return { tier: slot.tier, seed: slot.seed, model_id: generationModelIdForTier(slot.tier, candidateIndex) };
 }
 
 /** Average of a critique verdict's numeric score entries (0 when absent). */

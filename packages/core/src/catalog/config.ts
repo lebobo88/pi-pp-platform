@@ -47,6 +47,16 @@ export interface GenerationLadder {
   tiers: Record<string, string>;
   /** Copilot-mirror tier overrides, when present. */
   copilot_tiers?: Record<string, string>;
+  /**
+   * Optional per-tier model POOLS. When a tier has a pool, the pilot rotates
+   * through it on Reflexion retry and across best-of candidates (index
+   * pool[rotationIndex % pool.length]); the first attempt draws pool[0]. Entries
+   * may be provider-qualified ids like "openai/gpt-5.5". A tier absent from this
+   * map keeps the single-model behavior from `tiers`. Merged wholesale with the
+   * rest of the ladder (a named ladder in the user catalog replaces the base
+   * ladder — pools included).
+   */
+  tier_pools?: Record<string, string[]>;
 }
 
 export interface JudgePoolEntry {
@@ -183,6 +193,11 @@ export function tierModelsFor(name?: string): Record<string, string> {
 export function copilotTierModelsFor(name?: string): Record<string, string> {
   const l = ladder(name);
   return l?.copilot_tiers ?? l?.tiers ?? {};
+}
+
+/** tier name → model POOL for a ladder (default ladder when unspecified). Empty when no pools configured. */
+export function tierPoolsFor(name?: string): Record<string, string[]> {
+  return ladder(name)?.tier_pools ?? {};
 }
 
 export function judgePool(): JudgePoolEntry[] {
