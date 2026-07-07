@@ -46,6 +46,7 @@ import { getTeam } from "./teams.js";
 import { getForum } from "./forums.js";
 import { isCheckProducible } from "./missability.js";
 import { isCliLoggedIn } from "../providers/cli-login.js";
+import { sanitizeDimensionScores } from "./derive-outcome.js";
 
 const now = () => new Date().toISOString();
 
@@ -3118,6 +3119,125 @@ export function budgetStatus(scope?: string): unknown {
     return db().prepare(`SELECT * FROM budgets WHERE scope = ?`).get(scope) ?? null;
   }
   return db().prepare(`SELECT * FROM budgets ORDER BY updated_at DESC LIMIT 100`).all();
+}
+
+/**
+ * One aggregated row per (judge_producer, judge_model_id) over the verdicts
+ * table. Powers GET /api/v1/judges/stats so the operator can see each judge's
+ * disposition mix (pass/revise/fail), calibration signal, and how often it
+ * judged cross-vendor.
+ */
+export type JudgeStatRow = {
+  judge_producer: string;
+  judge_model_id: string;
+  /** Count of ACTIVE (non-retracted) verdicts this judge produced. */
+  n_verdicts: number;
+  pass_rate: number;
+  revise_rate: number;
+  fail_rate: number;
+  /**
+   * Mean, across verdicts that carried at least one numeric dimension, of that
+   * verdict's LOWEST dimension score. Null when no verdict in the group had a
+   * numeric score_json. Computed only from the sanitized numeric map.
+   */
+  avg_min_dimension_score: number | null;
+  /** Share of this judge's active verdicts that were cross-vendor. */
+  cross_vendor_share: number;
+};
+
+/**
+ * Read-only aggregation over ACTIVE verdicts, grouped by
+ * (judge_producer, judge_model_id).
+ *
+ * Retracted verdicts are excluded (`retracted_at IS NULL`) to match the
+ * active-verdict invariant every other verdict-sensitive query in this file
+ * upholds — a retracted verdict is no longer a judgment of record and must not
+ * skew a judge's pass/fail rates or calibration signal.
+ *
+ * `avg_min_dimension_score` is derived only from the sanitized numeric
+ * score_json map (via `sanitizeDimensionScores`, the same chokepoint the
+ * derivation math routes through): for each verdict with ≥1 numeric dimension
+ * we take that verdict's minimum dimension score, then average those minima
+ * across the group. Verdicts with no numeric dimensions contribute nothing;
+ * a group with none yields null.
+ */
+export function judgeStats(): JudgeStatRow[] {
+  const rows = db()
+    .prepare(
+      `SELECT judge_producer, judge_model_id, outcome, cross_vendor, score_json
+         FROM verdicts
+        WHERE retracted_at IS NULL`,
+    )
+    .all() as Array<{
+      judge_producer: string;
+      judge_model_id: string;
+      outcome: string;
+      cross_vendor: number;
+      score_json: string | null;
+    }>;
+
+  type Acc = {
+    n: number;
+    pass: number;
+    revise: number;
+    fail: number;
+    cross_vendor: number;
+    min_sum: number;   // running sum of per-verdict minimum dimension scores
+    min_count: number; // verdicts that contributed a numeric minimum
+  };
+  // Nested producer → model → accumulator map. A nested map (rather than a
+  // string-joined composite key) keeps the grouping key structural — no
+  // separator byte can collide with a producer/model id that contains it.
+  const byProducer = new Map<string, Map<string, Acc>>();
+
+  for (const r of rows) {
+    let byModel = byProducer.get(r.judge_producer);
+    if (!byModel) { byModel = new Map(); byProducer.set(r.judge_producer, byModel); }
+    let acc = byModel.get(r.judge_model_id);
+    if (!acc) {
+      acc = { n: 0, pass: 0, revise: 0, fail: 0, cross_vendor: 0, min_sum: 0, min_count: 0 };
+      byModel.set(r.judge_model_id, acc);
+    }
+    acc.n += 1;
+    if (r.outcome === "pass") acc.pass += 1;
+    else if (r.outcome === "revise") acc.revise += 1;
+    else if (r.outcome === "fail") acc.fail += 1;
+    if (r.cross_vendor) acc.cross_vendor += 1;
+
+    // Sanitized numeric map only — pseudo-dimensions / non-numeric junk never
+    // reach the calibration signal.
+    let parsed: unknown = null;
+    if (r.score_json) {
+      try { parsed = JSON.parse(r.score_json); } catch { parsed = null; }
+    }
+    const dims = Object.values(sanitizeDimensionScores(parsed));
+    if (dims.length > 0) {
+      acc.min_sum += Math.min(...dims);
+      acc.min_count += 1;
+    }
+  }
+
+  const out: JudgeStatRow[] = [];
+  for (const [judge_producer, byModel] of byProducer) {
+    for (const [judge_model_id, acc] of byModel) {
+      out.push({
+        judge_producer,
+        judge_model_id,
+        n_verdicts: acc.n,
+        pass_rate: acc.pass / acc.n,
+        revise_rate: acc.revise / acc.n,
+        fail_rate: acc.fail / acc.n,
+        avg_min_dimension_score: acc.min_count > 0 ? acc.min_sum / acc.min_count : null,
+        cross_vendor_share: acc.cross_vendor / acc.n,
+      });
+    }
+  }
+  // Deterministic ordering: producer, then model id.
+  out.sort((a, b) =>
+    a.judge_producer === b.judge_producer
+      ? (a.judge_model_id < b.judge_model_id ? -1 : a.judge_model_id > b.judge_model_id ? 1 : 0)
+      : (a.judge_producer < b.judge_producer ? -1 : 1));
+  return out;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────

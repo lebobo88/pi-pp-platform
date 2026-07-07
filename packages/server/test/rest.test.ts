@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
+import { apiPaths, type JudgeStatsResponse } from "@shared/api-types";
 
 // Isolate the DB + platform auth dir + keep the ecosystem off BEFORE buildApp.
 const home = mkdtempSync(join(tmpdir(), "pp-srv-home-"));
@@ -47,6 +48,29 @@ describe("health + library reads", () => {
     const one = await get(`/api/v1/rubrics/${encodeURIComponent(rubrics[0]!.id)}`);
     expect(one.statusCode).toBe(200);
     expect(typeof (one.json() as { markdown?: string }).markdown).toBe("string");
+  });
+
+  it("GET /api/v1/judges/stats returns { items } and matches apiPaths.judgeStats", async () => {
+    // apiPaths is the wire contract — the route the server registers must be
+    // exactly the one clients build from.
+    expect(apiPaths.judgeStats).toBe("/api/v1/judges/stats");
+    const r = await get(apiPaths.judgeStats);
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as JudgeStatsResponse;
+    expect(Array.isArray(body.items)).toBe(true);
+    // Every row (empty DB may yield none) has the full JudgeStatRow shape.
+    for (const row of body.items) {
+      expect(typeof row.judge_producer).toBe("string");
+      expect(typeof row.judge_model_id).toBe("string");
+      expect(typeof row.n_verdicts).toBe("number");
+      expect(typeof row.pass_rate).toBe("number");
+      expect(typeof row.revise_rate).toBe("number");
+      expect(typeof row.fail_rate).toBe("number");
+      expect(typeof row.cross_vendor_share).toBe("number");
+      expect(
+        row.avg_min_dimension_score === null || typeof row.avg_min_dimension_score === "number",
+      ).toBe(true);
+    }
   });
 
   it("GET /api/v1/profiles (16), /forums (10), /taxonomy (16), /teams, /models", async () => {

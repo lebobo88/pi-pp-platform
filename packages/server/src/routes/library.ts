@@ -11,6 +11,7 @@ import {
   listSkills, getSkill,
   recommendTeams,
   listRubrics, getRubric,
+  judgeStats,
   listBuiltinProfiles, getBuiltinProfile,
   listForums, getForum,
   TAXONOMY_SECTIONS,
@@ -132,6 +133,9 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
     if (!r) return reply.code(404).send({ error: `rubric ${id} not found` });
     return r;
   });
+
+  // ── Judges (read-only verdict aggregation) ──
+  app.get(`${V1}/judges/stats`, async () => ({ items: judgeStats() }));
 
   // ── Profiles (library) ──
   app.get(`${V1}/profiles`, async () => listBuiltinProfiles());

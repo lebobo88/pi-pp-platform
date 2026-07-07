@@ -471,6 +471,28 @@ export interface RubricInfo {
   markdown?: string;
 }
 
+/**
+ * One aggregated row from GET /api/v1/judges/stats — per (judge_producer,
+ * judge_model_id) disposition mix + calibration signal over ACTIVE
+ * (non-retracted) verdicts.
+ */
+export interface JudgeStatRow {
+  judge_producer: string;
+  judge_model_id: string;
+  n_verdicts: number;
+  pass_rate: number;
+  revise_rate: number;
+  fail_rate: number;
+  /** Mean of per-verdict minimum dimension scores; null when none had a numeric score. */
+  avg_min_dimension_score: number | null;
+  cross_vendor_share: number;
+}
+
+/** GET /api/v1/judges/stats response envelope. */
+export interface JudgeStatsResponse {
+  items: JudgeStatRow[];
+}
+
 /** A `budgets` table row — rolling token/cost totals for a scope. */
 export interface BudgetEntry {
   /** e.g. "run:<id>", "day:2026-07-01", "model:<id>", "tier:opus". */
@@ -1323,6 +1345,9 @@ export const apiPaths = {
 
   rubrics: `${API_BASE}/rubrics`,
   rubric: (id: string) => `${API_BASE}/rubrics/${encodeURIComponent(id)}`,
+
+  /** GET — per-judge aggregation over active verdicts; returns { items }. */
+  judgeStats: `${API_BASE}/judges/stats`,
 
   evolution: `${API_BASE}/evolution/proposals`,
   evolutionProposal: (id: string) => `${API_BASE}/evolution/proposals/${encodeURIComponent(id)}`,
