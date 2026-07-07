@@ -20,6 +20,7 @@ import {
   recordAttempt,
   recordAgentSession,
   recordVerdict,
+  tallyJudgeUsage,
   recordSmokeStatus,
   diffEntropy,
   bordaCount,
@@ -250,7 +251,10 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       candidates.find((c) => c.candidate_index === a.index)!.judge_position -
       candidates.find((c) => c.candidate_index === b.index)!.judge_position,
   );
-  const scored: Array<{ index: number; attempt_id: string; score: number; smoke: string }> = [];
+  // Per-candidate critique usage is captured here so the winner's spend rides
+  // its recordVerdict call and each loser's spend is credited via tallyJudgeUsage.
+  type JudgeUsage = { tokens_in?: number; tokens_out?: number; cost_usd?: number };
+  const scored: Array<{ index: number; attempt_id: string; score: number; smoke: string; usage: JudgeUsage }> = [];
   for (const c of byPosition) {
     const critique = await ctx.engine.critique({ judgeModel, rubricMd, artifactText: c.text, cwd: ctx.projectPath, signal: ctx.signal });
     if (critique.stop_reason === "invalid_output" || !critique.parsed) {
@@ -259,7 +263,13 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       ctx.abortReason = "judge tool failure during best-of ranking";
       return "aborted";
     }
-    scored.push({ index: c.index, attempt_id: c.attempt_id, score: scoreOf(critique.parsed), smoke: c.smoke });
+    scored.push({
+      index: c.index,
+      attempt_id: c.attempt_id,
+      score: scoreOf(critique.parsed),
+      smoke: c.smoke,
+      usage: { tokens_in: critique.tokens_in, tokens_out: critique.tokens_out, cost_usd: critique.cost_usd },
+    });
   }
 
   const ranking = [...scored].sort((a, b) => b.score - a.score).map((s) => String(s.index));
@@ -294,7 +304,16 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     critique_md: `Borda winner candidate-${winnerIndex} of ${n} (score ${winner.score.toFixed(3)}).`,
     score_json: { borda: borda.scores },
     judge_provider: selection.provider || undefined,
+    // The winner's critique spend rides its verdict row + budget scopes.
+    tokens_in: winner.usage.tokens_in,
+    tokens_out: winner.usage.tokens_out,
+    cost_usd: winner.usage.cost_usd,
   });
+  // Losing candidates have no verdict row, so credit their critique spend
+  // directly to the run:/day:/model:<judge_model> budget scopes.
+  for (const s of scored) {
+    if (s.index !== winnerIndex) tallyJudgeUsage(ctx.run_id, selection.judge_model, s.usage);
+  }
   emit(ctx, "verdict.recorded", { outcome: "pass", winner: winnerIndex, cross_vendor: selection.cross_vendor, judge_provider: selection.provider || undefined }, { stage_id, attempt_id: winner.attempt_id });
 
   // ── Finalize + merge-back + teardown. ─────────────────────────────────────
