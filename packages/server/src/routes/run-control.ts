@@ -51,6 +51,10 @@ const StartBody = z.object({
   tier_cap: TIER.optional(),
   tier_floor: TIER.optional(),
   no_tier_policy: z.boolean().optional(),
+  // Per-run effective-ladder overrides (top precedence). Partial tier→model /
+  // tier→pool maps; forwarded to the pilot and persisted to runs.cli_flags_json.
+  ladder_override: z.record(TIER, z.string().min(1)).optional(),
+  tier_pools_override: z.record(TIER, z.array(z.string().min(1)).min(1)).optional(),
 });
 
 /** A fresh pilot EventBus whose events are forwarded to the server SSE bus. */
@@ -120,6 +124,8 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
         tierCap: b.tier_cap,
         tierFloor: b.tier_floor,
         noTierPolicy: b.no_tier_policy,
+        ladderOverride: b.ladder_override,
+        tierPoolsOverride: b.tier_pools_override,
       });
       return reply.code(200).send({ run_id, queued });
     } catch (err) {

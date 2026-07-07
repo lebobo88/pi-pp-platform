@@ -686,6 +686,19 @@ export interface StartRunRequest {
   /** Claude tier ceiling / floor overrides. */
   tier_cap?: ClaudeTier | null;
   tier_floor?: ClaudeTier | null;
+  /**
+   * Per-run override of the effective generation ladder: Claude tier → concrete
+   * model id. Highest precedence (above the project profile, global harness
+   * settings ladder, and the catalog default). A partial map only overrides the
+   * tiers it names; absent leaves resolution byte-identical.
+   */
+  ladder_override?: Partial<Record<ClaudeTier, string>>;
+  /**
+   * Per-run override of the effective per-tier model POOLS (rotated across
+   * Reflexion retries + best-of candidates). Same top precedence as
+   * `ladder_override`. A partial map only overrides the tiers it names.
+   */
+  tier_pools_override?: Partial<Record<ClaudeTier, string[]>>;
   /** Triage scope override; omit for "auto". */
   scope_override?: "trivial" | "standard" | "major";
 }
@@ -930,13 +943,31 @@ export interface TaxonomySection {
 }
 
 /**
+ * One named generation ladder in HarnessSettings: each tier maps to a concrete
+ * model id, plus an optional reserved `tier_pools` key carrying per-tier model
+ * POOLS for rotation (Reflexion retry + best-of). Every key EXCEPT `tier_pools`
+ * is a tier name.
+ */
+export interface HarnessLadder {
+  /** tier name → concrete model id (reserved key `tier_pools` excluded). */
+  [tier: string]: string | Record<string, string[]> | undefined;
+  /**
+   * Per-tier model pools, mirroring the catalog ladder's `tier_pools`. Layered
+   * above the catalog default and below any per-run / profile override. Reserved
+   * key — not a tier.
+   */
+  tier_pools?: Record<string, string[]>;
+}
+
+/**
  * Harness settings the control plane edits: the named generation ladders
- * (ladderName → tier → model id) and the ordered judge pool. Persisted
- * server-side. The default install has one ladder, "claude". Cross-provider
- * judge coverage is derived from the pool's distinct providers.
+ * (ladderName → tier → model id, plus optional per-ladder `tier_pools`) and the
+ * ordered judge pool. Persisted server-side. The default install has one
+ * ladder, "claude". Cross-provider judge coverage is derived from the pool's
+ * distinct providers.
  */
 export interface HarnessSettings {
-  ladders: Record<string, Record<string, string>>;
+  ladders: Record<string, HarnessLadder>;
   /** Ordered judge selections; cross-provider coverage is derived. */
   judge_pool: Array<{ provider: string; model: string }>;
 }

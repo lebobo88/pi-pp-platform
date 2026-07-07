@@ -2,11 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refreshCatalog } from "@pp/core";
+import { refreshCatalog, setDbPath, currentDbPath, setPlatformSetting } from "@pp/core";
 import {
   effectiveLadderTiers,
   effectiveTierPools,
   generationModelIdForTier,
+  mergeLadderOverride,
   type LadderOverride,
 } from "../src/generation-model.js";
 import { escalateTierForRetry } from "../src/tier-resolver.js";
@@ -123,5 +124,124 @@ describe("escalateTierForRetry rotates through the escalated tier's catalog pool
   it("without a rotationIndex the retry draws pool[0]", () => {
     const esc = escalateTierForRetry("sonnet", {}, "retry");
     expect(esc.model_id).toBe("opus-pool-0");
+  });
+});
+
+// ── Full 4-level precedence, for BOTH tiers and tier_pools ────────────────────
+//   per-run override > project profile > harness_settings.ladders[name] > catalog
+// Crucially re-proves the prior finding: a tier_pool set ONLY in harness_settings
+// (never in the catalog or the override) is now read + used by effectiveTierPools
+// / generationModelIdForTier. Uses an on-disk user catalog for the catalog layer,
+// an isolated DB for the harness_settings layer, and the override argument for the
+// profile + per-run layers (assembled via mergeLadderOverride).
+describe("ladder precedence: catalog < harness_settings < profile < per-run", () => {
+  const prevPlatformDir = process.env.PP_PLATFORM_DIR;
+  let platform: string;
+  let dbDir: string;
+  let prevDbPath: string;
+
+  beforeAll(() => {
+    platform = mkdtempSync(join(tmpdir(), "pp-precedence-catalog-"));
+    writeFileSync(
+      join(platform, "catalog.json"),
+      JSON.stringify({
+        default_ladder: "claude",
+        generation_ladders: {
+          claude: {
+            provider: "anthropic",
+            order: ["haiku", "sonnet", "opus"],
+            off_ladder: ["fable"],
+            tiers: { haiku: "cat-haiku", sonnet: "cat-sonnet", opus: "cat-opus", fable: "cat-fable" },
+            // catalog pool ONLY for haiku — sonnet's pool will come from settings.
+            tier_pools: { haiku: ["cat-haiku-0", "cat-haiku-1"] },
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env.PP_PLATFORM_DIR = platform;
+    refreshCatalog();
+
+    // Isolate the DB so the harness_settings row we write here never pollutes
+    // the shared PP_HOME state.db other test files read.
+    prevDbPath = currentDbPath();
+    dbDir = mkdtempSync(join(tmpdir(), "pp-precedence-db-"));
+    setDbPath(join(dbDir, "state.db"));
+
+    // harness_settings layer: override sonnet's TIER, and supply a tier_pool for
+    // sonnet that exists NOWHERE else (the prior-finding case).
+    setPlatformSetting("harness_settings", {
+      ladders: {
+        claude: {
+          sonnet: "set-sonnet",
+          tier_pools: { sonnet: ["set-sonnet-0", "set-sonnet-1"] },
+        },
+      },
+      judge_pool: [{ provider: "anthropic", model: "cat-opus" }],
+    });
+  });
+
+  afterAll(() => {
+    if (prevPlatformDir === undefined) delete process.env.PP_PLATFORM_DIR;
+    else process.env.PP_PLATFORM_DIR = prevPlatformDir;
+    refreshCatalog();
+    setDbPath(prevDbPath); // restore the shared PP_HOME DB for later files
+    rmSync(platform, { recursive: true, force: true });
+    rmSync(dbDir, { recursive: true, force: true });
+  });
+
+  it("catalog default is used where no higher layer speaks (opus tier, haiku pool)", () => {
+    expect(effectiveLadderTiers().opus).toBe("cat-opus");
+    expect(effectiveTierPools().haiku).toEqual(["cat-haiku-0", "cat-haiku-1"]);
+  });
+
+  it("harness_settings TIER wins over the catalog tier", () => {
+    expect(effectiveLadderTiers().sonnet).toBe("set-sonnet");
+    // opus is untouched by settings → still the catalog value.
+    expect(effectiveLadderTiers().opus).toBe("cat-opus");
+  });
+
+  it("PRIOR FINDING: a tier_pool set ONLY in harness_settings is read and used", () => {
+    // effectiveTierPools now merges the settings pool over the catalog pool.
+    expect(effectiveTierPools().sonnet).toEqual(["set-sonnet-0", "set-sonnet-1"]);
+    // …and generationModelIdForTier rotates through that settings-only pool
+    // (pool wins over the single-model tier lookup).
+    expect(generationModelIdForTier("sonnet", 0)).toBe("set-sonnet-0");
+    expect(generationModelIdForTier("sonnet")).toBe("set-sonnet-0"); // undefined index → 0
+    expect(generationModelIdForTier("sonnet", 1)).toBe("set-sonnet-1");
+    // haiku (catalog-only pool) still rotates from the catalog.
+    expect(generationModelIdForTier("haiku", 1)).toBe("cat-haiku-1");
+  });
+
+  it("a project-profile override wins over harness_settings (tier + pool)", () => {
+    const profileOnly = mergeLadderOverride(
+      { sonnet: "prof-sonnet" },
+      { sonnet: ["prof-sonnet-0"] },
+      undefined,
+      undefined,
+    );
+    expect(effectiveLadderTiers(profileOnly).sonnet).toBe("prof-sonnet");
+    expect(effectiveTierPools(profileOnly).sonnet).toEqual(["prof-sonnet-0"]);
+    expect(generationModelIdForTier("sonnet", 0, profileOnly)).toBe("prof-sonnet-0");
+  });
+
+  it("a per-run override wins over the project profile (top precedence)", () => {
+    const merged = mergeLadderOverride(
+      { sonnet: "prof-sonnet", opus: "prof-opus" },
+      { sonnet: ["prof-sonnet-0"] },
+      { sonnet: "run-sonnet" },
+      { sonnet: ["run-sonnet-0", "run-sonnet-1"] },
+    );
+    // per-run beats the profile for the tiers it names…
+    expect(effectiveLadderTiers(merged).sonnet).toBe("run-sonnet");
+    expect(effectiveTierPools(merged).sonnet).toEqual(["run-sonnet-0", "run-sonnet-1"]);
+    expect(generationModelIdForTier("sonnet", 1, merged)).toBe("run-sonnet-1");
+    // …while a profile-only tier (opus) is retained through the merge.
+    expect(effectiveLadderTiers(merged).opus).toBe("prof-opus");
+  });
+
+  it("mergeLadderOverride returns undefined when nothing is supplied", () => {
+    expect(mergeLadderOverride(undefined, undefined, undefined, undefined)).toBeUndefined();
+    expect(mergeLadderOverride({}, {}, {}, {})).toBeUndefined();
   });
 });

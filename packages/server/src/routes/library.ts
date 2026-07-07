@@ -51,9 +51,15 @@ const RecommendBody = z.object({
 
 const SETTINGS_KEY = "harness_settings";
 // Generalized beyond the fixed 4 Claude tiers: `ladders` is ladderName ->
-// (tier -> model id); `judge_pool` is an ordered list of {provider, model}.
+// (tier -> model id), plus an optional reserved `tier_pools` key (tier ->
+// model pool) mirroring the catalog ladder; `judge_pool` is an ordered list of
+// {provider, model}. The `catchall` keys are tier names (string model ids);
+// `tier_pools` is the one reserved non-tier key.
+const LadderBody = z
+  .object({ tier_pools: z.record(z.array(z.string().min(1)).min(1)).optional() })
+  .catchall(z.string().min(1));
 const SettingsBody = z.object({
-  ladders: z.record(z.record(z.string().min(1))),
+  ladders: z.record(LadderBody),
   judge_pool: z.array(z.object({ provider: z.string().min(1), model: z.string().min(1) })).min(1),
 });
 function defaultSettings() {
