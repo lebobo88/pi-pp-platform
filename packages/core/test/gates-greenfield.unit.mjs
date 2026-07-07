@@ -79,11 +79,12 @@ test("code-greenfield@1 is a well-formed registry entry", () => {
   assert.equal(r.kind, "code_style");
   assert.ok(typeof r.title === "string" && r.title.length > 0);
   assert.ok(typeof r.source_url === "string" && /^https?:\/\//.test(r.source_url));
-  // The three greenfield dimensions are present; minimality is NOT.
+  // The three greenfield dimensions are scored (each defined as a `- **dim**:`
+  // bullet); minimality may appear in prose but must NOT be a scored dimension.
   for (const dim of ["correctness", "completeness", "scope_fidelity"]) {
-    assert.ok(r.markdown.includes(dim), `markdown must define the ${dim} dimension`);
+    assert.ok(r.markdown.includes(`- **${dim}**`), `markdown must define the ${dim} scored dimension`);
   }
-  assert.ok(!/\bminimality\b/.test(r.markdown), "greenfield rubric must not grade minimality");
+  assert.ok(!/-\s+\*\*minimality\*\*/.test(r.markdown), "greenfield rubric must not score minimality as a dimension");
   // The standard outcome envelope (>=0.7 pass; [0.5,0.7) revise; <0.5 fail).
   assert.ok(r.markdown.includes("0.7"));
   assert.ok(/0\.5/.test(r.markdown));
