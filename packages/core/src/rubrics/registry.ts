@@ -47,7 +47,24 @@ For UI artifacts, additionally require the **8-state matrix**: every component s
 Outcome:
 - pass: every principle ≥ 0.7 AND 8/8 states named.
 - revise: any principle in [0.5, 0.7), or 6-7/8 states.
-- fail: any principle < 0.5, or < 6/8 states.`,
+- fail: any principle < 0.5, or < 6/8 states.
+
+## Calibration anchors
+
+Reference points to steady scoring across judges. Match the artifact to the
+nearest anchor rather than scoring in a vacuum.
+
+- **pass anchor (~0.85 perceivable/operable)**: a settings form whose inputs
+  all carry associated \`<label>\`s, error text is announced via
+  \`aria-live\`, contrast measured at 4.7:1, focus ring visible on every
+  interactive element, and the 8-state matrix names all eight states with a
+  distinct treatment for empty vs. disabled. Minor nit (one 24px touch target
+  at 22px) keeps it a pass, not full marks.
+- **revise anchor (~0.6 operable)**: layout and contrast are fine and 7/8
+  states are shown, but keyboard focus order jumps unpredictably after the
+  modal opens and the "loading" state is missing. Nothing is inaccessible
+  outright, but a keyboard user is disoriented — fix the trap and add the
+  missing state, then it passes.`,
     schema_json: SCORE_SCHEMA_GENERIC,
   },
   {
@@ -315,7 +332,23 @@ For specs / PRDs / ADRs:
 Outcome:
 - pass: every dimension ≥ 0.7.
 - revise: any in [0.5, 0.7).
-- fail: musts_clear < 0.5 (vague requirements aren't requirements).`,
+- fail: musts_clear < 0.5 (vague requirements aren't requirements).
+
+## Calibration anchors
+
+Reference points to steady scoring across judges. Match the spec to the
+nearest anchor rather than scoring in a vacuum.
+
+- **pass anchor (~0.85 musts_clear/acceptance_testable)**: "The service MUST
+  reject a request whose body exceeds 1 MiB with HTTP 413" — the requirement
+  is a MUST, the threshold is concrete, and an acceptance criterion ("POST a
+  1.1 MiB body → 413") is stated alongside it. SHOULD clauses name their
+  exception ("SHOULD retry, except when the error is 4xx").
+- **revise anchor (~0.6 avoids_should_versus_will_confusion)**: the intent is
+  understandable but the language slips — "the API will validate the token"
+  where the author means MUST, and one acceptance criterion is missing for a
+  stated MUST. No requirement is meaningless, but the normative force is
+  ambiguous; tighten the verbs and add the missing criterion to reach a pass.`,
     schema_json: SCORE_SCHEMA_GENERIC,
   },
   {
@@ -474,7 +507,25 @@ Score 0..1 per dimension:
 Outcome (the standard envelope):
 - pass: every dimension >= 0.7.
 - revise: any dimension in [0.5, 0.7).
-- fail: any dimension < 0.5.`,
+- fail: any dimension < 0.5.
+
+## Calibration anchors
+
+Reference points to steady scoring across judges. Match the build to the
+nearest anchor rather than scoring in a vacuum.
+
+- **pass anchor (~0.85 scope_fidelity/completeness)**: the request was "build
+  a CLI todo app with add/list/done"; the build ships exactly those three
+  commands plus the persistence and arg-parsing modules they genuinely need,
+  compiles, and the happy path runs. The many new files are the real surface
+  of a from-scratch app, not gold-plating — this is high scope_fidelity, not
+  a scope_fidelity miss.
+- **revise anchor (~0.6 scope_fidelity)**: the same todo app works and is
+  complete, but it also ships an unrequested plugin system and a config-file
+  loader nobody asked for. Correctness and completeness are fine; the
+  speculative surface is unrequested scope expansion, so scope_fidelity lands
+  in the revise band. Note this is about *unrequested additions*, not
+  minimality — trimming the genuinely-needed files would be the wrong fix.`,
     schema_json: SCORE_SCHEMA_GENERIC,
   },
   // ─── Game-dev rubrics ────────────────────────────────────────────────
