@@ -126,6 +126,162 @@ function safeReadJson(path: string): PackageJson | null {
   }
 }
 
+// ─── pnpm / npm workspace member resolution ─────────────────────────────────
+// No YAML dependency: the pnpm-workspace.yaml `packages:` block is a trivial
+// list of quoted globs, parsed directly. Bounds keep a pathological workspace
+// from walking the whole tree.
+const MAX_WORKSPACE_MEMBERS = 20;
+const MAX_WORKSPACE_GLOB_DEPTH = 3;
+
+/** Parse the `packages:` list from pnpm-workspace.yaml + package.json workspaces. */
+function parseWorkspacePatterns(projectPath: string): string[] {
+  const patterns: string[] = [];
+  const wsPath = join(projectPath, "pnpm-workspace.yaml");
+  if (existsSync(wsPath)) {
+    try {
+      let inPackages = false;
+      for (const raw of readFileSync(wsPath, "utf8").split(/\r?\n/)) {
+        const line = raw.replace(/\s+$/, "");
+        if (/^packages:\s*(#.*)?$/.test(line)) { inPackages = true; continue; }
+        if (!inPackages) continue;
+        const m = line.match(/^\s+-\s+['"]?([^'"#]+?)['"]?\s*(#.*)?$/);
+        if (m) { patterns.push(m[1]!.trim()); continue; }
+        if (/^\S/.test(line)) inPackages = false; // dedent to a new top-level key
+      }
+    } catch { /* ignore */ }
+  }
+  const pkg = safeReadJson(join(projectPath, "package.json"));
+  const ws = (pkg as { workspaces?: unknown } | null)?.workspaces;
+  if (Array.isArray(ws)) patterns.push(...ws.filter((p): p is string => typeof p === "string"));
+  else if (ws && typeof ws === "object" && Array.isArray((ws as { packages?: unknown }).packages)) {
+    patterns.push(...(ws as { packages: unknown[] }).packages.filter((p): p is string => typeof p === "string"));
+  }
+  return patterns.filter((p) => p && !p.startsWith("!")); // drop negations
+}
+
+function isRealDir(projectPath: string, rel: string): boolean {
+  try { return statSync(join(projectPath, rel)).isDirectory(); } catch { return false; }
+}
+
+/**
+ * Resolve real pnpm/npm workspace member directories (those carrying a
+ * package.json) from the workspace glob list. Handles the three shapes that
+ * actually occur: `packages/*` (direct children), `packages/**` (recurse,
+ * bounded depth, skipping node_modules), and bare entries like `ui`/`apps/web`.
+ */
+export function resolveWorkspaceMembers(projectPath: string): string[] {
+  const members = new Set<string>();
+  const add = (rel: string) => {
+    if (members.size >= MAX_WORKSPACE_MEMBERS) return;
+    if (existsSync(join(projectPath, rel, "package.json"))) members.add(rel.replace(/\\/g, "/"));
+  };
+  const childrenOf = (base: string): string[] =>
+    listSafe(join(projectPath, base)).filter(
+      (c) => c !== "node_modules" && !c.startsWith(".") && isRealDir(projectPath, base ? `${base}/${c}` : c),
+    );
+  const recurse = (base: string, depth: number) => {
+    if (depth < 0 || members.size >= MAX_WORKSPACE_MEMBERS) return;
+    add(base);
+    for (const c of childrenOf(base)) recurse(base ? `${base}/${c}` : c, depth - 1);
+  };
+
+  for (const pattern of parseWorkspacePatterns(projectPath)) {
+    if (members.size >= MAX_WORKSPACE_MEMBERS) break;
+    const p = pattern.replace(/\/+$/, "");
+    if (p.endsWith("/**")) recurse(p.slice(0, -3).replace(/\/+$/, ""), MAX_WORKSPACE_GLOB_DEPTH);
+    else if (p.endsWith("/*")) {
+      const base = p.slice(0, -2).replace(/\/+$/, "");
+      for (const c of childrenOf(base)) add(base ? `${base}/${c}` : c);
+    } else if (!p.includes("*")) add(p); // bare directory entry
+    // mid-pattern globs ("packages/foo-*") are rare — skipped (bounded, dep-free)
+  }
+  return [...members];
+}
+
+// Per-member classification precedence — mirrors the root classifier's check
+// order (web-game → mobile → ai → web → api → cli → sdk). Also the tie-break
+// order the combiner falls back to when member counts are equal.
+const MEMBER_PROFILE_PRECEDENCE: readonly ProfileName[] = [
+  "game-dev-web", "mobile", "ai-agentic", "web-ui", "api-platform", "non-ui-cli", "sdk",
+];
+
+/** Classify a single workspace member's package.json into one profile. */
+function classifyMemberPkg(pkg: PackageJson): ProfileName | null {
+  if (hasDep(pkg, WEB_GAME_DEPS)) return "game-dev-web";
+  if (hasDep(pkg, MOBILE_DEPS)) return "mobile";
+  if (hasDep(pkg, AI_DEPS)) return "ai-agentic";
+  if (hasDep(pkg, WEB_UI_DEPS)) return "web-ui";
+  if (hasDep(pkg, API_DEPS)) return "api-platform";
+  if (pkg.bin !== undefined) return "non-ui-cli";
+  if (pkg.main !== undefined && (pkg.types !== undefined || pkg.typings !== undefined) && pkg.exports !== undefined) {
+    return "sdk";
+  }
+  return null;
+}
+
+export type MemberClassification = { member: string; profile: ProfileName };
+export type CombinedClassification = {
+  recommendation: ProfileName | null;
+  confidence: Confidence;
+  method: "majority" | "plurality" | "precedence-tie" | "none";
+  trace: string[];
+};
+
+/**
+ * Combine per-member classifications into one project recommendation:
+ *   1. strict majority (> half of typed members) wins;
+ *   2. otherwise the plurality (single highest count) wins;
+ *   3. only on a count tie fall back to the classifier precedence order.
+ * A per-member trace is always recorded regardless of which rule fires.
+ */
+export function combineMemberClassifications(members: MemberClassification[]): CombinedClassification {
+  const trace = members.map((m) => `${m.member} → ${m.profile}`);
+  if (members.length === 0) return { recommendation: null, confidence: "none", method: "none", trace };
+
+  const counts = new Map<ProfileName, number>();
+  for (const m of members) counts.set(m.profile, (counts.get(m.profile) ?? 0) + 1);
+  const total = members.length;
+  const top = Math.max(...counts.values());
+  const leaders = [...counts.entries()].filter(([, n]) => n === top).map(([p]) => p);
+
+  if (leaders.length === 1 && top > total / 2) {
+    trace.push(`strict majority: ${leaders[0]} (${top}/${total})`);
+    return { recommendation: leaders[0]!, confidence: "medium", method: "majority", trace };
+  }
+  if (leaders.length === 1) {
+    trace.push(`plurality: ${leaders[0]} (${top}/${total})`);
+    return { recommendation: leaders[0]!, confidence: "medium", method: "plurality", trace };
+  }
+  const picked = MEMBER_PROFILE_PRECEDENCE.find((p) => leaders.includes(p)) ?? leaders[0]!;
+  trace.push(`count tie among [${leaders.join(", ")}] → precedence picks ${picked}`);
+  return { recommendation: picked, confidence: "low", method: "precedence-tie", trace };
+}
+
+/** Monorepo path: classify each workspace member, combine into a recommendation. */
+function detectMonorepoProfile(projectPath: string): ProfileDetection | null {
+  const memberDirs = resolveWorkspaceMembers(projectPath);
+  if (memberDirs.length === 0) return null;
+  const classified: MemberClassification[] = [];
+  for (const dir of memberDirs) {
+    const pkg = safeReadJson(join(projectPath, dir, "package.json"));
+    const profile = pkg ? classifyMemberPkg(pkg) : null;
+    if (profile) classified.push({ member: dir, profile });
+  }
+  const combined = combineMemberClassifications(classified);
+  if (!combined.recommendation) return null;
+  return {
+    recommendation: combined.recommendation,
+    confidence: combined.confidence,
+    signals: [`workspace members: ${classified.length}/${memberDirs.length} typed`, ...combined.trace],
+    alternatives: [],
+  };
+}
+
+/** True when the project directory is empty or only contains a README. */
+export function isProjectNearEmpty(projectPath: string): boolean {
+  return isNearEmpty(projectPath);
+}
+
 function hasDep(pkg: PackageJson, names: readonly string[]): string | null {
   const all = {
     ...(pkg.dependencies ?? {}),
@@ -324,30 +480,41 @@ function hasTauriManifest(projectPath: string): boolean {
 
 export function detectProfile(projectPath: string, opts: DetectProfileOptions = {}): ProfileDetection {
   const fs = detectProfileFromFilesystem(projectPath);
-  if (fs.confidence === "high" || fs.confidence === "medium") return fs;
+  // A HIGH-confidence filesystem signal is authoritative — request text may
+  // NEVER override it (a React app stays web-ui even if the prose says "game").
+  if (fs.confidence === "high") return fs;
 
   const tauri = hasTauriManifest(projectPath);
   const cls = opts.requestText ? classifyRequestText(opts.requestText) : null;
 
-  // Request-text refinement: game-shaped requests route to the game-dev
-  // family. A desktop webview shell (tauri/electron — Tauri renders via a
-  // webview, so the web-engines gotcha pack applies) or explicit web delivery
-  // picks game-dev-web; otherwise game-dev-custom. Medium confidence = the
-  // auto-bootstrap threshold, so profile.yaml gets written and the engineer
-  // prompt picks up the engine gotchas/addenda.
+  // Request-text blending: a game-shaped request may TIP a medium/low/none
+  // filesystem recommendation to the game-dev family. A desktop webview shell
+  // (tauri/electron — Tauri renders via a webview, so the web-engines gotcha
+  // pack applies) or explicit web delivery picks game-dev-web; otherwise
+  // game-dev-custom. Medium confidence = the auto-bootstrap threshold, so
+  // profile.yaml gets written and the engineer prompt picks up the gotchas.
   if (cls?.game) {
     const webish = cls.desktopShell !== null || cls.web || tauri;
     const shellNote = cls.desktopShell ? ` (${cls.desktopShell} desktop shell)` : tauri ? " (tauri manifest)" : "";
     const alternatives = new Set<ProfileName>(fs.alternatives);
     if (fs.recommendation) alternatives.add(fs.recommendation);
+    const signals = [...fs.signals, `request text: game-shaped${shellNote}`];
+    if (fs.confidence === "medium") {
+      // Trace the tip: the filesystem gave a medium recommendation and the
+      // request text moved it. (A high recommendation returned above.)
+      signals.push(`blended over medium filesystem recommendation (${fs.recommendation ?? "generic"})`);
+    }
     return {
       recommendation: webish ? "game-dev-web" : "game-dev-custom",
       confidence: "medium",
-      signals: [...fs.signals, `request text: game-shaped${shellNote}`],
+      signals,
       alternatives: Array.from(alternatives),
       flags: { engine: webish ? "web" : "custom" },
     };
   }
+
+  // No game-shaped request text — a medium filesystem recommendation stands.
+  if (fs.confidence === "medium") return fs;
 
   // Filesystem Tauri signal without a game-shaped request: a Tauri app is a
   // webview UI — web-ui is the closest profile (there is no desktop profile).
@@ -615,6 +782,15 @@ function detectProfileFromFilesystem(projectPath: string): ProfileDetection {
   if (pkg && hasLibraryShape) {
     signals.push("package.json has main + types + exports, no bin (library shape)");
     return { recommendation: "sdk", confidence: "high", signals, alternatives: ["non-ui-cli"] };
+  }
+
+  // Monorepo: the root package.json carried no framework signal, but workspace
+  // members might. Classify each member and combine (majority → plurality →
+  // precedence tie-break). Comes after the root high-confidence checks so a
+  // root with real deps still wins.
+  const mono = detectMonorepoProfile(projectPath);
+  if (mono) {
+    return { ...mono, signals: [...signals, ...mono.signals] };
   }
 
   if (cargoToml || pyprojectToml || goMod) {

@@ -42,11 +42,46 @@ export const TAXONOMY_BY_ID: Record<string, TaxonomySection> = Object.fromEntrie
 /** Heuristic classifier shipped with Phase 3. Real classifier is a Claude call. */
 export type Scope = "trivial" | "standard" | "major";
 
+/** Scope ladder, low → high. Shared by the triage floor + bounded refinement. */
+export const SCOPE_ORDER: readonly Scope[] = ["trivial", "standard", "major"];
+export function scopeRank(s: Scope): number {
+  return SCOPE_ORDER.indexOf(s);
+}
+
+/**
+ * Greenfield-build detector: "create/build/implement/scaffold … an app/game/
+ * site/service/tool". Paired with an empty/near-empty target dir it floors the
+ * triage scope at `standard` so a fresh build is never mistaken for a trivial
+ * one-file edit. Established repos (non-empty dir) are left untouched.
+ */
+export const GREENFIELD_REQUEST_RE =
+  /\b(create|build|implement|make|scaffold|bootstrap|develop|generate|design|start|write)\b[\s\S]{0,60}?\b(app|application|game|website|web ?app|site|service|micro-?service|tool|platform|api|cli|bot|dashboard|extension|plugin|library|sdk|engine|prototype|mvp)\b/i;
+
+/**
+ * Clamp an LLM-suggested scope to within ±1 step of the heuristic anchor and
+ * never below the (greenfield) floor. The heuristic stays the guardrail; the
+ * model may nudge one rung. Used by the triage phase's bounded refinement.
+ */
+export function boundRefinedScope(heuristic: Scope, suggested: Scope, floor: Scope = "trivial"): Scope {
+  const anchor = scopeRank(heuristic);
+  const lo = Math.max(anchor - 1, scopeRank(floor));
+  const hi = Math.min(anchor + 1, SCOPE_ORDER.length - 1);
+  const clamped = Math.min(hi, Math.max(lo, scopeRank(suggested)));
+  return SCOPE_ORDER[clamped]!;
+}
+
+/** Extract a trivial/standard/major suggestion from free-form model text. */
+export function parseScopeSuggestion(text: string): Scope | null {
+  const m = text.toLowerCase().match(/\b(trivial|standard|major)\b/);
+  return m ? (m[1] as Scope) : null;
+}
+
 export function heuristicTriage(opts: {
   request_text: string;
   diff_loc?: number;        // when the driver knows it
   files_touched?: number;
-}): { scope: Scope; signals: string[] } {
+  near_empty_dir?: boolean; // caller: target project dir is empty/near-empty
+}): { scope: Scope; signals: string[]; floor: Scope } {
   const signals: string[] = [];
   const text = opts.request_text.toLowerCase();
   let score = 0;
@@ -87,7 +122,20 @@ export function heuristicTriage(opts: {
   if (score <= -2) scope = "trivial";
   if (score >= 3)  scope = "major";
 
-  return { scope, signals };
+  // Greenfield floor: a "create/build … app" request against an empty target
+  // dir is at minimum `standard` — never a trivial one-file edit. The signal is
+  // always recorded so the operator sees why the floor moved (or didn't).
+  let floor: Scope = "trivial";
+  if (opts.near_empty_dir && GREENFIELD_REQUEST_RE.test(text)) {
+    signals.push("greenfield-build");
+    floor = "standard";
+    if (scopeRank(scope) < scopeRank(floor)) {
+      signals.push(`greenfield-floor:${scope}->${floor}`);
+      scope = floor;
+    }
+  }
+
+  return { scope, signals, floor };
 }
 
 /** Heuristic taxonomy mapper. Real mapping is a Claude call against the section table. */
