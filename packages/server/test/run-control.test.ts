@@ -151,6 +151,42 @@ describe("run-control — start / complete / SSE", () => {
     expect(firstIdMatch).toBeTruthy();
   });
 
+  it("POST /runs forwards ladder_override + tier_pools_override to the pilot (persisted to cli_flags_json)", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", {
+      project_path: project,
+      request_text: "Add a helper.",
+      mode: "single",
+      tier_cap: "opus",
+      // Real catalog model ids so the (fake) engine's catalog.resolve is happy
+      // and the run reaches complete — the assertion is on persistence, below.
+      ladder_override: { sonnet: "claude-opus-4-7" },
+      tier_pools_override: { sonnet: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+    });
+    expect(started.status).toBe(200);
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    // The overrides threaded supervisor → RunPilot → startRun and were persisted
+    // verbatim to runs.cli_flags_json for replay.
+    const tree = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}`);
+    const flags = JSON.parse(tree.json.run.cli_flags_json as string);
+    expect(flags.ladder_override).toEqual({ sonnet: "claude-opus-4-7" });
+    expect(flags.tier_pools_override).toEqual({ sonnet: ["claude-opus-4-7", "claude-sonnet-4-6"] });
+    expect(flags.tier_cap).toBe("opus");
+  });
+
+  it("a flagless run leaves cli_flags_json NULL (byte-identical persistence)", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Add a helper.", mode: "single" });
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+    const tree = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}`);
+    expect(tree.json.run.cli_flags_json).toBeNull();
+  });
+
   it("422 on best_of + tier flags", async () => {
     const s = await makeServer(() => makeEngine());
     const r = await post(s.base, "/api/v1/runs", { project_path: makeTempProject(), request_text: "x", mode: "best_of", n: 3, tier_cap: "opus" });

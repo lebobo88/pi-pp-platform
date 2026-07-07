@@ -304,12 +304,14 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
           {Object.entries(draft.ladders).map(([ladderName, tiers]) => (
             <div key={ladderName} className="space-y-2">
               <div className="mono text-[11px] uppercase tracking-wide text-ink-3">{ladderName}</div>
-              {Object.entries(tiers).map(([tier, modelId]) => (
+              {Object.entries(tiers)
+                .filter(([tier]) => tier !== "tier_pools")
+                .map(([tier, modelId]) => (
                 <div key={tier} className="flex items-center gap-2">
                   <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
                   <input
                     list={MODEL_DATALIST_ID}
-                    value={modelId}
+                    value={typeof modelId === "string" ? modelId : ""}
                     spellCheck={false}
                     autoComplete="off"
                     data-testid={`ladder-${ladderName}-${tier}`}

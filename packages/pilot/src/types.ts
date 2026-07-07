@@ -14,6 +14,7 @@ import type {
 import type { EventBus } from "./events.js";
 import type { JudgePolicy } from "./judge-policy.js";
 import type { TierTraceEntry, TierFlags } from "./tier-resolver.js";
+import type { LadderOverride } from "./generation-model.js";
 
 export type RunMode = "single" | "team" | "best_of" | "review";
 
@@ -31,6 +32,14 @@ export type RunPilotOptions = {
   tierCap?: ClaudeTier;
   tierFloor?: ClaudeTier;
   noTierPolicy?: boolean;
+  /**
+   * Per-run effective-ladder overrides (highest precedence, above the project
+   * profile, the global harness_settings ladder, and the catalog default).
+   * `ladderOverride` maps a Claude tier → concrete model id; `tierPoolsOverride`
+   * maps a tier → model pool. Absent → resolution is byte-identical.
+   */
+  ladderOverride?: Partial<Record<ClaudeTier, string>>;
+  tierPoolsOverride?: Partial<Record<ClaudeTier, string[]>>;
   engine: Engine;
   bus: EventBus;
   clock?: Clock;
@@ -101,6 +110,14 @@ export type RunContext = {
   forum?: string;
   n?: number;
   flags: TierFlags;
+  /**
+   * TOP-precedence effective-ladder override for this run: the per-run request
+   * override merged OVER the project profile's ladder/tier_pools (per-run wins
+   * per-tier). Assembled after the profile phase and passed to the tier
+   * resolver, which applies it above the global harness_settings ladder and the
+   * catalog default. Undefined → resolution is byte-identical.
+   */
+  ladderOverride?: LadderOverride;
 
   // engine / io seams
   engine: Engine;

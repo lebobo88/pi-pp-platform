@@ -30,6 +30,9 @@ export interface StartRunInput {
   tierCap?: "haiku" | "sonnet" | "opus" | "fable";
   tierFloor?: "haiku" | "sonnet" | "opus" | "fable";
   noTierPolicy?: boolean;
+  /** Per-run effective-ladder overrides (top precedence): tier → model id / pool. */
+  ladderOverride?: Partial<Record<"haiku" | "sonnet" | "opus" | "fable", string>>;
+  tierPoolsOverride?: Partial<Record<"haiku" | "sonnet" | "opus" | "fable", string[]>>;
   /** Test/server seam: explicit stage set (bypasses scope/mode planning). */
   stagesOverride?: unknown;
 }
@@ -122,6 +125,8 @@ export class RunSupervisor {
       tierCap: input.tierCap,
       tierFloor: input.tierFloor,
       noTierPolicy: input.noTierPolicy,
+      ladderOverride: input.ladderOverride,
+      tierPoolsOverride: input.tierPoolsOverride,
       // stagesOverride is a typed StageSpec[] in the pilot; the server passes it
       // through opaquely for the test seam.
       ...(input.stagesOverride ? { stagesOverride: input.stagesOverride as never } : {}),

@@ -13,17 +13,43 @@ import { providerForModel, type Engine } from "@pp/engine";
 
 type ResolvedModel = ReturnType<Engine["catalog"]["resolve"]>;
 
+/**
+ * One persisted harness_settings ladder: tier → model id, plus an optional
+ * reserved `tier_pools` key (mirrors the catalog ladder + the wire
+ * HarnessLadder). Every other key is a tier name.
+ */
+interface PersistedLadder {
+  [tier: string]: string | Record<string, string[]> | undefined;
+  tier_pools?: Record<string, string[]>;
+}
+
 interface PersistedSettings {
-  ladders?: Record<string, Record<string, string>>;
+  ladders?: Record<string, PersistedLadder>;
+}
+
+/** The persisted ladder's tier→model map, with the reserved `tier_pools` key stripped. */
+function settingsTiers(l: PersistedLadder | undefined): Record<string, string> {
+  if (!l) return {};
+  const out: Record<string, string> = {};
+  for (const [tier, v] of Object.entries(l)) {
+    if (tier === "tier_pools") continue;
+    if (typeof v === "string") out[tier] = v;
+  }
+  return out;
+}
+
+/** The persisted ladder's per-tier pools (empty when none). */
+function settingsPools(l: PersistedLadder | undefined): Record<string, string[]> {
+  const p = l?.tier_pools;
+  return p && typeof p === "object" ? p : {};
 }
 
 /**
- * Optional per-run override of the effective ladder — a project profile's
- * `ladder` / `tier_pools`. Layered ABOVE the global harness_settings ladder and
- * the catalog default. Absent (or empty) → resolution is byte-identical to the
- * pre-override behavior. Structurally satisfied by @pp/core's ProfileSpec, so a
- * caller can pass the resolved profile directly once it is threaded through
- * (REST/settings plumbing lands in a follow-up).
+ * Optional TOP-precedence override of the effective ladder — the per-tier
+ * `ladder` / `tier_pools` merge that the caller assembles from the per-run
+ * request override (highest) layered over the project profile. Applied ABOVE
+ * the global harness_settings ladder and the catalog default. Absent (or empty)
+ * → resolution is byte-identical to the pre-override behavior.
  */
 export interface LadderOverride {
   ladder?: Record<string, string>;
@@ -31,35 +57,80 @@ export interface LadderOverride {
 }
 
 /**
- * tier → model id for the effective default ladder, layered low→high:
- *   catalog default ladder  <  global harness_settings ladder  <  profile ladder.
- * The base (settings-or-catalog) preserves the original replace-wholesale
- * behavior; the optional `override.ladder` merges per-tier ON TOP. With no
- * override the returned map is exactly what it was before this argument existed.
+ * Assemble the TOP-precedence {@link LadderOverride} for a run: the per-run
+ * request override (highest) layered per-tier OVER the project profile's
+ * `ladder` / `tier_pools` (per-run wins each tier it names). `undefined` inputs
+ * are treated as empty; when nothing is supplied at either level the result is
+ * `undefined` and resolution stays byte-identical. The resolver then applies the
+ * result ABOVE the global harness_settings ladder and the catalog default —
+ * completing the precedence chain
+ *
+ *   per-run override > project profile > harness_settings ladder > catalog default
+ *
+ * for BOTH tiers and tier_pools.
+ */
+export function mergeLadderOverride(
+  profileLadder?: Record<string, string | undefined>,
+  profilePools?: Record<string, string[] | undefined>,
+  perRunLadder?: Record<string, string | undefined>,
+  perRunPools?: Record<string, string[] | undefined>,
+): LadderOverride | undefined {
+  const ladder: Record<string, string> = {};
+  for (const [tier, v] of Object.entries({ ...(profileLadder ?? {}), ...(perRunLadder ?? {}) })) {
+    if (typeof v === "string" && v.length > 0) ladder[tier] = v;
+  }
+  const tier_pools: Record<string, string[]> = {};
+  for (const [tier, v] of Object.entries({ ...(profilePools ?? {}), ...(perRunPools ?? {}) })) {
+    if (Array.isArray(v) && v.length > 0) tier_pools[tier] = v;
+  }
+  const hasLadder = Object.keys(ladder).length > 0;
+  const hasPools = Object.keys(tier_pools).length > 0;
+  if (!hasLadder && !hasPools) return undefined;
+  return {
+    ...(hasLadder ? { ladder } : {}),
+    ...(hasPools ? { tier_pools } : {}),
+  };
+}
+
+/**
+ * tier → model id for the effective default ladder, layered per-tier low→high:
+ *
+ *   catalog default  <  global harness_settings.ladders[name]  <  override
+ *
+ * where `override` is the caller's merged (per-run over profile) top layer. The
+ * base merges settings tiers ON TOP of the catalog per-tier (settings wins the
+ * tiers it names, catalog fills the rest); the override then wins the tiers it
+ * names. With no settings and no override the map equals the catalog default —
+ * byte-identical to the pre-precedence behavior.
  */
 export function effectiveLadderTiers(override?: LadderOverride): Record<string, string> {
   const settings = getPlatformSetting("harness_settings") as PersistedSettings | undefined;
   const name = defaultLadderName();
-  const fromSettings = settings?.ladders?.[name];
-  const base =
-    fromSettings && Object.keys(fromSettings).length > 0
-      ? fromSettings
-      : Object.keys(tierModelsFor(name)).length > 0
-        ? tierModelsFor(name)
-        : (CLAUDE_TIER_MODELS as Record<string, string>);
+  const catalogTiers =
+    Object.keys(tierModelsFor(name)).length > 0
+      ? tierModelsFor(name)
+      : (CLAUDE_TIER_MODELS as Record<string, string>);
+  const base = { ...catalogTiers, ...settingsTiers(settings?.ladders?.[name]) };
   const over = override?.ladder;
   if (over && Object.keys(over).length > 0) return { ...base, ...over };
   return base;
 }
 
 /**
- * tier → model POOL for the effective default ladder: catalog pools with the
- * optional `override.tier_pools` (a project profile's pools) merged per-tier ON
- * TOP. Empty when nothing configured — the common case, which keeps
+ * tier → model POOL for the effective default ladder, layered per-tier low→high:
+ *
+ *   catalog tier_pools  <  global harness_settings.ladders[name].tier_pools  <  override
+ *
+ * Prior to this the settings layer was silently dropped (only the catalog pools
+ * + override were consulted), so a tier_pool configured ONLY in harness_settings
+ * never took effect and the documented precedence was false. Empty when nothing
+ * is configured at any layer — the common case, which keeps
  * generationModelIdForTier on its single-model path.
  */
 export function effectiveTierPools(override?: LadderOverride): Record<string, string[]> {
-  const base = tierPoolsFor(defaultLadderName());
+  const settings = getPlatformSetting("harness_settings") as PersistedSettings | undefined;
+  const name = defaultLadderName();
+  const base = { ...tierPoolsFor(name), ...settingsPools(settings?.ladders?.[name]) };
   const over = override?.tier_pools;
   if (over && Object.keys(over).length > 0) return { ...base, ...over };
   return base;

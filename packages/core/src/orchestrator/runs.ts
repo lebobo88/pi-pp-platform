@@ -73,6 +73,13 @@ export type StartRunInput = {
   hydra_envelope_id?: string;
   hydra_origin_squad?: string;
   hydra_envelope_type?: string;
+  /**
+   * Per-run CLI / override flags (tier cap/floor, no-tier-policy, ladder +
+   * tier-pool overrides). Serialized verbatim to runs.cli_flags_json so replays
+   * (orchestrator/replay.ts) can reconstruct them. Null / empty → the column
+   * stays NULL, byte-identical to a flagless run.
+   */
+  cli_flags?: Record<string, unknown> | null;
 };
 
 export type StartRunOutput = {
@@ -170,6 +177,12 @@ export async function startRun(input: StartRunInput): Promise<StartRunOutput> {
   // been amended since. Absence (no CONSTITUTION.md) is fine.
   const constitutionShaAtStart = constitutionSha(input.project_path);
 
+  // Persist per-run CLI/override flags for replay. Empty/absent → NULL.
+  const cliFlagsJson =
+    input.cli_flags && Object.keys(input.cli_flags).length > 0
+      ? JSON.stringify(input.cli_flags)
+      : null;
+
   try {
     txImmediate(() => {
       db()
@@ -177,10 +190,10 @@ export async function startRun(input: StartRunInput): Promise<StartRunOutput> {
           `INSERT INTO runs(
             id, session_id, project_path, request_text, team, mode, forum, n,
             status, profile_snapshot_json, taxonomy_mapping_json,
-            head_sha, tree_dirty_hash, cli_versions_json, started_at,
+            head_sha, tree_dirty_hash, cli_versions_json, cli_flags_json, started_at,
             hydra_workflow_id, hydra_envelope_id, hydra_origin_squad, hydra_envelope_type,
             constitution_sha
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -197,6 +210,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunOutput> {
           headSha,
           treeDirtyHash,
           JSON.stringify(cliVersions),
+          cliFlagsJson,
           startedAt,
           hydraCtx?.workflow_id ?? null,
           hydraCtx?.envelope_id ?? null,

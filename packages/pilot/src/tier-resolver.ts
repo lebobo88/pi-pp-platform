@@ -26,7 +26,7 @@ import {
   type ModelTierPolicy,
 } from "@pp/core";
 import type { Scope } from "@pp/core";
-import { generationModelIdForTier } from "./generation-model.js";
+import { generationModelIdForTier, type LadderOverride } from "./generation-model.js";
 import { TierResolutionError } from "./errors.js";
 
 /**
@@ -113,6 +113,13 @@ export type TierResolveInput = {
   teamStageModelTier?: ClaudeTier;
   /** Profile model_tier_policy, if any. */
   profilePolicy?: ModelTierPolicy | null;
+  /**
+   * TOP-precedence effective-ladder override (per-run request override merged
+   * over the project profile's ladder/tier_pools). Threaded through to the
+   * concrete model-id resolution so per-run + profile ladders win over the
+   * global harness_settings ladder and the catalog default.
+   */
+  ladderOverride?: LadderOverride;
   flags: TierFlags;
 };
 
@@ -202,7 +209,7 @@ export function resolveTier(input: TierResolveInput): TierResolution {
     });
   }
 
-  return { tier, model_id: generationModelIdForTier(tier), trace };
+  return { tier, model_id: generationModelIdForTier(tier, undefined, input.ladderOverride), trace };
 }
 
 /**
@@ -221,6 +228,7 @@ export function escalateTierForRetry(
   flags: TierFlags,
   verdictOutcome: string,
   rotationIndex?: number,
+  ladderOverride?: LadderOverride,
 ): { tier: ClaudeTier; model_id: string; trace: TierTraceEntry } {
   let retryTier = shiftTier(initialTier, +1);
   if (
@@ -232,7 +240,7 @@ export function escalateTierForRetry(
   }
   return {
     tier: retryTier,
-    model_id: generationModelIdForTier(retryTier, rotationIndex),
+    model_id: generationModelIdForTier(retryTier, rotationIndex, ladderOverride),
     trace: { layer: "retry", tier: retryTier, initial: initialTier, reason: `verdict:${verdictOutcome}` },
   };
 }

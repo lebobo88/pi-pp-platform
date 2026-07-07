@@ -37,6 +37,7 @@ import {
 import { EventBus } from "./events.js";
 import { JudgePolicy } from "./judge-policy.js";
 import { emit, type RunContext, type RunPilotOptions, type StageSpec } from "./types.js";
+import { mergeLadderOverride } from "./generation-model.js";
 import { runStage, reArchiveTierDecisions } from "./phases/stage-loop.js";
 import { runBestOfStage } from "./phases/best-of.js";
 import { runBrowserValidationStage } from "./phases/browser-validation.js";
@@ -87,6 +88,8 @@ export class RunPilot {
     const scope: Scope = o.scopeOverride ?? heuristic.scope;
 
     // ── Phase 3: start run (acquires the project lock, snapshots profile). ───
+    // Persist the per-run CLI/override flags to runs.cli_flags_json so replays
+    // can reconstruct them. Empty → null (no behavioral change for flagless runs).
     const started = await startRun({
       request_text: o.requestText,
       project_path: o.projectPath,
@@ -94,6 +97,7 @@ export class RunPilot {
       team: o.team,
       forum: o.forum,
       n: o.n,
+      cli_flags: buildCliFlags(o),
     });
 
     const ctx: RunContext = {
@@ -131,6 +135,15 @@ export class RunPilot {
       // ── Phases 1/2/4: triage refinement, profile snapshot, taxonomy. ───────
       await runTriagePhase(ctx, o.scopeOverride);
       runProfilePhase(ctx);
+      // Assemble the effective-ladder override now that the profile is resolved:
+      // per-run request override (highest) merged OVER the profile's ladder /
+      // tier_pools. Threaded through every tier resolution in the stage loop.
+      ctx.ladderOverride = mergeLadderOverride(
+        ctx.profile?.ladder,
+        ctx.profile?.tier_pools,
+        o.ladderOverride,
+        o.tierPoolsOverride,
+      );
       await runTaxonomyPhase(ctx);
 
       // ── Phase 5: ensure AGENTS.md + taxonomy blueprint + seed tier_decisions.
@@ -401,6 +414,25 @@ function bootstrapProfile(projectPath: string, requestText?: string): void {
   } catch {
     /* generic mode */
   }
+}
+
+/**
+ * Assemble the per-run CLI/override flags persisted to runs.cli_flags_json.
+ * Only non-default fields are included; an empty object collapses to null so a
+ * flagless run leaves the column NULL (byte-identical to prior behavior).
+ */
+function buildCliFlags(o: RunPilotOptions): Record<string, unknown> | null {
+  const flags: Record<string, unknown> = {};
+  if (o.tierCap) flags.tier_cap = o.tierCap;
+  if (o.tierFloor) flags.tier_floor = o.tierFloor;
+  if (o.noTierPolicy) flags.no_tier_policy = true;
+  if (o.ladderOverride && Object.keys(o.ladderOverride).length > 0) {
+    flags.ladder_override = o.ladderOverride;
+  }
+  if (o.tierPoolsOverride && Object.keys(o.tierPoolsOverride).length > 0) {
+    flags.tier_pools_override = o.tierPoolsOverride;
+  }
+  return Object.keys(flags).length > 0 ? flags : null;
 }
 
 export { EventBus };

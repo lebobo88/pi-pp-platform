@@ -271,6 +271,7 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
     scope: ctx.scope,
     teamStageModelTier: stage.teamStageModelTier,
     profilePolicy: ctx.profile?.model_tier_policy ?? null,
+    ladderOverride: ctx.ladderOverride,
     flags: ctx.flags,
   });
   recordTierTrace(ctx, stage, resolution.tier, resolution.model_id, resolution.trace);
@@ -781,7 +782,7 @@ export async function reflexion(
   // Reflexion is the single retry (attempt index 1), so rotationIndex=1 draws
   // the NEXT model from the escalated tier's pool (pool[0] was the first
   // attempt). No pool configured → the index is ignored, model id unchanged.
-  const esc = escalateTierForRetry(initialTier, ctx.flags, "retry", 1);
+  const esc = escalateTierForRetry(initialTier, ctx.flags, "retry", 1, ctx.ladderOverride);
   ctx.tierTrace.push({
     stage_kind: stage.kind,
     agent: stage.agent,
