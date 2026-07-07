@@ -58,6 +58,39 @@ describe("renderSystemPrompt — upstream artifacts", () => {
   });
 });
 
+describe("renderSystemPrompt — rubric definition of done", () => {
+  afterEach(() => delete process.env.PP_RUBRIC_BUDGET_CHARS);
+
+  it("renders the rubric block after upstream artifacts and before the role body", () => {
+    const out = renderSystemPrompt(role, {
+      execution: "session-coding",
+      upstreamArtifacts: [{ kind: "spec", text: "FR-CALC-01: the calculator MUST add." }],
+      rubricMd: "# Rubric\n\nScore correctness in [0,1]; pass requires >= 0.7.",
+    });
+    expect(out).toContain("## Definition of done — you will be judged against this rubric");
+    expect(out).toContain("Score correctness in [0,1]");
+    expect(out.indexOf("Approved upstream artifacts")).toBeLessThan(out.indexOf("Definition of done"));
+    expect(out.indexOf("Definition of done")).toBeLessThan(out.indexOf(role.cleanedBody.slice(0, 40)));
+  });
+
+  it("omits the block when no rubric binds — byte-identical to the no-rubric prompt", () => {
+    const base = renderSystemPrompt(role, { execution: "session-coding" });
+    const withUndef = renderSystemPrompt(role, { execution: "session-coding", rubricMd: undefined });
+    expect(withUndef).toBe(base);
+    expect(base).not.toContain("Definition of done");
+  });
+
+  it("budgets an oversized rubric via PP_RUBRIC_BUDGET_CHARS", () => {
+    process.env.PP_RUBRIC_BUDGET_CHARS = "40";
+    const out = renderSystemPrompt(role, {
+      execution: "session-coding",
+      rubricMd: "R".repeat(500),
+    });
+    expect(out).toContain("[truncated]");
+    expect(out).not.toContain("R".repeat(100));
+  });
+});
+
 describe("loadAgentsMdForPrompt", () => {
   it("returns null for a fully-placeholder scaffold and for missing files", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-agentsmd-"));

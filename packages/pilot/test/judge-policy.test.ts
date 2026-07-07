@@ -55,6 +55,26 @@ describe("JudgePolicy — escalation", () => {
   });
 });
 
+describe("JudgePolicy — rubricIdFor (generator and judge share one rubric)", () => {
+  it("returns exactly the rubric id select() later binds on the verdict", () => {
+    const jp = new JudgePolicy();
+    for (const gateType of ["spec", "design", "security", "contract", "code_style"] as const) {
+      const input = { gateType, ...claudeGen, promptKeywords: "add a small feature" };
+      // The id the generator is shown must equal the id the verdict records.
+      expect(jp.rubricIdFor(input)).toBe(jp.select("run-rubric", input).rubric_id);
+    }
+  });
+
+  it("has no provider-rotation side effect (safe to call before generation)", () => {
+    const jp = new JudgePolicy();
+    // A pre-generation rubric resolution must NOT consume a rotation slot.
+    jp.rubricIdFor({ gateType: "code_style", ...claudeGen });
+    const a = jp.select("run1", { gateType: "code_style", ...claudeGen });
+    const b = jp.select("run1", { gateType: "code_style", ...claudeGen });
+    expect(a.provider).not.toBe(b.provider);
+  });
+});
+
 describe("JudgePolicy — kill switches", () => {
   it("PP_DISABLE_GEMINI drops google from the pool", () => {
     process.env.PP_DISABLE_GEMINI = "1";

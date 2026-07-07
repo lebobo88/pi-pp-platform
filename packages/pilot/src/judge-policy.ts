@@ -100,6 +100,31 @@ export type JudgeSelection = {
 export class JudgePolicy {
   private lastProviderByRun = new Map<string, GenProvider>();
 
+  /**
+   * The gate-bound rubric id for these inputs — the rubric-only slice of
+   * {@link select}, WITHOUT its provider-rotation side effect. The generator
+   * calls this BEFORE generating so it can be shown the very rubric it will be
+   * judged against; select() derives its `rubric_id` from the same
+   * `evaluateGate` inputs, so the id injected into the generator prompt equals
+   * the id later recorded on the verdict. Returns null when no rubric binds.
+   */
+  rubricIdFor(
+    input: Pick<
+      JudgeSelectInput,
+      "gateType" | "generatorProducer" | "generatorModel" | "promptKeywords" | "profile" | "artifactKind" | "rubricHint"
+    >,
+  ): string | null {
+    return evaluateGate({
+      gate_type: input.gateType,
+      generator_producer: input.generatorProducer,
+      generator_model: input.generatorModel,
+      prompt_keywords: input.promptKeywords,
+      profile: input.profile ?? null,
+      artifact_kind: input.artifactKind ?? null,
+      rubric_hint: input.rubricHint ?? null,
+    }).rubric_id;
+  }
+
   select(runId: string, input: JudgeSelectInput): JudgeSelection {
     const decision = evaluateGate({
       gate_type: input.gateType,

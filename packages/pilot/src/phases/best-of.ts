@@ -37,7 +37,7 @@ import {
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { generationModelIdForTier } from "../generation-model.js";
 import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
-import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty, makeOutputStreamer } from "./stage-loop.js";
+import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty, makeOutputStreamer, resolveStageRubricMd } from "./stage-loop.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -113,6 +113,12 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     });
   }
 
+  // The rubric every candidate will be judged against, resolved up front so
+  // each candidate generator sees its definition of done. Same gate inputs the
+  // ranking judge uses below (generator model = the sonnet slot), so the id
+  // shown to candidates is the id recorded on the winner's verdict.
+  const candidateRubricMd = resolveStageRubricMd(ctx, stage, generationModelIdForTier("sonnet"));
+
   // ── Generate every candidate (each in its own worktree, rotated model/seed).
   const cand: Cand[] = [];
   for (const c of candidates) {
@@ -138,6 +144,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       skills: skills.injected.map((s) => ({ name: s.name, body: s.body })),
       upstreamArtifacts: ctx.stageArtifacts.map((a) => ({ kind: a.kind, text: a.text })),
       agentsMd: loadAgentsMdForPrompt(ctx.projectPath) ?? undefined,
+      rubricMd: candidateRubricMd,
     });
     const genProvider = providerForModel(rot.model_id);
     if (!genProvider) {
