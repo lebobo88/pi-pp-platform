@@ -186,6 +186,7 @@ export function evaluateGate(opts: {
   profile?: Profile | null;
   artifact_kind?: string | null;   // e.g. "screen_state_matrix" — Phase 6 maps this to a rubric
   rubric_hint?: string | null;     // optional stage-declared rubric id
+  greenfield?: boolean;            // run carries the triage `greenfield` signal
 }): GateDecision {
   const base = BASE_TIERS[opts.gate_type] ?? "same_vendor";
   let required = base === "cross_vendor";
@@ -227,7 +228,7 @@ export function evaluateGate(opts: {
     base_tier: base,
     upgraded,
     reason,
-    rubric_id: pickDefaultRubric(opts.gate_type, opts.profile, opts.artifact_kind, opts.rubric_hint, opts.prompt_keywords),
+    rubric_id: pickDefaultRubric(opts.gate_type, opts.profile, opts.artifact_kind, opts.rubric_hint, opts.prompt_keywords, opts.greenfield),
   };
 }
 
@@ -240,6 +241,7 @@ function pickDefaultRubric(
   artifact_kind?: string | null,
   rubric_hint?: string | null,
   prompt_keywords?: string,
+  greenfield?: boolean,
 ): RubricSelection {
   const hinted = normalizeRubricHint(rubric_hint);
   if (hinted) return hinted;
@@ -260,6 +262,15 @@ function pickDefaultRubric(
   if (gate_type === "design")                    return profile === "web-ui" ? "wcag-2.2-aa@1" : "c4-system-context@1";
   if (gate_type === "contract")                  return "openapi-3.1-stability@1";
   if (gate_type === "spec")                      return "rfc-2119-normative@1";
+
+  // Greenfield builds: a code gate binds no default rubric, so the judge falls
+  // back to a minimality-bearing generic rubric — the wrong pressure for
+  // building something new (R7 / RC7). Bind the scope-fidelity variant instead.
+  // Explicit rubric hints and canonical artifact-kind bindings above already
+  // returned, so they still win; this only replaces the null (fallback) case.
+  if (greenfield && (gate_type === "code_style" || gate_type === "lint_class")) {
+    return "code-greenfield@1";
+  }
   return null;
 }
 

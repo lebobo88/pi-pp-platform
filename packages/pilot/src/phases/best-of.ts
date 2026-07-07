@@ -37,7 +37,7 @@ import {
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { generationModelIdForTier } from "../generation-model.js";
 import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
-import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty, makeOutputStreamer, resolveStageRubricMd } from "./stage-loop.js";
+import { selectStageSkills, gitHeadSha, gitDiffRange, gitAutoCommitIfDirty, makeOutputStreamer, resolveStageRubricMd, runIsGreenfield } from "./stage-loop.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -242,6 +242,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       profile: (ctx.profileName as Profile | undefined) ?? null,
       artifactKind: stage.artifact_kind ?? null,
       rubricHint: stage.rubricHint ?? null,
+      greenfield: runIsGreenfield(ctx),
       forceCrossVendor: true,
     });
   } catch (err) {
