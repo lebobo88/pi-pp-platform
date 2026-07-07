@@ -259,6 +259,34 @@ export function gitAutoCommitIfDirty(cwd: string, message: string): boolean {
   );
 }
 
+/**
+ * The rubric markdown a stage will be judged against, resolved BEFORE
+ * generation so the generator can be shown its definition of done. The
+ * generator historically never saw the rubric (it was resolved only inside
+ * judge(), after generation) — first-pass quality suffered
+ * (docs/retrospective-first-pass-quality.md). Uses the SAME gate inputs
+ * judge()'s select() feeds `evaluateGate`, so the rubric id shown to the
+ * generator is exactly the id later recorded on the verdict. Returns undefined
+ * when no rubric binds — the prompt then stays byte-identical; only the judge
+ * falls back to a generic rubric.
+ */
+export function resolveStageRubricMd(
+  ctx: RunContext,
+  stage: StageSpec,
+  generatorModel: string,
+): string | undefined {
+  const rubricId = ctx.judgePolicy.rubricIdFor({
+    gateType: stage.gate_type as GateType,
+    generatorProducer: "claude",
+    generatorModel,
+    promptKeywords: ctx.requestText,
+    profile: (ctx.profileName as Profile | undefined) ?? null,
+    artifactKind: stage.artifact_kind ?? null,
+    rubricHint: stage.rubricHint ?? null,
+  });
+  return rubricId ? getRubric(rubricId)?.markdown ?? undefined : undefined;
+}
+
 /** Drives one stage to a terminal outcome. */
 export async function runStage(ctx: RunContext, stage: StageSpec): Promise<StageOutcome> {
   ctx.signal?.throwIfAborted();
@@ -277,8 +305,13 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
   });
   recordTierTrace(ctx, stage, resolution.tier, resolution.model_id, resolution.trace);
 
+  // Resolve the rubric the judge will grade against BEFORE generating, so the
+  // generator sees its definition of done. Same gate inputs judge() uses → the
+  // id shown to the generator is the id recorded on the verdict.
+  const rubricMd = resolveStageRubricMd(ctx, stage, resolution.model_id);
+
   // ── Attempt 0: generate → judge ──────────────────────────────────────────
-  const gen0 = await generate(ctx, stage, stage_id, resolution.model_id, resolution.tier, 0, undefined, []);
+  const gen0 = await generate(ctx, stage, stage_id, resolution.model_id, resolution.tier, 0, undefined, [], undefined, rubricMd);
 
   // Zero-change guard: a coding attempt that wrote nothing has no diff to
   // judge — skip the (paid) judge call entirely and go straight to Reflexion
@@ -347,6 +380,9 @@ async function generate(
   parentAttemptId: string | undefined,
   priorCritiques: string[],
   priorArtifact?: string,
+  /** The rubric the judge grades against, shown to the generator as its
+   * definition of done. Omitted when no rubric binds (prompt stays identical). */
+  rubricMd?: string,
 ): Promise<GenOut> {
   const role = loadRolePrompt(stage.agent, { projectPath: ctx.projectPath });
   // A tests_pre stage always produces a completion (the tdd_manifest YAML).
@@ -377,6 +413,7 @@ async function generate(
     upstreamArtifacts: ctx.stageArtifacts.map((a) => ({ kind: a.kind, text: a.text })),
     agentsMd: loadAgentsMdForPrompt(ctx.projectPath) ?? undefined,
     priorArtifact,
+    rubricMd,
   });
   // Resolve the generator's provider FROM the model (effective ladder), not the
   // legacy hardcoded "anthropic" — credential-aware, so ambiguous ids land on
@@ -804,7 +841,11 @@ export async function reflexion(
   reArchiveTierDecisions(ctx);
   emit(ctx, "reflexion.retry", { initial_tier: initialTier, retry_tier: esc.tier, critique_excerpt: critique.slice(0, 240) }, { stage_id });
 
-  const gen1 = await generate(ctx, stage, stage_id, esc.model_id, esc.tier, 1, parentAttemptId, [critique], priorArtifactText);
+  // The retry generator keeps its prior-critique/prior-attempt blocks AND is
+  // shown the same rubric it will be judged against (resolved here so post-hoc
+  // retries — which enter via this function directly — get it too).
+  const rubricMd = resolveStageRubricMd(ctx, stage, esc.model_id);
+  const gen1 = await generate(ctx, stage, stage_id, esc.model_id, esc.tier, 1, parentAttemptId, [critique], priorArtifactText, rubricMd);
 
   // Zero-change retry: HEAD genuinely didn't move (git failures no longer
   // read as zero-change). Surface with an honest reason — do not burn a judge

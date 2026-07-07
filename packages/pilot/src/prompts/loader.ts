@@ -269,10 +269,20 @@ export type RenderContext = {
   agentsMd?: string;
   /** On Reflexion retries: the rejected attempt's artifact, for revision. */
   priorArtifact?: string;
+  /**
+   * The rubric this stage is judged against, rendered as a "Definition of done"
+   * block so the generator sees its acceptance contract up front. Budgeted
+   * here (PP_RUBRIC_BUDGET_CHARS, default 6000). Omitted → no block, so a stage
+   * with no bound rubric produces a byte-identical prompt.
+   */
+  rubricMd?: string;
 };
 
 /** Default total budget (chars) for upstream artifact bodies in one prompt. */
 const UPSTREAM_BUDGET_CHARS_DEFAULT = 16_000;
+
+/** Default budget (chars) for the rubric "Definition of done" block. */
+const RUBRIC_BUDGET_CHARS_DEFAULT = 6_000;
 
 /**
  * Read `<project>/AGENTS.md` for prompt injection, dropping sections whose
@@ -396,6 +406,23 @@ export function renderSystemPrompt(role: RolePrompt, ctx: RenderContext = {}): s
         "Earlier pipeline stages produced these and they PASSED review. They are the authoritative " +
         "definition of the work — implement them; do not re-interpret the raw request.\n\n" +
         parts.join("\n\n"),
+    );
+  }
+
+  // The generator's definition of done: the exact rubric the judge grades
+  // against, right after the upstream artifacts (the "what") and before the
+  // role body (the "how"). Budgeted so an oversized rubric can't dominate the
+  // prompt. Follows the upstream-budget pattern (PP_RUBRIC_BUDGET_CHARS).
+  if (ctx.rubricMd && ctx.rubricMd.trim().length > 0) {
+    const raw = Number(process.env.PP_RUBRIC_BUDGET_CHARS);
+    const cap = Number.isFinite(raw) && raw >= 0 ? raw : RUBRIC_BUDGET_CHARS_DEFAULT;
+    const trimmed = ctx.rubricMd.trim();
+    const body = trimmed.length > cap ? `${trimmed.slice(0, cap)}\n\n[truncated]` : trimmed;
+    blocks.push(
+      "## Definition of done — you will be judged against this rubric\n\n" +
+        "A reviewer scores your output against the rubric below and can reject it. " +
+        "Satisfy every dimension it names — treat it as the acceptance contract.\n\n" +
+        body,
     );
   }
 
