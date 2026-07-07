@@ -603,6 +603,12 @@ export async function judge(
     critique_md: verdict.critique_md,
     score_json: verdict.score ?? critiqueRes.parsed,
     judge_provider: judgeProvider,
+    // v9 judge-usage: credit this critique's spend to the budget scopes and
+    // record it on the verdict row (all optional — a test double without them
+    // records exactly as before).
+    tokens_in: critiqueRes.tokens_in,
+    tokens_out: critiqueRes.tokens_out,
+    cost_usd: critiqueRes.cost_usd,
   });
   emit(
     ctx,
