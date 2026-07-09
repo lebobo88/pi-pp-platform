@@ -88,6 +88,7 @@ exports.apiPaths = {
     /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
      *  the bearer as `?token=` — EventSource cannot send headers. */
     runEvents: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/events`,
+    runEventLog: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/event-log`,
     runReplay: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
     runMissability: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
     runBorda: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/borda`,

@@ -1274,9 +1274,21 @@ export type BudgetTickEvent = SseEnvelope<
   "budget.tick",
   { scope: string; tokens_in: number; tokens_out: number; cost_usd: number }
 >;
+export interface FinalizationArtifactRef {
+  kind: "constitution" | "project_master" | string;
+  path: string;
+  sha256?: string | null;
+  artifact_id?: string | null;
+}
 export type RunFinalizedEvent = SseEnvelope<
   "run.finalized",
-  { run_id: string; status: RunStatus; finished_at: string; abort_reason?: string }
+  {
+    run_id: string;
+    status: RunStatus;
+    finished_at: string;
+    abort_reason?: string;
+    artifacts?: FinalizationArtifactRef[];
+  }
 >;
 
 export type RunSseEvent =
@@ -1299,6 +1311,8 @@ export type RunSseEvent =
   | RunFinalizedEvent;
 
 /** Any SSE event across either stream. */
+export type EventLogEntry = RunSseEvent;
+
 export type SseEvent = GlobalSseEvent | RunSseEvent;
 
 /** Discriminant union of every event `type` string. */
@@ -1370,6 +1384,7 @@ export const apiPaths = {
   /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
    *  the bearer as `?token=` — EventSource cannot send headers. */
   runEvents: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
+  runEventLog: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/event-log`,
   runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
   runBorda: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/borda`,

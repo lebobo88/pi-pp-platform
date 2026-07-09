@@ -43,7 +43,7 @@ import {
 } from "../ecosystem/eights-writes.js";
 import { emitDecisionRecord } from "../ecosystem/hydra-envelopes.js";
 import { analyzeAndPropose } from "./autogenesis-analyzer.js";
-import { constitutionSha } from "./constitution.js";
+import { constitutionSha, ensureConstitution } from "./constitution.js";
 import { getTeam } from "./teams.js";
 import { getForum } from "./forums.js";
 import { isCheckProducible } from "./missability.js";
@@ -2481,6 +2481,74 @@ function evaluateVG4(run_id: string): { blocked: boolean; violation?: Missabilit
   return { blocked: false };
 }
 
+export type FinalizationArtifactRef = {
+  kind: "constitution" | "project_master";
+  path: string;
+  sha256: string;
+  artifact_id: string;
+};
+
+function scrubEventPayload(value: unknown, key?: string): unknown {
+  if (value == null) return value;
+  if (typeof value === "string") {
+    if (key && /(?:api[_-]?key|api_?token|access_?token|refresh_?token|bearer_?token|authorization|secret)/i.test(key)) {
+      return "[REDACTED]";
+    }
+    return value
+      .replace(/\b(?:sk|pk|ghp|ghs|xoxb|AIza)[-_A-Za-z0-9]{10,}\b/g, "[REDACTED]")
+      .replace(/Bearer\s+[A-Za-z0-9._-]{10,}/gi, "Bearer [REDACTED]");
+  }
+  if (Array.isArray(value)) return value.map((entry) => scrubEventPayload(entry));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = scrubEventPayload(v, k);
+    }
+    return out;
+  }
+  return value;
+}
+
+function upsertFinalizationArtifact(input: {
+  run_id: string;
+  project_path: string;
+  kind: FinalizationArtifactRef["kind"];
+  path: string;
+}): FinalizationArtifactRef {
+  const body = readFileSync(input.path, "utf8");
+  const sha256 = createHash("sha256").update(body).digest("hex");
+  const relPath = relative(input.project_path, input.path).replaceAll("\\", "/");
+  const bytes = Buffer.byteLength(body, "utf8");
+  const existing = db()
+    .prepare(`SELECT id FROM artifacts WHERE run_id = ? AND kind = ? AND path = ? ORDER BY created_at DESC LIMIT 1`)
+    .get(input.run_id, input.kind, relPath) as { id: string } | undefined;
+  const artifactId = existing?.id ?? `art_${nanoid(10)}`;
+  txImmediate(() => {
+    if (existing) {
+      db()
+        .prepare(`UPDATE artifacts SET sha256 = ?, bytes = ? WHERE id = ?`)
+        .run(sha256, bytes, artifactId);
+    } else {
+      db()
+        .prepare(
+          `INSERT INTO artifacts(id, run_id, stage_id, taxonomy_section, kind, path, sha256, bytes, cell, eights_memory_id, eights_handle, created_at)
+           VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?)`
+        )
+        .run(artifactId, input.run_id, input.kind, relPath, sha256, bytes, now());
+    }
+  });
+  return { kind: input.kind, path: relPath, sha256, artifact_id: artifactId };
+}
+
+function ensureFinalizationArtifacts(run_id: string, project_path: string): FinalizationArtifactRef[] {
+  const constitution = ensureConstitution(project_path);
+  const projectMaster = ensureMasterPlan(project_path);
+  return [
+    upsertFinalizationArtifact({ run_id, project_path, kind: "constitution", path: constitution.path }),
+    upsertFinalizationArtifact({ run_id, project_path, kind: "project_master", path: projectMaster.path }),
+  ];
+}
+
 export type FinalizeRunInput = {
   run_id: string;
   status: Extract<RunStatus, "complete" | "surfaced" | "aborted">;
@@ -2504,6 +2572,8 @@ export type FinalizeRunOutput = {
   downgraded: boolean;
   /** Number of surfaced child stages that triggered the downgrade (0 when not downgraded). */
   surfaced_stage_count: number;
+  /** Finalized managed-document artifacts written for this run. */
+  artifacts: FinalizationArtifactRef[];
 };
 
 export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
@@ -2605,6 +2675,8 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
     new ProjectLock(run.project_path).release();
   } catch { /* ignore */ }
 
+  const finalizationArtifacts: FinalizationArtifactRef[] = [];
+
   // On `complete` (using effectiveStatus — VG-7 may have downgraded to surfaced),
   // patch PROJECT_MASTER.md with the run's contributions as a safety net.
   // Idempotent: re-applying the same content does not duplicate sections.
@@ -2613,6 +2685,11 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
       autoPatchMasterPlan(input.run_id, run.project_path);
     } catch (err) {
       log.warn({ run_id: input.run_id, err }, "autoPatchMasterPlan failed (non-fatal)");
+    }
+    try {
+      finalizationArtifacts.push(...ensureFinalizationArtifacts(input.run_id, run.project_path));
+    } catch (err) {
+      log.warn({ run_id: input.run_id, err }, "finalization artifact generation failed");
     }
   } else {
     // Record an audit row so the user can see the run was intentionally not patched.
@@ -2749,7 +2826,13 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   }
 
   log.info(
-    { run_id: input.run_id, requested_status: input.status, effective_status: effectiveStatus, downgraded: effectiveStatus !== input.status },
+    {
+      run_id: input.run_id,
+      requested_status: input.status,
+      effective_status: effectiveStatus,
+      downgraded: effectiveStatus !== input.status,
+      finalization_artifacts: finalizationArtifacts.map((artifact) => ({ kind: artifact.kind, path: artifact.path })),
+    },
     "run finalized",
   );
 
@@ -2758,6 +2841,7 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
     requested_status: input.status,
     downgraded: effectiveStatus !== input.status,
     surfaced_stage_count: surfacedStageCount,
+    artifacts: finalizationArtifacts,
   };
 }
 
@@ -3421,6 +3505,61 @@ export function getRun(run_id: string): unknown {
     : [];
   const artifacts = db().prepare(`SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at ASC`).all(run_id);
   return { run, stages, attempts, verdicts, artifacts };
+}
+
+export function getEventLog(
+  run_id: string,
+  opts?: { since?: number; type?: string; limit?: number },
+): Array<{ type: string; run_id: string; ts: string; seq: number; data: Record<string, unknown> }> {
+  const filters = ["run_id = ?"];
+  const params: unknown[] = [run_id];
+  if (opts?.since != null && Number.isFinite(opts.since)) {
+    filters.push("seq > ?");
+    params.push(Math.trunc(opts.since));
+  }
+  if (opts?.type) {
+    filters.push("event_type = ?");
+    params.push(opts.type);
+  }
+  const limit = Math.max(1, Math.min(Number.isFinite(opts?.limit) ? Math.trunc(opts!.limit!) : 200, 1000));
+  const rows = db()
+    .prepare(
+      `SELECT run_id, event_type, payload, seq, ts
+         FROM events
+        WHERE ${filters.join(" AND ")}
+        ORDER BY seq ASC
+        LIMIT ?`
+    )
+    .all(...params, limit) as Array<{ run_id: string; event_type: string; payload: string; seq: number; ts: string }>;
+  return rows.map((row) => {
+    let parsed: unknown = {};
+    try {
+      parsed = JSON.parse(row.payload);
+    } catch {
+      parsed = { parse_error: "invalid_payload" };
+    }
+    const data = scrubEventPayload(parsed);
+    return {
+      type: row.event_type,
+      run_id: row.run_id,
+      ts: row.ts,
+      seq: row.seq,
+      data: (typeof data === "object" && data !== null && !Array.isArray(data))
+        ? data as Record<string, unknown>
+        : { value: data },
+    };
+  });
+}
+
+export function getFinalizationArtifacts(run_id: string): FinalizationArtifactRef[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, kind, path, sha256 FROM artifacts
+        WHERE run_id = ? AND kind IN ('constitution', 'project_master')
+        ORDER BY created_at ASC`
+    )
+    .all(run_id) as Array<{ id: string; kind: FinalizationArtifactRef["kind"]; path: string; sha256: string }>;
+  return rows.map((row) => ({ kind: row.kind, path: row.path, sha256: row.sha256, artifact_id: row.id }));
 }
 
 export type RecordTaxonomyMappingInput = {

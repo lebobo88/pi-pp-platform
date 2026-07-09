@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -149,6 +149,29 @@ describe("run-control — start / complete / SSE", () => {
     // Mid-sequence resume: Last-Event-ID past the first frames returns only newer ones.
     const firstIdMatch = buf.match(/id: (\d+)/);
     expect(firstIdMatch).toBeTruthy();
+  });
+
+  it("persists an event log and generates finalization artifacts for a completed run", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Finalize observability artifacts.", mode: "single" });
+    expect(started.status).toBe(200);
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    const eventLog = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/event-log`);
+    expect(eventLog.status).toBe(200);
+    expect(Array.isArray(eventLog.json)).toBe(true);
+    expect(eventLog.json.some((ev: { type: string }) => ev.type === "run.started")).toBe(true);
+    const finalized = eventLog.json.findLast((ev: { type: string }) => ev.type === "run.finalized") as
+      | { data?: { artifacts?: Array<{ kind: string; path: string }> } }
+      | undefined;
+    expect(finalized?.data?.artifacts?.map((artifact) => artifact.kind).sort()).toEqual(["constitution", "project_master"]);
+
+    expect(existsSync(join(project, "CONSTITUTION.md"))).toBe(true);
+    expect(existsSync(join(project, "PROJECT_MASTER.md"))).toBe(true);
+    expect(readFileSync(join(project, "CONSTITUTION.md"), "utf8")).toContain("## Article I");
+    expect(readFileSync(join(project, "PROJECT_MASTER.md"), "utf8")).toContain("## 1. Executive summary");
   });
 
   it("POST /runs forwards ladder_override + tier_pools_override to the pilot (persisted to cli_flags_json)", async () => {

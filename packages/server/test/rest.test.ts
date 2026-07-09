@@ -325,6 +325,33 @@ describe("provider keys — write-only + masked", () => {
     expect(r.provider).toBe("anthropic");
     expect(r.models).toContain("claude-opus-4-7");
   });
+
+  it("GET /runs/:id/event-log redacts provider keys on read", async () => {
+    const { db } = await import("@pp/core");
+    const conn = db();
+    const now = new Date().toISOString();
+    conn.prepare(
+      "INSERT INTO runs (id, project_path, request_text, mode, status, started_at) VALUES (?,?,?,?,?,?)",
+    ).run("run_event_redact", tmpdir(), "event redact", "single", "complete", now);
+    conn.prepare(
+      "INSERT INTO events (run_id, event_type, payload, seq, ts) VALUES (?,?,?,?,?)",
+    ).run(
+      "run_event_redact",
+      "run.finalized",
+      JSON.stringify({ api_key: "sk-ant-secrettestkey1234", detail: "Bearer sk-ant-secrettestkey1234 failed" }),
+      1,
+      now,
+    );
+
+    const r = await get(apiPaths.runEventLog("run_event_redact"));
+    expect(r.statusCode).toBe(200);
+    expect(r.payload).not.toContain("sk-ant-secrettestkey1234");
+    const body = r.json() as Array<{ data: { api_key?: string; detail?: string } }>;
+    expect(body[0]!.data.api_key).toBe("[REDACTED]");
+    expect(body[0]!.data.detail).toContain("[REDACTED]");
+
+    conn.prepare("DELETE FROM runs WHERE id = ?").run("run_event_redact");
+  });
 });
 
 describe("run reads + run-control validation", () => {

@@ -10,6 +10,7 @@ export const qk = {
 
   runsInfinite: (filter?: unknown) => ["runs", "infinite", filter ?? {}] as const,
   run: (runId: string) => ["runs", "detail", runId] as const,
+  runEventLog: (runId: string) => ["runs", "event-log", runId] as const,
   runReplay: (runId: string) => ["runs", "replay", runId] as const,
   runMissability: (runId: string) => ["runs", "missability", runId] as const,
   runCompletionReadiness: (runId: string) => ["runs", "completion-readiness", runId] as const,

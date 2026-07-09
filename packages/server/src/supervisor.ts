@@ -16,8 +16,9 @@
  */
 import { RunPilot, resumeRun, EventBus, type PilotEvent } from "@pp/pilot";
 import type { Engine } from "@pp/engine";
-import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey, db, type RunStatus } from "@pp/core";
+import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey, db, getFinalizationArtifacts, type RunStatus } from "@pp/core";
 import type { BusPort } from "./bus.js";
+import type { FastifyBaseLogger } from "fastify";
 
 export interface StartRunInput {
   projectPath: string;
@@ -59,7 +60,7 @@ export class RunSupervisor {
   private running = 0;
   private readonly max: number;
 
-  constructor(private readonly serverBus: BusPort, private readonly makeEngine: () => Engine) {
+  constructor(private readonly serverBus: BusPort, private readonly makeEngine: () => Engine, private readonly logger?: FastifyBaseLogger) {
     this.max = Math.max(1, Number(process.env.PP_MAX_CONCURRENT_RUNS ?? 2));
   }
 
@@ -105,12 +106,15 @@ export class RunSupervisor {
   async start(input: StartRunInput): Promise<StartResult> {
     const wasQueued = this.running >= this.max;
     if (wasQueued) {
+      this.logger?.info({ project: input.projectPath, mode: input.mode }, "Run queued");
       this.serverBus.publish({
         type: "run.queued",
         data: { project_path: input.projectPath, request_text: input.requestText, mode: input.mode },
       });
     }
     await this.acquire();
+
+    this.logger?.info({ project: input.projectPath, mode: input.mode }, "Run executing pilot phase");
 
     const bus = new EventBus();
     const abortController = new AbortController();
@@ -152,7 +156,10 @@ export class RunSupervisor {
 
     const settled = done
       .then((res) => {
-        if (res.run_id) this.active.delete(res.run_id);
+        if (res.run_id) {
+          this.active.delete(res.run_id);
+          this.logger?.info({ runId: res.run_id, status: res.status, abortReason: res.abort_reason }, "Run finalized successfully");
+        }
         try {
           touchLastRun(input.projectPath);
         } catch {
@@ -166,10 +173,12 @@ export class RunSupervisor {
             status: res.status,
             finished_at: new Date().toISOString(),
             abort_reason: res.abort_reason,
+            ...(res.run_id ? { artifacts: getFinalizationArtifacts(res.run_id) } : {}),
           },
         });
       })
       .catch((err) => {
+        this.logger?.error({ err, project: input.projectPath }, "Run crashed during execution");
         // Surface the reason instead of swallowing it — a run that rejects
         // (rather than returning status:crashed) still gets a finalized event
         // carrying why, so the UI/SSE never shows a bare "crashed".
@@ -255,9 +264,12 @@ export class RunSupervisor {
 
     const wasQueued = this.running >= this.max;
     if (wasQueued) {
+      this.logger?.info({ runId }, "Run resume queued");
       this.serverBus.publish({ type: "run.queued", run_id: runId, data: { run_id: runId, resumed: true } });
     }
     await this.acquire();
+
+    this.logger?.info({ runId }, "Run executing resume");
 
     const bus = new EventBus();
     bus.subscribe((ev) => this.forward(ev));
@@ -295,11 +307,13 @@ export class RunSupervisor {
         this.serverBus.publish({
           type: "run.finalized",
           run_id: runId,
-          data: { run_id: runId, status: result.status, finished_at: new Date().toISOString() },
+          data: { run_id: runId, status: result.status, finished_at: new Date().toISOString(), artifacts: getFinalizationArtifacts(runId) },
         });
       }
+      this.logger?.info({ runId, status: result.status, resumed: result.resumed }, "Run resume finalized");
       return result;
     } catch (err) {
+      this.logger?.error({ err, runId }, "Run crashed during resume");
       this.serverBus.publish({
         type: "run.finalized",
         run_id: runId,
@@ -371,6 +385,7 @@ export class RunSupervisor {
       if (pct >= cap.block_pct) {
         if (entry.firedTripwires.has(`${cap.scope}:block`)) continue;
         entry.firedTripwires.add(`${cap.scope}:block`);
+        this.logger?.warn({ runId: ev.run_id, scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "block" }, "Budget hard cap crossed; aborting run");
         this.serverBus.publish({
           type: "budget.tripwire",
           run_id: ev.run_id,
@@ -381,6 +396,7 @@ export class RunSupervisor {
       } else if (pct >= cap.warn_pct) {
         if (entry.firedTripwires.has(`${cap.scope}:warn`)) continue;
         entry.firedTripwires.add(`${cap.scope}:warn`);
+        this.logger?.warn({ runId: ev.run_id, scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "downgrade" }, "Budget warning cap crossed; downgrading tier");
         this.serverBus.publish({
           type: "budget.tripwire",
           run_id: ev.run_id,

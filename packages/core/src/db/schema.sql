@@ -217,6 +217,21 @@ CREATE TABLE IF NOT EXISTS artifact_validations (
 CREATE INDEX IF NOT EXISTS idx_av_stage ON artifact_validations(stage_id, validator_kind);
 CREATE INDEX IF NOT EXISTS idx_av_run   ON artifact_validations(run_id);
 
+-- Persistent event log (observability). Every SSE frame is written here for
+-- historical replay, debugging, and analytics. The in-memory ring buffer (2048)
+-- is for live delivery; this table is the durable store. Janitor purges rows
+-- older than EVENT_RETENTION_DAYS (default 30) on startup.
+CREATE TABLE IF NOT EXISTS events (
+  id                  INTEGER PRIMARY KEY,
+  run_id              TEXT REFERENCES runs(id) ON DELETE CASCADE,
+  event_type          TEXT NOT NULL,
+  payload             TEXT NOT NULL,
+  seq                 INTEGER NOT NULL,
+  ts                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, ts);
+
 -- v8 (A5): local evolution commit/rollback audit trail (mirrors schema.ts —
 -- evolution_proposals itself is a v7 table defined there). One row per
 -- commitProposal write to a project-scoped override target (always inside

@@ -10,6 +10,7 @@ import {
   type ReplayBundle,
   type MissabilityCheckRow,
   type CompletionReadinessResponse,
+  type EventLogEntry,
 } from "@shared/api-types";
 
 export interface RunsFilter {
@@ -62,6 +63,14 @@ export function useRun(runId: string | undefined) {
     queryKey: qk.run(runId ?? ""),
     queryFn: ({ signal }) => api.get<RunTree>(apiPaths.run(runId!), { signal }),
     enabled: !!runId,
+  });
+}
+
+export function useRunEventLog(runId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.runEventLog(runId ?? ""),
+    queryFn: ({ signal }) => api.get<EventLogEntry[]>(apiPaths.runEventLog(runId!), { signal }),
+    enabled: !!runId && enabled,
   });
 }
 

@@ -8,6 +8,8 @@
  * inject its own bus that also carries run/stage/attempt frames.
  */
 
+import { db } from "@pp/core";
+
 /** One SSE frame. `seq` is monotonic per bus; `run_id` present on run-scoped frames. */
 export interface SseFrame<TData = unknown> {
   type: string;
@@ -42,6 +44,35 @@ export interface BusPort {
 // from the replay ring before a client reconnects.
 const DEFAULT_RING = 2048;
 
+function scrubEventValue(value: unknown, key?: string): unknown {
+  if (value == null) return value;
+  if (typeof value === "string") {
+    if (key && /(?:api[_-]?key|api_?token|access_?token|refresh_?token|bearer_?token|authorization|secret)/i.test(key)) {
+      return "[REDACTED]";
+    }
+    return value
+      .replace(/\b(?:sk|pk|ghp|ghs|xoxb|AIza)[-_A-Za-z0-9]{10,}\b/g, "[REDACTED]")
+      .replace(/Bearer\s+[A-Za-z0-9._-]{10,}/gi, "Bearer [REDACTED]");
+  }
+  if (Array.isArray(value)) return value.map((entry) => scrubEventValue(entry));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = scrubEventValue(v, k);
+    return out;
+  }
+  return value;
+}
+
+function persistFrame(frame: SseFrame): void {
+  try {
+    db()
+      .prepare(`INSERT INTO events(run_id, event_type, payload, seq, ts) VALUES (?, ?, ?, ?, ?)`)
+      .run(frame.run_id ?? null, frame.type, JSON.stringify(frame.data), frame.seq, frame.ts);
+  } catch {
+    /* observability persistence must never break live delivery */
+  }
+}
+
 export function createInMemoryBus(ringSize = DEFAULT_RING): BusPort {
   let seq = 0;
   const ring: SseFrame[] = [];
@@ -63,8 +94,9 @@ export function createInMemoryBus(ringSize = DEFAULT_RING): BusPort {
         run_id: input.run_id,
         ts: input.ts ?? new Date().toISOString(),
         seq: ++seq,
-        data: input.data,
+        data: scrubEventValue(input.data),
       };
+      persistFrame(frame);
       ring.push(frame);
       if (ring.length > ringSize) ring.shift();
       for (const fn of subscribers) {

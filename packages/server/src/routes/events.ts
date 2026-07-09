@@ -28,6 +28,8 @@ function stream(req: FastifyRequest, reply: FastifyReply, deps: ServerDeps, runI
     "X-Accel-Buffering": "no",
   });
 
+  req.log.info({ runId }, "SSE stream opened");
+
   // Replay from the ring buffer on Last-Event-ID resume.
   const headerId = req.headers["last-event-id"];
   const queryId = (req.query as { lastEventId?: string }).lastEventId;
@@ -40,7 +42,8 @@ function stream(req: FastifyRequest, reply: FastifyReply, deps: ServerDeps, runI
     if (runId !== undefined && f.run_id !== runId) return;
     try {
       writeFrame(raw, f);
-    } catch {
+    } catch (err) {
+      req.log.warn({ err }, "Failed to write SSE frame");
       /* socket gone; cleanup handler will fire */
     }
   });
@@ -54,6 +57,7 @@ function stream(req: FastifyRequest, reply: FastifyReply, deps: ServerDeps, runI
   }, 15_000);
 
   const cleanup = () => {
+    req.log.info({ runId }, "SSE stream closed");
     clearInterval(heartbeat);
     unsubscribe();
   };

@@ -6,7 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, resolve, sep } from "node:path";
-import { listRuns, getRun, buildReplayBundle, db, type RunStatus } from "@pp/core";
+import { listRuns, getRun, getEventLog, buildReplayBundle, db, type RunStatus } from "@pp/core";
 import { V1 } from "../deps.js";
 
 function contentKind(path: string): string {
@@ -45,6 +45,16 @@ export function registerRunRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const bundle = buildReplayBundle(id);
     return bundle ?? reply.code(404).send({ error: `run ${id} not found` });
+  });
+
+  app.get(`${V1}/runs/:id/event-log`, async (req) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { since?: string; type?: string; limit?: string };
+    return getEventLog(id, {
+      since: q.since != null ? Number(q.since) : undefined,
+      type: q.type,
+      limit: q.limit != null ? Number(q.limit) : undefined,
+    });
   });
 
   app.get(`${V1}/runs/:id/missability`, async (req) => {

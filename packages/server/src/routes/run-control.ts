@@ -133,6 +133,7 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
       });
       return reply.code(200).send({ run_id, queued });
     } catch (err) {
+      req.log.error({ err, project: b.project_path }, "Failed to start run");
       return reply.code(409).send({ error: "run_start_failed", details: (err as Error).message });
     }
   });

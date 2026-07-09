@@ -7,10 +7,11 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { useRun } from "@/api/queries/runs";
+import { useRun, useRunEventLog } from "@/api/queries/runs";
 import { useCaps } from "@/api/queries/budgets";
 import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
+import { liveRunStore } from "@/stores/liveRunStore";
 import { buildPipeline, runElapsedMs, isBestOfStage, stageAttempts, runTotals } from "@/lib/runModel";
 import { formatUsd, formatRelative, formatDuration } from "@/lib/format";
 import { Card } from "@/components/Card";
@@ -85,11 +86,18 @@ export function RunObservatoryPage() {
   const { data: caps } = useCaps();
   const runCapUsd = caps?.find((c) => c.scope === "run")?.limit_usd ?? null;
 
-  const streamStatus = useRunStream(runId);
+  const shouldHydrateFromEventLog = !!tree?.run.finished_at;
+  const { data: eventLog } = useRunEventLog(runId, shouldHydrateFromEventLog);
+  const streamStatus = useRunStream(runId, !shouldHydrateFromEventLog);
   const overlay = useLiveRunOverlay(runId ?? "");
 
   const isLive =
     streamStatus === "open" || streamStatus === "reconnecting";
+
+  useEffect(() => {
+    if (!runId || !eventLog?.length) return;
+    for (const ev of eventLog) liveRunStore.ingest(runId, ev);
+  }, [eventLog, runId]);
 
   // Live elapsed ticker
   const [, forceTick] = useState(0);
@@ -200,9 +208,15 @@ export function RunObservatoryPage() {
   }
 
   const { run } = tree;
+  const finalArtifacts = tree.artifacts.filter(
+    (artifact) => artifact.kind === "constitution" || artifact.kind === "project_master",
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-bg-0">
+      <div className="sr-only" aria-live="polite">
+        Run {run.id} is {status ?? "unknown"}. Stream is {streamStatus}.
+      </div>
       {/* ── Header strip ─────────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-line-1 bg-bg-1 px-5 py-3">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
@@ -294,6 +308,23 @@ export function RunObservatoryPage() {
             <div className="space-y-4">
               <AttemptMetaGrid overlay={overlay} />
               <GateFeed events={overlay.gateEvents ?? []} />
+              {finalArtifacts.length > 0 && (
+                <Card title="Final artifacts">
+                  <ul className="space-y-2 text-[12px] text-ink-2">
+                    {finalArtifacts.map((artifact) => (
+                      <li key={artifact.id} className="flex items-center justify-between gap-3">
+                        <span className="mono">{artifact.path}</span>
+                        <Link
+                          to={`/projects/${encodeURIComponent(run.project_path)}`}
+                          className="mono text-[11px] text-accent underline underline-offset-2"
+                        >
+                          open project docs
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
             </div>
 
             {/* Column 3: Log pane + optional BestOfBoard */}

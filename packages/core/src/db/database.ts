@@ -213,6 +213,19 @@ function applyMigrations(conn: Database.Database): void {
     conn.exec("ALTER TABLE stages ADD COLUMN plan_index INTEGER");
   }
 
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      id                  INTEGER PRIMARY KEY,
+      run_id              TEXT REFERENCES runs(id) ON DELETE CASCADE,
+      event_type          TEXT NOT NULL,
+      payload             TEXT NOT NULL,
+      seq                 INTEGER NOT NULL,
+      ts                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, ts);
+  `);
+
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.
   conn.exec(`

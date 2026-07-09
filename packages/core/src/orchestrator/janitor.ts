@@ -21,6 +21,8 @@ import { log } from "../util/logger.js";
 
 const STALE_RUN_HOURS = 6;
 const STALE_LOCK_HOURS = 6;
+/** Events older than this many days are purged on each janitor pass (dry-run reports count, not deletes). */
+const EVENT_RETENTION_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const JANITOR_REPORT_KEY = "janitor:last_report";
@@ -165,6 +167,21 @@ export function runJanitor(opts?: { dry_run?: boolean }): JanitorReport {
   }
 
   const entries: JanitorEntry[] = [...runEntries, ...plan.map((p) => p.entry)];
+
+  // ── Event retention: count rows older than EVENT_RETENTION_DAYS. ──
+  const retentionCutoff = new Date(now - EVENT_RETENTION_DAYS * DAY_MS).toISOString();
+  const { "COUNT(*)": expiredEventCount } = db()
+    .prepare("SELECT COUNT(*) FROM events WHERE ts < ?")
+    .get(retentionCutoff) as { "COUNT(*)": number };
+  if (expiredEventCount > 0) {
+    entries.push({
+      path: `events:<${retentionCutoff}`,
+      kind: "run",
+      bytes: expiredEventCount * 256, // rough estimate: ~256 bytes per event row
+      age_days: EVENT_RETENTION_DAYS,
+    });
+  }
+
   const ran_at = new Date().toISOString();
 
   if (dryRun) {
@@ -198,6 +215,18 @@ export function runJanitor(opts?: { dry_run?: boolean }): JanitorReport {
     if (item.sweep()) {
       swept += 1;
       reclaimed_bytes += item.entry.bytes;
+    }
+  }
+
+  // ── Purge expired events. ──
+  if (expiredEventCount > 0) {
+    const { changes } = db()
+      .prepare("DELETE FROM events WHERE ts < ?")
+      .run(retentionCutoff);
+    if (changes > 0) {
+      swept += 1;
+      reclaimed_bytes += changes * 256;
+      log.info({ deleted: changes, cutoff: retentionCutoff }, "janitor purged expired events");
     }
   }
 

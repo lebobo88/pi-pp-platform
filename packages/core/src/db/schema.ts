@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -182,6 +182,17 @@ CREATE TABLE IF NOT EXISTS budgets (
   cost_usd            REAL    NOT NULL DEFAULT 0,
   updated_at          TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS events (
+  id                  INTEGER PRIMARY KEY,
+  run_id              TEXT REFERENCES runs(id) ON DELETE CASCADE,
+  event_type          TEXT NOT NULL,
+  payload             TEXT NOT NULL,
+  seq                 INTEGER NOT NULL,
+  ts                  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_events_run_seq  ON events(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_type_ts  ON events(event_type, ts);
 
 CREATE TABLE IF NOT EXISTS teams (
   name                TEXT PRIMARY KEY,

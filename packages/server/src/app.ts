@@ -7,6 +7,7 @@
  * over an injected BusPort, and static UI serving.
  */
 import Fastify, { type FastifyInstance } from "fastify";
+import crypto from "node:crypto";
 import { setDbPath } from "@pp/core";
 import { createEngine, type Engine } from "@pp/engine";
 import { createInMemoryBus, type BusPort } from "./bus.js";
@@ -48,7 +49,35 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // routerOptions (the Fastify 5 forward-compatible location — the top-level
   // option is deprecated for fastify@6).
   const app = Fastify({
-    logger: false,
+    logger: {
+      level: process.env.LOG_LEVEL ?? "info",
+      serializers: {
+        req(request) {
+          const match = request.url?.match(/^\/api\/v1\/runs\/([^/?]+)/);
+          return {
+            method: request.method,
+            url: request.url,
+            hostname: request.hostname,
+            remoteAddress: request.ip,
+            remotePort: request.socket.remotePort,
+            run_id: match?.[1] ? decodeURIComponent(match[1]) : undefined,
+          };
+        },
+      },
+      redact: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "*.apiKey",
+        "*.key",
+        "*.token",
+      ],
+    },
+    genReqId: (req) => {
+      const match = req.url?.match(/^\/api\/v1\/runs\/([^/?]+)/);
+      const runId = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+      const baseId = crypto.randomUUID();
+      return runId ? `${runId}-${baseId}` : baseId;
+    },
     bodyLimit: 8 * 1024 * 1024,
     routerOptions: { maxParamLength: 4096 },
   });
@@ -61,7 +90,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     // A "pi" engine for key management / doctor / gate re-judge (always the real
     // platform auth storage, independent of the per-run engine mode).
     engine: createEngine({ mode: "pi" }),
-    supervisor: new RunSupervisor(bus, makeEngine),
+    supervisor: new RunSupervisor(bus, makeEngine, app.log),
     makeEngine,
     uiDistPath: opts.uiDistPath,
   };
