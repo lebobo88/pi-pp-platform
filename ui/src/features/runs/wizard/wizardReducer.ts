@@ -22,6 +22,8 @@ export interface WizardState {
   tierCap: ClaudeTier | "";
   tierFloor: ClaudeTier | "";
   profile: string;
+  ladderOverrides: Partial<Record<ClaudeTier, string>>;
+  tierPoolOverrides: Partial<Record<ClaudeTier, string[]>>;
   /** User dismissed the "switch to team mode" nudge (reset on manual mode change). */
   dismissedModeSuggestion: boolean;
 }
@@ -39,6 +41,8 @@ export const initialWizardState: WizardState = {
   tierCap: "",
   tierFloor: "",
   profile: "",
+  ladderOverrides: {},
+  tierPoolOverrides: {},
   dismissedModeSuggestion: false,
 };
 
@@ -155,6 +159,8 @@ export function toStartRequest(state: WizardState): StartRunRequest {
   if (bestOf) req.n = state.n;
   if (!bestOf && state.tierCap) req.tier_cap = state.tierCap;
   if (!bestOf && state.tierFloor) req.tier_floor = state.tierFloor;
+  if (Object.keys(state.ladderOverrides).length > 0) req.ladder_override = state.ladderOverrides;
+  if (Object.keys(state.tierPoolOverrides).length > 0) req.tier_pools_override = state.tierPoolOverrides;
   if (state.scope !== "auto") req.scope_override = state.scope;
   return req;
 }

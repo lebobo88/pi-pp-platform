@@ -94,6 +94,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     kind: stage.kind,
     gate_type: stage.gate_type,
     n,
+    plan_index: stage.planIndex ?? null,
   });
   emit(ctx, "stage.started", { kind: stage.kind, gate_type: stage.gate_type, agent: stage.agent, best_of: n, shuffle_seed }, { stage_id });
 

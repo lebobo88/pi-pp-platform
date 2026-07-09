@@ -65,9 +65,12 @@ const SettingsBody = z.object({
 });
 function defaultSettings() {
   const c = catalog();
-  const ladders: Record<string, Record<string, string>> = {};
+  const ladders: Record<string, Record<string, string | Record<string, string[]>>> = {};
   for (const [name, l] of Object.entries(c.generation_ladders)) {
-    ladders[name] = { ...l.tiers };
+    ladders[name] = {
+      ...l.tiers,
+      ...(l.tier_pools ? { tier_pools: l.tier_pools } : {}),
+    };
   }
   return {
     ladders,

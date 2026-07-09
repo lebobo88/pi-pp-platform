@@ -58,11 +58,14 @@ Opening a project gives you tabbed detail:
 
 - **Overview** — profile chip, managed-document status (CONSTITUTION.md,
   AGENTS.md, PROJECT_MASTER.md), recent runs, and a **Bootstrap profile** control.
-- **Profile** — the resolved profile spec plus an editable `profile.yaml`. If no
-  profile is set, **Detect profile** proposes one (with reasons and a preview
-  diff of the resulting `.harness/profile.yaml`); **Confirm** writes it. Editing
-  the yaml and saving validates server-side — invalid yaml returns inline field
-  errors.
+- **Profile** — the project's actual `.harness/profile.yaml` plus the resolved
+  profile spec the harness will use at run time. If no profile is set,
+  **Detect profile** proposes one (with reasons and a preview diff of the
+  resulting `.harness/profile.yaml`); **Confirm** writes it. Editing the raw
+  yaml and saving validates server-side — invalid yaml returns inline field
+  errors. Project-local `ladder`, `tier_pools`, and `model_tier_policy`
+  overrides all live here. Pool entries are provider-qualified and ordered,
+  for example `openai/gpt-5.4-mini` before `azure-openai/gpt-5.4-mini`.
 - **Master plan / AGENTS.md / Constitution** — the managed markdown documents,
   rendered.
 
@@ -90,9 +93,17 @@ A four-step wizard with a left stepper. You can jump back to any completed step.
      Borda picks the winner.
    - **Review** — a governance-forum pipeline (pick a forum).
 3. **Options** — a **scope override** (auto / trivial / standard / major, with
-   hints), **tier cap/floor** selects, and a **cost estimate** (a min–max USD
-   range from the stage count × tier ladder × prices) shown against your
-   remaining day budget, with a warning if the estimate would exceed it.
+   hints), **tier cap/floor** selects, an **Advanced model routing** section,
+   and a **cost estimate** (a min–max USD range from the stage count × tier
+   ladder × prices) shown against your remaining day budget, with a warning if
+   the estimate would exceed it.
+   - **Advanced model routing:** optional per-run **ladder overrides** (tier →
+     model id) and **tier-pool overrides** (tier → ordered model list). The UI
+     prefers provider-qualified ids like `openai/gpt-5.4-mini`, preserves the
+     order exactly, and treats `openai/gpt-5.4-mini` and
+     `azure-openai/gpt-5.4-mini` as distinct choices. These win over the
+     project profile, global harness settings, and catalog defaults for that
+     run only.
    - **Major-scope nudge:** picking **major** scope (or a recommender verdict
      that the request is major) while not in team mode raises a warning strip —
      "Major scope requires a team pipeline — switch to team mode?" — with a
@@ -101,6 +112,7 @@ A four-step wizard with a left stepper. You can jump back to any completed step.
    - **Best-of rule:** tier cap/floor are **disabled** in best-of mode — the
      daemon rejects them there (candidates rotate tiers by design), so the wizard
      mirrors that constraint rather than letting you submit a request that 422s.
+     Per-run ladder/pool overrides remain available in best-of mode.
 4. **Review & launch** — a summary (team runs also show the **team source** —
    `recommended (<confidence>)` vs `manual`); **Launch run** dispatches it and
    takes you to the live run view.
@@ -172,8 +184,12 @@ on the page shares one **autocomplete** fed by the priced catalog plus each
 configured provider's live model list:
 
 - **Generation ladders** — map each tier (fable/opus/sonnet/haiku) of each
-  named ladder to a model id; `fable` is capability-gated and never
-  auto-escalated to.
+  named ladder to a provider-qualified model id; `fable` is capability-gated
+  and never auto-escalated to. Each tier also has an optional **pool** editor:
+  pool entries rotate across Reflexion retries and best-of candidates, while
+  the ladder's plain model-id field remains the single-model fallback. The same
+  model name can appear more than once when each entry names a different
+  provider, and the pool's top-to-bottom order is the exact priority order.
 - **Judge pool** — an ordered list of judge models (type an id and pick from the
   suggestions; unknown ids are rejected). If all judges share one provider, a
   warning flags that cross-vendor gates (spec/design/security/contract) will

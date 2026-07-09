@@ -24,7 +24,13 @@ export async function startAdapter(): Promise<Adapter> {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [BIN],
-    env: { ...getDefaultEnvironment(), PP_HOME: ppHome },
+    env: {
+      ...getDefaultEnvironment(),
+      PP_HOME: ppHome,
+      HOME: ppHome,
+      USERPROFILE: ppHome,
+      PP_SKIP_CLI_VERSIONS: "1",
+    },
   });
   const client = new Client({ name: "pp-mcp-adapter-test", version: "0.0.1" }, { capabilities: {} });
   await client.connect(transport);

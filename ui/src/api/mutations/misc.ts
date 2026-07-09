@@ -55,6 +55,7 @@ export function useWriteProfile(path: string) {
     mutationFn: (req: WriteProfileRequest) => api.put<unknown>(apiPaths.projectProfile(path), req),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.project(path) });
+      qc.invalidateQueries({ queryKey: qk.projectProfile(path) });
       qc.invalidateQueries({ queryKey: qk.projects });
     },
   });

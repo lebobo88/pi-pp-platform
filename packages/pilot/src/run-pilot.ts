@@ -28,6 +28,7 @@ import {
   recommendTeams,
   ensureAgentsAndClaudeMd,
   ensureTaxonomyBlueprint,
+  persistStagePlan,
   type TeamSpec,
   type Forum,
   type Scope,
@@ -36,7 +37,7 @@ import {
 
 import { EventBus } from "./events.js";
 import { JudgePolicy } from "./judge-policy.js";
-import { emit, type RunContext, type RunPilotOptions, type StageSpec } from "./types.js";
+import { emit, type RunContext, type RunPilotOptions, type StageSpec, type StageOutcome } from "./types.js";
 import { mergeLadderOverride } from "./generation-model.js";
 import { runStage, reArchiveTierDecisions } from "./phases/stage-loop.js";
 import { runBestOfStage } from "./phases/best-of.js";
@@ -47,6 +48,7 @@ import { runFinalizePhase, type StageReport } from "./phases/finalize.js";
 import { runTriagePhase } from "./phases/triage.js";
 import { runProfilePhase } from "./phases/profile.js";
 import { runTaxonomyPhase } from "./phases/taxonomy.js";
+import { reconcilePlanWithRequirements } from "./phases/plan-reconciliation.js";
 
 export type RunResult = {
   run_id: string;
@@ -152,23 +154,34 @@ export class RunPilot {
       reArchiveTierDecisions(ctx);
 
       // ── Phase 6: build the stage set and run it. ───────────────────────────
-      const plan = this.buildStagePlan(ctx);
+      const rawPlan = buildStagePlan(ctx, { stagesOverride: this.opts.stagesOverride });
+      // Team-mode plans are reconciled against the taxonomy/profile's
+      // required artifact kinds BEFORE persistence — a team pipeline with no
+      // stage capable of producing a required artifact would otherwise be
+      // structurally unable to reach 'complete' (VG-2 fails deterministically
+      // hours later). Other modes (single/best_of/review) keep their
+      // existing, narrower stage sets untouched.
+      const plan =
+        !rawPlan.abort && ctx.mode === "team"
+          ? reconcilePlanWithRequirements(ctx, rawPlan.stages)
+          : rawPlan;
       if (plan.abort) {
         ctx.finalStatus = "aborted";
         ctx.abortReason = plan.reason;
       } else {
+        // Stamp each stage with its slot index in the persisted plan BEFORE
+        // execution starts, so startStage/startBestOfStage can record
+        // stages.plan_index — a resume needs this to compute "first plan
+        // slot with no stage row" rather than guessing from `kind` alone.
+        plan.stages.forEach((s, i) => { s.planIndex = i; });
+        persistStagePlan(ctx.run_id, plan.stages);
         for (const stage of plan.stages) {
           if (ctx.signal?.aborted) {
             ctx.finalStatus = "aborted";
             ctx.abortReason = "aborted by signal";
             break;
           }
-          const outcome =
-            stage.kind === "browser_validation"
-              ? await runBrowserValidationStage(ctx, stage)
-              : stage.bestOf && stage.bestOf >= 2
-                ? await runBestOfStage(ctx, stage, stage.bestOf)
-                : await runStage(ctx, stage);
+          const outcome = await dispatchStage(ctx, stage);
           stages.push({ kind: stage.kind, outcome });
           if (outcome === "aborted") {
             ctx.finalStatus = "aborted";
@@ -243,121 +256,144 @@ export class RunPilot {
     }
     ctx.finalStatus = target;
   }
+}
 
-  /** Build the ordered stage set for this run's mode + scope. */
-  private buildStagePlan(
-    ctx: RunContext,
-  ): { abort: false; stages: StageSpec[] } | { abort: true; reason: string } {
-    // Explicit override wins (test/server seam).
-    if (this.opts.stagesOverride && this.opts.stagesOverride.length > 0) {
-      return { abort: false, stages: this.opts.stagesOverride };
+/**
+ * Build the ordered stage set for a run's mode + scope. Extracted from
+ * RunPilot as a standalone, exported function (not a private method) so a
+ * later resume (or legacy-run plan reconstruction) can re-invoke the same
+ * planning logic without a live RunPilot instance — it only needs the
+ * RunContext fields already populated by triage/profile/taxonomy, plus an
+ * optional stagesOverride (the test/server seam).
+ */
+export function buildStagePlan(
+  ctx: RunContext,
+  opts: { stagesOverride?: StageSpec[] } = {},
+): { abort: false; stages: StageSpec[] } | { abort: true; reason: string } {
+  // Explicit override wins (test/server seam).
+  if (opts.stagesOverride && opts.stagesOverride.length > 0) {
+    return { abort: false, stages: opts.stagesOverride };
+  }
+
+  // best_of mode: a code request raced across N Claude candidates.
+  if (ctx.mode === "best_of") {
+    return {
+      abort: false,
+      stages: [{ kind: "code", gate_type: "code_style", agent: "engineer", bestOf: ctx.n ?? 3 }],
+    };
+  }
+
+  // review mode: drive one of the governance forums' stage sets generically.
+  if (ctx.mode === "review") {
+    if (!ctx.forum) return { abort: true, reason: "mode=review requires a forum name" };
+    const forum = getForum(ctx.forum);
+    if (!forum) return { abort: true, reason: `forum "${ctx.forum}" not found` };
+    if (forum.required_missability_checks?.length) {
+      ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...forum.required_missability_checks])];
     }
+    emit(ctx, "run.context", { phase: "forum", forum: forum.id, produces: forum.produces });
+    return { abort: false, stages: forumStages(forum) };
+  }
 
-    // best_of mode: a code request raced across N Claude candidates.
-    if (ctx.mode === "best_of") {
+  if (ctx.mode === "single") {
+    if (ctx.scope === "trivial") {
+      const docShaped = ctx.signals.includes("doc-only");
       return {
         abort: false,
-        stages: [{ kind: "code", gate_type: "code_style", agent: "engineer", bestOf: ctx.n ?? 3 }],
+        stages: docShaped
+          ? [{ kind: "docs", gate_type: "docs_polish", agent: "docs-author" }]
+          : [{ kind: "code", gate_type: "code_style", agent: "engineer" }],
       };
     }
-
-    // review mode: drive one of the governance forums' stage sets generically.
-    if (ctx.mode === "review") {
-      if (!ctx.forum) return { abort: true, reason: "mode=review requires a forum name" };
-      const forum = getForum(ctx.forum);
-      if (!forum) return { abort: true, reason: `forum "${ctx.forum}" not found` };
-      if (forum.required_missability_checks?.length) {
-        ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...forum.required_missability_checks])];
-      }
-      emit(ctx, "run.context", { phase: "forum", forum: forum.id, produces: forum.produces });
-      return { abort: false, stages: forumStages(forum) };
-    }
-
-    if (ctx.mode === "single") {
-      if (ctx.scope === "trivial") {
-        const docShaped = ctx.signals.includes("doc-only");
+    if (ctx.scope === "major") {
+      if (ctx.signals.includes("doc-only")) {
+        // major but doc-only → a single doc/spec stage rather than aborting.
+        const specShaped = /\b(adr|madr|spec|prd|rfc)\b/i.test(ctx.requestText);
         return {
           abort: false,
-          stages: docShaped
-            ? [{ kind: "docs", gate_type: "docs_polish", agent: "docs-author" }]
-            : [{ kind: "code", gate_type: "code_style", agent: "engineer" }],
+          stages: specShaped
+            ? [{ kind: "spec", gate_type: "spec", agent: "spec-author" }]
+            : [{ kind: "docs", gate_type: "docs_polish", agent: "docs-author" }],
         };
       }
-      if (ctx.scope === "major") {
-        if (ctx.signals.includes("doc-only")) {
-          // major but doc-only → a single doc/spec stage rather than aborting.
-          const specShaped = /\b(adr|madr|spec|prd|rfc)\b/i.test(ctx.requestText);
-          return {
-            abort: false,
-            stages: specShaped
-              ? [{ kind: "spec", gate_type: "spec", agent: "spec-author" }]
-              : [{ kind: "docs", gate_type: "docs_polish", agent: "docs-author" }],
-          };
+      // Deterministic team suggestion — best-effort, never blocks the abort.
+      let suggestion = "";
+      try {
+        const top = recommendTeams({
+          request_text: ctx.requestText,
+          project_path: ctx.projectPath,
+          profile: ctx.profileName,
+          scope: "major",
+        }).recommendations[0];
+        if (top) {
+          suggestion = ` Suggested team: "${top.team}"${top.reasons[0] ? ` (${top.reasons[0]})` : ""}`;
         }
-        // Deterministic team suggestion — best-effort, never blocks the abort.
-        let suggestion = "";
-        try {
-          const top = recommendTeams({
-            request_text: ctx.requestText,
-            project_path: ctx.projectPath,
-            profile: ctx.profileName,
-            scope: "major",
-          }).recommendations[0];
-          if (top) {
-            suggestion = ` Suggested team: "${top.team}"${top.reasons[0] ? ` (${top.reasons[0]})` : ""}`;
-          }
-        } catch { /* recommendation is advisory only */ }
-        return {
-          abort: true,
-          reason:
-            "major-scope request in single mode — re-run with a team pipeline " +
-            "(mode=team, e.g. feature-team). Refusing to force a major change through the single-stage path." +
-            suggestion,
-        };
-      }
-      // standard
+      } catch { /* recommendation is advisory only */ }
       return {
-        abort: false,
-        stages: [
-          { kind: "spec", gate_type: "spec", agent: "spec-author" },
-          { kind: "code", gate_type: "code_style", agent: "engineer" },
-          { kind: "tests", gate_type: "lint_class", agent: "test-strategist" },
-          { kind: "docs", gate_type: "docs_polish", agent: "docs-author" },
-        ],
+        abort: true,
+        reason:
+          "major-scope request in single mode — re-run with a team pipeline " +
+          "(mode=team, e.g. feature-team). Refusing to force a major change through the single-stage path." +
+          suggestion,
       };
     }
-
-    // team mode → drive the team yaml's stage set generically.
-    if (!ctx.teamName) {
-      return { abort: true, reason: `mode=${ctx.mode} requires a team name` };
-    }
-    const found = getTeam({ name: ctx.teamName, project_path: ctx.projectPath });
-    if (!found) {
-      return { abort: true, reason: `team "${ctx.teamName}" not found` };
-    }
-    ctx.team = found.team;
-
-    // Profile-compatibility check: warn (don't block) when the active profile
-    // isn't in the team's profiles_compatible list.
-    const compat = found.team.profiles_compatible;
-    if (ctx.profileName && compat && compat.length > 0 && !compat.includes(ctx.profileName)) {
-      emit(ctx, "run.context", {
-        phase: "team-profile-warning",
-        team: found.team.name,
-        active_profile: ctx.profileName,
-        profiles_compatible: compat,
-        message: `profile "${ctx.profileName}" is not in ${found.team.name}.profiles_compatible — proceeding anyway`,
-      });
-    }
-
-    // Merge the team's declared taxonomy + missability requirements into the run.
-    if (found.team.missability_required?.length) {
-      ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...found.team.missability_required])];
-    }
-    emit(ctx, "run.context", { phase: "team", team: found.team.name, taxonomy_required: found.team.taxonomy_required ?? [] });
-
-    return { abort: false, stages: teamStages(found.team, ctx.scope) };
+    // standard
+    return {
+      abort: false,
+      stages: [
+        { kind: "spec", gate_type: "spec", agent: "spec-author" },
+        { kind: "code", gate_type: "code_style", agent: "engineer" },
+        { kind: "tests", gate_type: "lint_class", agent: "test-strategist" },
+        { kind: "docs", gate_type: "docs_polish", agent: "docs-author" },
+      ],
+    };
   }
+
+  // team mode → drive the team yaml's stage set generically.
+  if (!ctx.teamName) {
+    return { abort: true, reason: `mode=${ctx.mode} requires a team name` };
+  }
+  const found = getTeam({ name: ctx.teamName, project_path: ctx.projectPath });
+  if (!found) {
+    return { abort: true, reason: `team "${ctx.teamName}" not found` };
+  }
+  ctx.team = found.team;
+
+  // Profile-compatibility check: warn (don't block) when the active profile
+  // isn't in the team's profiles_compatible list.
+  const compat = found.team.profiles_compatible;
+  if (ctx.profileName && compat && compat.length > 0 && !compat.includes(ctx.profileName)) {
+    emit(ctx, "run.context", {
+      phase: "team-profile-warning",
+      team: found.team.name,
+      active_profile: ctx.profileName,
+      profiles_compatible: compat,
+      message: `profile "${ctx.profileName}" is not in ${found.team.name}.profiles_compatible — proceeding anyway`,
+    });
+  }
+
+  // Merge the team's declared taxonomy + missability requirements into the run.
+  if (found.team.missability_required?.length) {
+    ctx.missabilityRequired = [...new Set([...ctx.missabilityRequired, ...found.team.missability_required])];
+  }
+  emit(ctx, "run.context", { phase: "team", team: found.team.name, taxonomy_required: found.team.taxonomy_required ?? [] });
+
+  return { abort: false, stages: teamStages(found.team, ctx.scope) };
+}
+
+/**
+ * Dispatch one planned stage to its execution path — browser-validation,
+ * best-of-N candidate race, or the standard single-attempt stage loop.
+ * Extracted from RunPilot.execute()'s inline switch so the resume flow can
+ * dispatch a remaining plan slot identically, without a live RunPilot
+ * instance.
+ */
+export async function dispatchStage(ctx: RunContext, stage: StageSpec): Promise<StageOutcome> {
+  return stage.kind === "browser_validation"
+    ? await runBrowserValidationStage(ctx, stage)
+    : stage.bestOf && stage.bestOf >= 2
+      ? await runBestOfStage(ctx, stage, stage.bestOf)
+      : await runStage(ctx, stage);
 }
 
 /**

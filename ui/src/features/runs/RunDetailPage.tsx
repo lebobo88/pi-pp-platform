@@ -11,6 +11,7 @@ import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
 import { buildPipeline } from "@/lib/runModel";
 import { RunHeader } from "./components/RunHeader";
+import { SurfacedRunPanel } from "./components/RunControls";
 import { StagePipeline } from "./components/StagePipeline";
 import { StageDetail } from "./components/StageDetail";
 import { BestOfBoard } from "./components/BestOfBoard";
@@ -91,6 +92,7 @@ export function RunDetailPage() {
   return (
     <Page title="Run" description={<span className="mono">{tree.run.id}</span>} className="space-y-4">
       <RunHeader tree={tree} overlay={overlay} streamStatus={streamStatus} capUsd={runCapUsd} />
+      <SurfacedRunPanel runId={tree.run.id} status={overlay.status ?? tree.run.status} />
 
       <Tabs
         active={tab}

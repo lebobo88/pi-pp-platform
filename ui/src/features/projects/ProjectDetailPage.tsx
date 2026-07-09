@@ -13,11 +13,12 @@ import { CopyButton } from "@/components/CopyButton";
 import { Pill, RunStatusChip, ModeChip } from "@/features/common/chips";
 import {
   useProject,
+  useProjectProfile,
   useMasterPlan,
   useAgentsMd,
   useConstitution,
 } from "@/api/queries/projects";
-import { useProfile, useProfiles } from "@/api/queries/library";
+import { useProfiles } from "@/api/queries/library";
 import { useDetectProfile, useWriteProfile } from "@/api/mutations/misc";
 import { ApiClientError } from "@/api/client";
 import { Button } from "@/components/Button";
@@ -82,7 +83,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "profile" && <ProfileView name={project.active_profile} path={project.path} />}
+      {tab === "profile" && <ProfileView path={project.path} />}
       {tab === "master-plan" && <MasterPlanPanel path={path!} present={project.master_plan?.present ?? false} />}
       {tab === "agents-md" && <AgentsMdPanel path={path!} present={project.agents_md?.present ?? false} />}
       {tab === "constitution" && <ConstitutionPanel path={path!} present={project.constitution?.present ?? false} />}
@@ -225,15 +226,15 @@ function RecentRunsTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (id: st
 }
 
 /** Editable profile view: resolved spec + a yaml editor with detect + save. */
-function ProfileView({ name, path }: { name: string | null; path: string }) {
-  const { data: profile, isLoading } = useProfile(name ?? undefined);
+function ProfileView({ path }: { path: string }) {
+  const { data: profileDoc, isLoading } = useProjectProfile(path);
   const detect = useDetectProfile(path);
   const write = useWriteProfile(path);
   const [draft, setDraft] = useState<string | null>(null);
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [detectResult, setDetectResult] = useState<import("@shared/api-types").DetectProfileResult | null>(null);
 
-  if (!name) {
+  if (!profileDoc && !isLoading) {
     return (
       <Card title="No active profile">
         <p className="text-[12px] text-ink-3">This project has no profile. Detect one to seed <span className="mono">.harness/profile.yaml</span>.</p>
@@ -247,10 +248,11 @@ function ProfileView({ name, path }: { name: string | null; path: string }) {
     );
   }
   if (isLoading) return <Card title="Profile"><div className="text-[12px] text-ink-3">Loading…</div></Card>;
-  if (!profile) return <EmptyState title="Profile unavailable" compact />;
+  if (!profileDoc) return <EmptyState title="Profile unavailable" compact />;
 
-  const yaml = draft ?? toYamlish(profile);
-  const dirty = draft != null && draft !== toYamlish(profile);
+  const profile = profileDoc.resolved;
+  const yaml = draft ?? profileDoc.yaml;
+  const dirty = draft != null && draft !== profileDoc.yaml;
 
   const save = () => {
     setYamlError(null);
@@ -278,6 +280,9 @@ function ProfileView({ name, path }: { name: string | null; path: string }) {
         }
         flush
       >
+        <div className="border-b border-line-1 px-3 py-2 text-[11px] text-ink-3">
+          Editing <span className="mono">{profileDoc.path}</span>. Raw YAML is preserved exactly on save.
+        </div>
         <textarea
           value={yaml}
           onChange={(e) => setDraft(e.target.value)}
@@ -289,6 +294,7 @@ function ProfileView({ name, path }: { name: string | null; path: string }) {
       <Card title="Resolved spec">
         <KeyValue
           rows={[
+            { label: "path", value: <span className="mono">{profileDoc.path}</span> },
             { label: "description", value: profile.description },
             { label: "extends", value: profile.extends?.join(", ") || "—", mono: true },
             { label: "taxonomy", value: profile.required_taxonomy_sections?.join(", ") || "—", mono: true },
@@ -296,8 +302,23 @@ function ProfileView({ name, path }: { name: string | null; path: string }) {
             { label: "validators (strict)", value: profile.required_validators_strict?.join(", ") || "—", mono: true },
           ]}
         />
+        <ResolvedBlock title="Model tier policy" value={profile.model_tier_policy} />
+        <ResolvedBlock title="Ladder override" value={profile.ladder} mono />
+        <ResolvedBlock title="Tier pools" value={profile.tier_pools} mono />
         {profile.notes && <p className="mt-3 border-t border-line-1 pt-2 text-[12px] text-ink-3">{profile.notes}</p>}
       </Card>
+    </div>
+  );
+}
+
+function ResolvedBlock({ title, value, mono = false }: { title: string; value: unknown; mono?: boolean }) {
+  if (!value || (typeof value === "object" && Object.keys(value as Record<string, unknown>).length === 0)) return null;
+  return (
+    <div className="mt-3 border-t border-line-1 pt-3">
+      <div className="mb-1 text-[11px] uppercase tracking-wide text-ink-3">{title}</div>
+      <pre className={`overflow-x-auto rounded-sm bg-bg-2 p-2 text-[11px] text-ink-2 ${mono ? "mono" : ""}`}>
+        {toYamlish(value)}
+      </pre>
     </div>
   );
 }
@@ -334,7 +355,7 @@ function DocCard({ title, markdown, loading, sha }: { title: string; markdown?: 
   );
 }
 
-/** Minimal object→yaml-ish serializer for the read-only profile view. */
+/** Minimal object→yaml-ish serializer for resolved-profile previews. */
 function toYamlish(obj: unknown, indent = 0): string {
   const pad = "  ".repeat(indent);
   if (Array.isArray(obj)) {

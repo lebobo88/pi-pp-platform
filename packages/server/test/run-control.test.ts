@@ -177,6 +177,44 @@ describe("run-control — start / complete / SSE", () => {
     expect(flags.tier_cap).toBe("opus");
   });
 
+  it("POST /runs persists a ladder-only override payload verbatim", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", {
+      project_path: project,
+      request_text: "Add a helper.",
+      mode: "single",
+      ladder_override: { sonnet: "claude-opus-4-7" },
+    });
+    expect(started.status).toBe(200);
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    const tree = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}`);
+    const flags = JSON.parse(tree.json.run.cli_flags_json as string);
+    expect(flags.ladder_override).toEqual({ sonnet: "claude-opus-4-7" });
+    expect("tier_pools_override" in flags).toBe(false);
+  });
+
+  it("POST /runs persists a tier-pools-only override payload verbatim", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+    const started = await post(s.base, "/api/v1/runs", {
+      project_path: project,
+      request_text: "Add a helper.",
+      mode: "single",
+      tier_pools_override: { sonnet: ["claude-opus-4-7", "claude-sonnet-4-6"] },
+    });
+    expect(started.status).toBe(200);
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    const tree = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}`);
+    const flags = JSON.parse(tree.json.run.cli_flags_json as string);
+    expect(flags.tier_pools_override).toEqual({ sonnet: ["claude-opus-4-7", "claude-sonnet-4-6"] });
+    expect("ladder_override" in flags).toBe(false);
+  });
+
   it("a flagless run leaves cli_flags_json NULL (byte-identical persistence)", async () => {
     const project = makeTempProject();
     const s = await makeServer(() => makeEngine());

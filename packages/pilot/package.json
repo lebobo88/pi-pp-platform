@@ -15,8 +15,11 @@
     "ppp": "dist/bin/ppp.js"
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-api-types-sidecars.mjs",
     "build": "tsc -p tsconfig.build.json",
+    "pretypecheck": "node ../../scripts/generate-api-types-sidecars.mjs",
     "typecheck": "tsc -p tsconfig.json",
+    "pretest": "node ../../scripts/generate-api-types-sidecars.mjs",
     "test": "vitest run"
   },
   "engines": {

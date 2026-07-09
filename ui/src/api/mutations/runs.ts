@@ -8,6 +8,7 @@ import {
   type AbortRunResponse,
   type StageActionResponse,
   type StageRetryRequest,
+  type RunResumeResponse,
 } from "@shared/api-types";
 
 export function useStartRun() {
@@ -48,5 +49,24 @@ export function useGateStage(runId: string) {
   return useMutation({
     mutationFn: (stageId: string) => api.post<StageActionResponse>(apiPaths.runStageGate(runId, stageId)),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.run(runId) }),
+  });
+}
+
+/**
+ * Reopen a surfaced/blocked run on the same run_id: continues any remaining
+ * planned stages, then reruns missability/master-plan/finalize. See
+ * packages/pilot/src/resume.ts. `resumed: false` in the response means the
+ * attempt made no forward progress (e.g. a surfaced stage still blocks it, or
+ * another resume/execute is already active) — check `readiness` for why.
+ */
+export function useResumeRun(runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<RunResumeResponse>(apiPaths.runResume(runId)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.run(runId) });
+      qc.invalidateQueries({ queryKey: qk.runCompletionReadiness(runId) });
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
   });
 }

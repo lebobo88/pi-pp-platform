@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS runs (
   head_sha                 TEXT,
   tree_dirty_hash          TEXT,
   cli_versions_json        TEXT,
+  stage_plan_json          TEXT,                              -- v10: persisted resolved StageSpec[] plan for resume
   started_at               TEXT NOT NULL,
   finished_at              TEXT
 );
@@ -35,7 +36,8 @@ CREATE TABLE IF NOT EXISTS stages (
   winner_attempt_id   TEXT,
   started_at          TEXT NOT NULL,
   finished_at         TEXT,
-  notes_json          TEXT                                  -- per-stage metadata (e.g. best-of-N shuffle seed, candidate order)
+  notes_json          TEXT,                                 -- per-stage metadata (e.g. best-of-N shuffle seed, candidate order)
+  plan_index          INTEGER                               -- v10: index into runs.stage_plan_json for this stage
 );
 CREATE INDEX IF NOT EXISTS idx_stages_run ON stages(run_id);
 

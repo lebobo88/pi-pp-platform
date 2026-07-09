@@ -200,6 +200,19 @@ function applyMigrations(conn: Database.Database): void {
     conn.exec("ALTER TABLE attempts ADD COLUMN provider TEXT");
   }
 
+  // v10: run-recovery / resume support (surfaced-run continuation). Persisted
+  // stage plan on the run row + the plan slot index on each stage row. Both
+  // nullable/additive — legacy rows fall back to deterministic plan
+  // reconstruction (see getRunCompletionReadiness / resumeRun).
+  const runColsV10 = conn.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+  if (!runColsV10.some(c => c.name === "stage_plan_json")) {
+    conn.exec("ALTER TABLE runs ADD COLUMN stage_plan_json TEXT");
+  }
+  const stageColsV10 = conn.prepare("PRAGMA table_info(stages)").all() as Array<{ name: string }>;
+  if (!stageColsV10.some(c => c.name === "plan_index")) {
+    conn.exec("ALTER TABLE stages ADD COLUMN plan_index INTEGER");
+  }
+
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.
   conn.exec(`

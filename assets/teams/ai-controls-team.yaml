@@ -11,6 +11,7 @@ stages:
     generator: { agent: test-strategist, primary: codex }
     judge:     { tier: cross_vendor, rubric: nist-ai-rmf-measure@1, model_pref: gemini }
   - kind: tool_permissions
+    artifact_kind: tool_permission_matrix
     gate_type: security
     generator: { agent: security-reviewer, primary: claude }
     judge:     { tier: cross_vendor, rubric: owasp-asvs-l1@1, model_pref: gemini }

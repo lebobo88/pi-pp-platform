@@ -5,12 +5,14 @@ export const qk = {
 
   projects: ["projects"] as const,
   project: (path: string) => ["projects", path] as const,
+  projectProfile: (path: string) => ["projects", path, "profile"] as const,
   projectDoc: (path: string, doc: string) => ["projects", path, "doc", doc] as const,
 
   runsInfinite: (filter?: unknown) => ["runs", "infinite", filter ?? {}] as const,
   run: (runId: string) => ["runs", "detail", runId] as const,
   runReplay: (runId: string) => ["runs", "replay", runId] as const,
   runMissability: (runId: string) => ["runs", "missability", runId] as const,
+  runCompletionReadiness: (runId: string) => ["runs", "completion-readiness", runId] as const,
 
   providers: ["providers"] as const,
   providersAvailable: ["providers", "available"] as const,

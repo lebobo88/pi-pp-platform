@@ -43,6 +43,25 @@ export function loopCeilingStatus(run_id: string): {
 export function checkRetryEligible(opts: {
   attempt_id: string;
   budget_override?: boolean;
+  /**
+   * Set true ONLY by the automatic Reflexion path (`stage-loop.ts`'s
+   * automatic retry, not the manual `retryStage` post-hoc helper). When
+   * true, the run-wide loop ceiling is NOT enforced — only the Reflexion ×1
+   * invariant (`retry_index >= 1`) applies. This keeps the run-wide loop
+   * ceiling from silently consuming the one automatic retry every stage is
+   * entitled to (early-stage judge calls could otherwise exhaust the
+   * ceiling before a later stage ever gets its automatic Reflexion pass).
+   * The manual/operator retry route and the MCP `retry_with_critique` tool
+   * MUST leave this unset/false — they keep the ceiling (with
+   * `budget_override` as the deliberate, audited bypass) as an
+   * operator-visible safety valve. Automatic call-count safety is instead
+   * provided by the Reflexion ×1 invariant itself (at most one automatic
+   * retry per stage); run-wide dollar-cost safety remains the budget
+   * tripwires in RunSupervisor, which already include judge/verdict spend
+   * (tallyJudgeUsage credits verdict cost to the same `run:<run_id>` scope
+   * the tripwire reads).
+   */
+  automatic?: boolean;
 }): { ok: true; parent_attempt_id: string } | { ok: false; reason: string } {
   const att = db()
     .prepare(`SELECT id, stage_id, retry_index, parent_attempt_id FROM attempts WHERE id = ?`)
@@ -63,7 +82,10 @@ export function checkRetryEligible(opts: {
     .get(att.stage_id) as { run_id: string } | undefined;
   if (!stage) return { ok: false, reason: `stage ${att.stage_id} not found` };
 
-  if (!opts.budget_override) {
+  // The run-wide loop ceiling only gates the MANUAL/operator retry path (and
+  // the MCP retry_with_critique tool). The automatic Reflexion path is
+  // exempt — see the `automatic` param doc above.
+  if (!opts.budget_override && !opts.automatic) {
     const ceiling = loopCeilingStatus(stage.run_id);
     if (ceiling.blocked) {
       return {

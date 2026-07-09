@@ -15,9 +15,13 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-api-types-sidecars.mjs",
     "build": "tsc -p tsconfig.build.json",
+    "pretypecheck": "node ../../scripts/generate-api-types-sidecars.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "pretest": "node ../../scripts/generate-api-types-sidecars.mjs",
+    "test": "node ./scripts/run-vitest.mjs run",
+    "test:run-control": "node ./scripts/run-vitest.mjs run ./test/run-control.test.ts"
   },
   "engines": {
     "node": ">=22.19.0"

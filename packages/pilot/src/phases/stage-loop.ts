@@ -65,6 +65,18 @@ const ARTIFACT_KIND_BY_KIND: Record<string, string> = {
   contracts: "openapi",
 };
 
+/**
+ * The artifact kind a stage will archive under (for gate rubric selection
+ * AND plan-time completion-gate reconciliation — see
+ * `phases/plan-reconciliation.ts`). Mirrors the exact fallback chain used at
+ * archive time (the `isTddManifestStage` special case aside, which only
+ * affects `tests_pre` manifest stages and never participates in required-
+ * artifact reconciliation).
+ */
+export function resolveArtifactKind(stage: Pick<StageSpec, "kind" | "artifact_kind">): string {
+  return stage.artifact_kind ?? ARTIFACT_KIND_BY_KIND[stage.kind] ?? stage.kind;
+}
+
 /** Default total budget (chars) for skill bodies injected into one prompt. */
 const SKILLS_BUDGET_CHARS_DEFAULT = 24_000;
 
@@ -299,7 +311,7 @@ export function runIsGreenfield(ctx: RunContext): boolean {
 /** Drives one stage to a terminal outcome. */
 export async function runStage(ctx: RunContext, stage: StageSpec): Promise<StageOutcome> {
   ctx.signal?.throwIfAborted();
-  const { stage_id } = startStage({ run_id: ctx.run_id, kind: stage.kind, gate_type: stage.gate_type });
+  const { stage_id } = startStage({ run_id: ctx.run_id, kind: stage.kind, gate_type: stage.gate_type, plan_index: stage.planIndex ?? null });
   emit(ctx, "stage.started", { kind: stage.kind, gate_type: stage.gate_type, agent: stage.agent }, { stage_id });
 
   // Resolve the Claude tier for this stage (generators are always Path-A Claude).
@@ -339,7 +351,7 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
       { reason: "attempt produced zero file changes — judge skipped", gate_type: stage.gate_type, zero_change: true },
       { stage_id },
     );
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText, { stageBaseSha });
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText, { stageBaseSha, automatic: true });
   }
 
   const judged0 = await judge(ctx, stage, stage_id, gen0.attempt_id, resolution.model_id, gen0.artifactText, false);
@@ -350,11 +362,11 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
     if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen0.attempt_id, gen0);
     if (settled.action === "surface") return surface(ctx, stage_id, settled.reason);
     // action === "retry": fall through to Reflexion using the blocker message.
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText, { stageBaseSha });
+    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText, { stageBaseSha, automatic: true });
   }
 
   // fail / revise → Reflexion ×1.
-  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText, { stageBaseSha });
+  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText, { stageBaseSha, automatic: true });
 }
 
 // ── generation ───────────────────────────────────────────────────────────────
@@ -904,12 +916,20 @@ export async function reflexion(
    * path never sets it, so the invariant holds implicitly.
    * stageBaseSha: the stage's ORIGINAL base sha (captured before attempt 0's
    * auto-commit) so the retry judge sees the cumulative diff since stage start.
-   * Absent on post-hoc retries — the whole-stage diff section is then omitted. */
-  opts?: { budgetOverride?: boolean; stageBaseSha?: string | null },
+   * Absent on post-hoc retries — the whole-stage diff section is then omitted.
+   * automatic: true ONLY for the in-run automatic retry (runStage's own
+   * fail/revise → reflexion calls). Exempts this call from the run-wide loop
+   * ceiling (see checkRetryEligible's `automatic` doc) so early-stage judge
+   * calls elsewhere in the run can never silently consume the one automatic
+   * Reflexion attempt this stage is entitled to. post-hoc.ts's manual
+   * `retryStage` MUST leave this unset — manual retries keep the ceiling
+   * (with budgetOverride as the deliberate bypass). */
+  opts?: { budgetOverride?: boolean; stageBaseSha?: string | null; automatic?: boolean },
 ): Promise<StageOutcome> {
   const eligible = checkRetryEligible({
     attempt_id: parentAttemptId,
     budget_override: opts?.budgetOverride === true,
+    automatic: opts?.automatic === true,
   });
   if (!eligible.ok) {
     return surface(ctx, stage_id, `Reflexion not eligible: ${eligible.reason}`);

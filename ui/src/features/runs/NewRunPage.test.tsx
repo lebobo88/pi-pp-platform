@@ -120,4 +120,96 @@ describe("New run wizard → run view (full UI-driven run)", () => {
     expect(container.textContent).toContain("implementation");
     expect(container.textContent).toContain("coupon-code");
   }, 20000);
+
+  it("keeps advanced model routing available in best-of mode while tier caps stay disabled", async () => {
+    await act(async () => {
+      root.render(App());
+    });
+
+    await waitFor(() => {
+      const sel = container.querySelector<HTMLSelectElement>('[data-testid="wizard-project"]');
+      return !!sel && sel.options.length > 1;
+    });
+
+    await act(async () => {
+      const project = container.querySelector<HTMLSelectElement>('[data-testid="wizard-project"]')!;
+      setValue(project, project.options[1]!.value);
+      const request = container.querySelector<HTMLTextAreaElement>('[data-testid="wizard-request"]')!;
+      setValue(request, "Generate a few best-of checkout copy variants.");
+    });
+
+    const clickNext = async () => {
+      await waitFor(() => {
+        const btn = container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]');
+        return !!btn && !btn.disabled;
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]')!.click();
+      });
+    };
+    await clickNext(); // step 2
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="mode-best_of"]')!.click();
+    });
+    await clickNext(); // step 3
+
+    await waitFor(() => !!container.querySelector('[data-testid="wizard-ladder-override-sonnet"]'));
+    expect(container.querySelector<HTMLSelectElement>('[data-testid="wizard-tier-cap"]')?.disabled).toBe(true);
+    expect(container.querySelector('[data-testid="wizard-tier-pool-add-sonnet"]')).toBeTruthy();
+
+    await act(async () => {
+      setValue(container.querySelector<HTMLInputElement>('[data-testid="wizard-ladder-override-sonnet"]')!, "openai/gpt-5.4-mini");
+      setValue(container.querySelector<HTMLInputElement>('[data-testid="wizard-tier-pool-add-sonnet"]')!, "azure-openai/gpt-5.4-mini");
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="wizard-tier-pool-add-btn-sonnet"]')!.click();
+    });
+
+    await waitFor(() => !!container.querySelector('[data-testid="wizard-tier-pool-sonnet-0"]'));
+    expect(container.querySelector<HTMLInputElement>('[data-testid="wizard-ladder-override-sonnet"]')?.value).toBe("openai/gpt-5.4-mini");
+    expect(container.querySelector<HTMLInputElement>('[data-testid="wizard-tier-pool-sonnet-0"]')?.value).toBe("azure-openai/gpt-5.4-mini");
+  }, 20000);
+
+  it("does not commit an ambiguous bare ladder override into wizard state", async () => {
+    await act(async () => {
+      root.render(App());
+    });
+
+    await waitFor(() => {
+      const sel = container.querySelector<HTMLSelectElement>('[data-testid="wizard-project"]');
+      return !!sel && sel.options.length > 1;
+    });
+
+    await act(async () => {
+      const project = container.querySelector<HTMLSelectElement>('[data-testid="wizard-project"]')!;
+      setValue(project, project.options[1]!.value);
+      const request = container.querySelector<HTMLTextAreaElement>('[data-testid="wizard-request"]')!;
+      setValue(request, "Try an ambiguous model override but keep default routing.");
+    });
+
+    const clickNext = async () => {
+      await waitFor(() => {
+        const btn = container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]');
+        return !!btn && !btn.disabled;
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[data-testid="wizard-next"]')!.click();
+      });
+    };
+    await clickNext();
+    await clickNext();
+
+    await waitFor(() => !!container.querySelector('[data-testid="wizard-ladder-override-sonnet"]'));
+    await act(async () => {
+      setValue(container.querySelector<HTMLInputElement>('[data-testid="wizard-ladder-override-sonnet"]')!, "gpt-5.4-mini");
+    });
+    await act(async () => {
+      container.querySelector<HTMLInputElement>('[data-testid="wizard-ladder-override-sonnet"]')!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    });
+
+    await clickNext();
+    expect(container.textContent).toContain("model routing");
+    expect(container.textContent).toContain("default");
+  }, 20000);
 });

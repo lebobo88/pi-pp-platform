@@ -5,6 +5,8 @@ import { join, relative, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackedExeca } from "../mcp/cli-runner.js";
 import YAML from "yaml";
+// @ts-ignore TS6059: shared wire contract source lives outside @pp/core's rootDir.
+import type { CompletionReadinessResponse } from "../../../../shared/api-types.js";
 import { db, txImmediate } from "../db/database.js";
 import { projectArtifactDir } from "../util/paths.js";
 import {
@@ -330,6 +332,8 @@ export type StartStageInput = {
   run_id: string;
   kind: string;
   gate_type: string;
+  /** v10: index into the run's persisted stage_plan_json, when a plan was built. */
+  plan_index?: number | null;
 };
 export type StartStageOutput = { stage_id: string };
 
@@ -339,12 +343,52 @@ export function startStage(input: StartStageInput): StartStageOutput {
   txImmediate(() => {
     db()
       .prepare(
-        `INSERT INTO stages(id, run_id, kind, gate_type, status, started_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO stages(id, run_id, kind, gate_type, status, started_at, plan_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, input.run_id, input.kind, input.gate_type, "open" satisfies StageStatus, now());
+      .run(id, input.run_id, input.kind, input.gate_type, "open" satisfies StageStatus, now(), input.plan_index ?? null);
   });
   return { stage_id: id };
+}
+
+/**
+ * v10: persist the resolved, ordered stage plan for a run so a later resume
+ * (after a surfaced/blocked stop) can compute "first plan slot with no
+ * corresponding stage row" instead of guessing from `kind` alone (a plan can
+ * legitimately repeat a kind, e.g. two `docs` stages). Called once, right
+ * after `buildStagePlan` resolves a non-abort plan and BEFORE the stage loop
+ * starts iterating, so `stage_plan_json` always reflects the plan that will
+ * actually execute (including any plan-reconciliation augmentation).
+ *
+ * `stages` is stored as-is (JSON.stringify of the StageSpec[] array) — the
+ * exact shape isn't schema-validated here; readers (getRunCompletionReadiness,
+ * the resume flow) only rely on each element having `kind`/`gate_type`.
+ */
+export function persistStagePlan(run_id: string, stages: unknown[]): void {
+  txImmediate(() => {
+    db()
+      .prepare(`UPDATE runs SET stage_plan_json = ? WHERE id = ?`)
+      .run(JSON.stringify(stages), run_id);
+  });
+}
+
+/**
+ * v10 resume: atomically claim a surfaced run for resume by flipping its
+ * status to 'running'. A single conditional `UPDATE ... WHERE status =
+ * 'surfaced'` — returns `true` iff this call performed the transition
+ * (`changes === 1`). Returns `false` with NO write when the run is not
+ * currently 'surfaced' (already running — another resume/execute is active
+ * — or already complete/aborted/crashed/pending). This is the DB-level half
+ * of the resume race guard; the server route's in-process
+ * `RunSupervisor.active`-map check (added with the route) is the other half,
+ * covering the gap between two server processes or two concurrent resume
+ * calls racing this same conditional write.
+ */
+export function claimRunForResume(run_id: string): boolean {
+  const res = txImmediate(() =>
+    db().prepare(`UPDATE runs SET status = 'running' WHERE id = ? AND status = 'surfaced'`).run(run_id),
+  );
+  return res.changes === 1;
 }
 
 /**
@@ -1682,6 +1726,761 @@ export class MissabilityGateViolation extends Error {
   }
 }
 
+function resolveVG2RequiredKinds(run_id: string): {
+  requiredKinds: Set<string>;
+  violation?: ArtifactAvailabilityGateViolation;
+} {
+  const snapshotRow = db()
+    .prepare(`SELECT taxonomy_mapping_json, profile_snapshot_json FROM runs WHERE id = ?`)
+    .get(run_id) as
+    | { taxonomy_mapping_json: string | null; profile_snapshot_json: string | null }
+    | undefined;
+
+  const requiredKinds = new Set<string>();
+  let trivialScope = false;
+
+  // Parse taxonomy_mapping_json: sections[].required_artifacts
+  // Treat null AND empty/whitespace-only strings as ABSENT (no required kinds).
+  // A truthy-but-blank string ("" / "  ") would otherwise either silently
+  // bypass validation (falsy "") or spuriously fail with a parse error ("  ").
+  // Both are the same "no snapshot" case and must behave identically to null.
+  if (snapshotRow?.taxonomy_mapping_json?.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(snapshotRow.taxonomy_mapping_json);
+    } catch (e) {
+      return {
+        requiredKinds,
+        violation: new ArtifactAvailabilityGateViolation(
+          `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+          `failed JSON parse: ${(e as Error).message}. Fix or clear the snapshot before finalizing.`,
+          run_id,
+          "<parse_error>",
+        ),
+      };
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {
+        requiredKinds,
+        violation: new ArtifactAvailabilityGateViolation(
+          `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+          `is not an object. Unexpected shape; fix the snapshot before finalizing.`,
+          run_id,
+          "<malformed>",
+        ),
+      };
+    }
+    // Strict shape: sections must be present and be an array.
+    // An empty object {}, a missing sections key, or sections=null all indicate
+    // a malformed snapshot that should fail closed rather than silently yielding
+    // zero required kinds.
+    const mapping = parsed as { sections?: unknown; scope?: unknown };
+    // Trivial-scope runs execute a minimum pipeline (often code-only) — the
+    // taxonomy's aspirational artifact kinds (gdd, performance_profile, …)
+    // have no producing stage, so enforcing them makes trivial runs
+    // permanently un-completable. Standard/major runs keep the full gate.
+    if (mapping.scope === "trivial") {
+      trivialScope = true;
+      log.info(
+        { run_id },
+        "PP-VG-2 skipped: trivial-scope run — taxonomy artifact kinds are advisory for the minimum pipeline",
+      );
+    } else {
+      if (!Array.isArray(mapping.sections)) {
+        return {
+          requiredKinds,
+          violation: new ArtifactAvailabilityGateViolation(
+            `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+            `has a malformed shape: 'sections' must be an array (got ${
+              mapping.sections === undefined ? "undefined" :
+              mapping.sections === null      ? "null"      :
+              Array.isArray(mapping.sections) ? "array"   :
+              typeof mapping.sections
+            }). Fix or clear the snapshot before finalizing.`,
+            run_id,
+            "<malformed_sections>",
+          ),
+        };
+      }
+      for (const sec of mapping.sections as Array<unknown>) {
+        // Each entry in sections must be a plain object (not an array, not a primitive).
+        if (typeof sec !== "object" || sec === null || Array.isArray(sec)) {
+          return {
+            requiredKinds,
+            violation: new ArtifactAvailabilityGateViolation(
+              `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+              `contains a section entry that is not an object. Fix or clear the snapshot before finalizing.`,
+              run_id,
+              "<malformed_section_entry>",
+            ),
+          };
+        }
+        const s = sec as { required_artifacts?: unknown };
+        if (s.required_artifacts !== undefined) {
+          // If required_artifacts is present it MUST be an array of strings.
+          if (!Array.isArray(s.required_artifacts)) {
+            return {
+              requiredKinds,
+              violation: new ArtifactAvailabilityGateViolation(
+                `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+                `has a section whose required_artifacts is not an array. Fix or clear the snapshot before finalizing.`,
+                run_id,
+                "<malformed_required_artifacts>",
+              ),
+            };
+          }
+          for (const k of s.required_artifacts as Array<unknown>) {
+            if (typeof k !== "string") {
+              return {
+                requiredKinds,
+                violation: new ArtifactAvailabilityGateViolation(
+                  `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+                  `has a section whose required_artifacts contains a non-string entry. Fix or clear the snapshot before finalizing.`,
+                  run_id,
+                  "<malformed_required_artifacts_entry>",
+                ),
+              };
+            }
+            requiredKinds.add(k);
+          }
+        }
+      }
+    }
+  }
+
+  // Parse profile_snapshot_json: .required_artifacts
+  // Same empty/whitespace normalization as taxonomy_mapping_json above.
+  if (snapshotRow?.profile_snapshot_json?.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(snapshotRow.profile_snapshot_json);
+    } catch (e) {
+      return {
+        requiredKinds,
+        violation: new ArtifactAvailabilityGateViolation(
+          `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+          `failed JSON parse: ${(e as Error).message}. Fix or clear the snapshot before finalizing.`,
+          run_id,
+          "<parse_error>",
+        ),
+      };
+    }
+    // Top-level must be a plain object — not an array, not a primitive, not null.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {
+        requiredKinds,
+        violation: new ArtifactAvailabilityGateViolation(
+          `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+          `has a malformed shape: top-level must be an object (got ${
+            parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed
+          }). Fix or clear the snapshot before finalizing.`,
+          run_id,
+          "<malformed_profile>",
+        ),
+      };
+    }
+    const profile = parsed as { required_artifacts?: unknown };
+    if (profile.required_artifacts !== undefined) {
+      // If required_artifacts is present it MUST be an array of strings.
+      if (!Array.isArray(profile.required_artifacts)) {
+        return {
+          requiredKinds,
+          violation: new ArtifactAvailabilityGateViolation(
+            `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+            `has required_artifacts that is not an array. Fix or clear the snapshot before finalizing.`,
+            run_id,
+            "<malformed_required_artifacts>",
+          ),
+        };
+      }
+      for (const k of profile.required_artifacts as Array<unknown>) {
+        if (typeof k !== "string") {
+          return {
+            requiredKinds,
+            violation: new ArtifactAvailabilityGateViolation(
+              `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+              `has required_artifacts containing a non-string entry. Fix or clear the snapshot before finalizing.`,
+              run_id,
+              "<malformed_required_artifacts_entry>",
+            ),
+          };
+        }
+        requiredKinds.add(k);
+      }
+    }
+  }
+
+  // Trivial scope: profile/taxonomy artifact kinds are advisory (no producing
+  // stages ran) — see the PP-VG-2 skip above.
+  if (trivialScope) requiredKinds.clear();
+  return { requiredKinds };
+}
+
+function evaluateVG2(run_id: string): { blocked: boolean; violation?: ArtifactAvailabilityGateViolation } {
+  const resolved = resolveVG2RequiredKinds(run_id) as
+    | { requiredKinds: Set<string>; violation?: undefined }
+    | { requiredKinds: Set<string>; violation: ArtifactAvailabilityGateViolation };
+  if (resolved.violation) {
+    return { blocked: true, violation: resolved.violation };
+  }
+
+  const { requiredKinds } = resolved;
+  if (requiredKinds.size > 0) {
+    const archivedKinds = new Set<string>(
+      (db()
+        .prepare(
+          `SELECT DISTINCT a.kind FROM artifacts a
+             JOIN stages s ON s.id = a.stage_id
+            WHERE s.run_id = ? AND a.kind IS NOT NULL`
+        )
+        .all(run_id) as Array<{ kind: string }>)
+        .map(r => r.kind),
+    );
+    for (const kind of requiredKinds) {
+      if (!archivedKinds.has(kind)) {
+        return {
+          blocked: true,
+          violation: new ArtifactAvailabilityGateViolation(
+            `PP-VG-2: finalize_run(complete) blocked — required artifact kind '${kind}' has zero ` +
+            `archived rows run-wide for run ${run_id}. ` +
+            `The kind is declared in runs.taxonomy_mapping_json or runs.profile_snapshot_json. ` +
+            `Archive at least one '${kind}' artifact (via archive_artifact) before finalizing as complete, ` +
+            `or finalize with status='surfaced' to accept the gap.`,
+            run_id,
+            kind,
+          ),
+        };
+      }
+    }
+  }
+
+  return { blocked: false };
+}
+
+function evaluateVG1(run_id: string): { blocked: boolean; violation?: CompletionChecklistGateViolation } {
+  // Re-read taxonomy_mapping_json (VG-2 already validated its shape above,
+  // so if we reach here the json is either NULL/absent OR a valid object
+  // with an array `sections`). We need project_path for masterPlanStatus.
+  const vg1Row = db()
+    .prepare(`SELECT taxonomy_mapping_json, project_path FROM runs WHERE id = ?`)
+    .get(run_id) as
+    | { taxonomy_mapping_json: string | null; project_path: string }
+    | undefined;
+  if (!vg1Row) throw new Error(`run ${run_id} not found during VG-1 resolution`);
+  // Trivial-scope runs: master-plan population is advisory for the minimum
+  // pipeline — the taxonomy's responsible sections have no producing stages.
+  // (Same rationale as the PP-VG-2 trivial skip above.)
+  try {
+    const vg1Scope = (JSON.parse(vg1Row.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
+    if (vg1Scope === "trivial") {
+      log.info({ run_id }, "PP-VG-1 skipped: trivial-scope run");
+      vg1Row.taxonomy_mapping_json = null;
+    }
+  } catch { /* malformed json falls through to the strict checks below */ }
+
+  const responsibleMasterSections = new Set<string>();
+
+  if (vg1Row.taxonomy_mapping_json?.trim()) {
+    // Shape already validated by VG-2 — safe to parse and cast.
+    let mapping: { sections?: Array<{ id?: unknown }> };
+    try {
+      mapping = JSON.parse(vg1Row.taxonomy_mapping_json) as { sections?: Array<{ id?: unknown }> };
+    } catch (e) {
+      // Should not happen (VG-2 already blocked on parse failure), but
+      // fail-closed defensively anyway.
+      return {
+        blocked: true,
+        violation: new CompletionChecklistGateViolation(
+          `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+          `failed JSON parse during VG-1 pass: ${(e as Error).message}. Fix the snapshot before finalizing.`,
+          run_id,
+          [],
+        ),
+      };
+    }
+    if (!Array.isArray(mapping.sections)) {
+      return {
+        blocked: true,
+        violation: new CompletionChecklistGateViolation(
+          `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+          `has a malformed shape: 'sections' must be an array. Fix the snapshot before finalizing.`,
+          run_id,
+          [],
+        ),
+      };
+    }
+    // Fix #2: fail-closed on any section entry that is non-object, missing
+    // an id string, or whose id is not a known TAXONOMY_BY_ID key. Silently
+    // skipping such entries would allow a malformed mapping to report zero
+    // responsible sections and bypass the gate entirely.
+    for (const sec of mapping.sections) {
+      if (typeof sec !== "object" || sec === null || Array.isArray(sec)) {
+        return {
+          blocked: true,
+          violation: new CompletionChecklistGateViolation(
+            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+            `contains a section entry that is not a plain object. Fix or clear the snapshot before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      const secObj = sec as { id?: unknown };
+      if (typeof secObj.id !== "string" || !secObj.id.trim()) {
+        return {
+          blocked: true,
+          violation: new CompletionChecklistGateViolation(
+            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+            `contains a section entry with a missing or non-string id. Fix or clear the snapshot before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      const taxEntry = TAXONOMY_BY_ID[secObj.id];
+      if (!taxEntry) {
+        return {
+          blocked: true,
+          violation: new CompletionChecklistGateViolation(
+            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${run_id} ` +
+            `contains an unknown taxonomy section id '${secObj.id}'. ` +
+            `Valid ids are 4.1..4.16. Fix or clear the snapshot before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      if (!taxEntry.master_plan_section) {
+        return {
+          blocked: true,
+          violation: new CompletionChecklistGateViolation(
+            `PP-VG-1: finalize_run(complete) blocked — taxonomy section '${secObj.id}' has no ` +
+            `master_plan_section mapping. This is an internal taxonomy data error. Fix before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      // Canonical set check: reject any master_plan_section value not in the
+      // authoritative MASTER_PLAN_SECTIONS list. Fails closed — a taxonomy
+      // entry whose master_plan_section drifted (rename, typo, deleted) cannot
+      // silently add a section to the responsible set or resolve against the
+      // master plan. Surface this as a gate violation so it is caught and fixed.
+      if (!(MASTER_PLAN_SECTIONS as readonly string[]).includes(taxEntry.master_plan_section)) {
+        return {
+          blocked: true,
+          violation: new CompletionChecklistGateViolation(
+            `PP-VG-1: finalize_run(complete) blocked — taxonomy section '${secObj.id}' resolves to ` +
+            `master_plan_section '${taxEntry.master_plan_section}' which is not a member of the ` +
+            `canonical MASTER_PLAN_SECTIONS list. This is an internal taxonomy data error. Fix before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      responsibleMasterSections.add(taxEntry.master_plan_section);
+    }
+  }
+
+  if (responsibleMasterSections.size > 0) {
+    // READ-ONLY: call masterPlanStatus, never write.
+    const planStatus = masterPlanStatus(vg1Row.project_path);
+
+    // Build lookup map: section header → populated flag.
+    const sectionPopulatedMap = new Map<string, boolean>(
+      planStatus.sections.map(s => [s.section, s.populated]),
+    );
+
+    // Fix #3 — explicit canonical map: master_plan_section → COMPLETION_CHECKLIST items.
+    //
+    // masterPlanStatus derives checklist[].pass from the SAME section's populated
+    // flag (pass = section is populated). Gating on checklist items AFTER confirming
+    // population is circular: if populated → checklist pass; if unpopulated → already
+    // caught by the population check below. There is no independent per-item evidence
+    // in the current harness model.
+    //
+    // Design decision (honest, not circular): the gate's real enforcement is the
+    // population check (section unpopulated → blocked). The "checklist_fail" reason
+    // is preserved in the type and message for FUTURE use when per-item evidence
+    // (e.g. linked artifacts or explicit signals) is wired in (tracked enhancement).
+    // For now we gate on POPULATION ONLY and explicitly do NOT emit a
+    // "checklist_fail" blocker — that would be vacuously true (populated = items pass)
+    // or vacuously false (unpopulated = already caught) with no additional signal.
+    //
+    // This explicit section→checklist-items map is kept here for documentation
+    // and to drive future per-item gating when independent evidence is available.
+    // It is NOT used as a gate predicate today — population is the gate.
+    const _SECTION_TO_CHECKLIST_ITEMS: Record<string, string[]> = {
+      "1. Executive summary":                          ["The problem and business outcome are explicit."],
+      "3. Stakeholders and users":                     ["Users, operators, and approvers are identified."],
+      "5. Scope and roadmap":                          ["Scope boundaries are written down."],
+      "7. Acceptance criteria":                        ["Acceptance criteria and non-functional requirements exist."],
+      "11. Architecture and technical strategy":       ["Architecture decisions are documented with tradeoffs."],
+      "12. Interfaces and contracts":                  ["API/event/UI contracts are specified and testable."],
+      "10. Domain and data model":                     ["Data semantics, lineage, retention, and migration are defined."],
+      "14. Security, privacy, and compliance":         ["Security/privacy/compliance requirements are mapped to controls."],
+      "15. Test and verification strategy":            ["Quality strategy covers functional and non-functional verification."],
+      "19. Launch, migration, and rollback plan":      ["Release, rollback, and support plans exist before launch."],
+      "16. Operations and support model":              ["Telemetry, dashboards, and incident ownership are ready before launch."],
+      "Appendices":                                    ["Documentation ownership is assigned.", "If AI is involved, evals, permissions, and human review rules exist."],
+      "17. Team operating model and governance":       ["Governance forums and decision rights are known."],
+      "20. Deprecation and retirement plan":           ["Deprecation and retirement are not left as 'future work'."],
+    };
+    // Suppressed unused-variable warning: map is kept for documentation/future use.
+    void _SECTION_TO_CHECKLIST_ITEMS;
+
+    const unmetSections: CompletionChecklistGateViolation["unmet_sections"] = [];
+
+    for (const section of responsibleMasterSections) {
+      // Gate predicate: population (the authoritative, non-circular signal).
+      // A section is "unmet" when it is still the _To be populated placeholder
+      // or has no content in PROJECT_MASTER.md.
+      const populated = sectionPopulatedMap.get(section) ?? false;
+      if (!populated) {
+        unmetSections.push({ section, reason: "unpopulated" });
+      }
+      // checklist_fail is intentionally NOT emitted here — see comment above.
+      // The population check IS the checklist check in this model.
+    }
+
+    if (unmetSections.length > 0) {
+      const desc = unmetSections
+        .map(u => `'${u.section}' is not populated`)
+        .join(". ");
+      return {
+        blocked: true,
+        violation: new CompletionChecklistGateViolation(
+          `PP-VG-1: finalize_run(complete) blocked for run ${run_id} — ` +
+          `${unmetSections.length} responsible master-plan section(s) are unpopulated: ${desc}. ` +
+          `Responsible sections are derived from runs.taxonomy_mapping_json section ids (not artifact.taxonomy_section). ` +
+          `Populate the affected PROJECT_MASTER.md sections (via a master-plan-patcher agent call or ` +
+          `applyMasterPlanPatch) before retrying finalize(complete), ` +
+          `or finalize with status='surfaced' to accept the gap.`,
+          run_id,
+          unmetSections,
+        ),
+      };
+    }
+  }
+
+  return { blocked: false };
+}
+
+function evaluateVG4(run_id: string): { blocked: boolean; violation?: MissabilityGateViolation } {
+  if (!(() => {
+    // Trivial-scope runs execute the minimum pipeline — missability evidence
+    // has no producing stage, so required checks are advisory here (same
+    // rationale as the PP-VG-1/VG-2 trivial skips above).
+    try {
+      const row = db().prepare(`SELECT taxonomy_mapping_json FROM runs WHERE id = ?`).get(run_id) as
+        | { taxonomy_mapping_json: string | null }
+        | undefined;
+      const scope = (JSON.parse(row?.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
+      if (scope === "trivial") {
+        log.info({ run_id }, "PP-VG-4 skipped: trivial-scope run");
+        return true;
+      }
+    } catch { /* malformed json → keep the gate */ }
+    return false;
+  })()) {
+    // Read all three sources for the required check set.
+    const vg4Row = db()
+      .prepare(`SELECT profile_snapshot_json, team, forum, project_path, taxonomy_mapping_json FROM runs WHERE id = ?`)
+      .get(run_id) as
+      | {
+          profile_snapshot_json: string | null;
+          team: string | null;
+          forum: string | null;
+          project_path: string;
+          taxonomy_mapping_json: string | null;
+        }
+      | undefined;
+    if (!vg4Row) throw new Error(`run ${run_id} not found during VG-4 resolution`);
+
+    const requiredCheckIds = new Set<string>();
+
+    // Source 1: profile_snapshot_json.required_missability_checks
+    if (vg4Row.profile_snapshot_json?.trim()) {
+      let profileParsed: unknown;
+      try {
+        profileParsed = JSON.parse(vg4Row.profile_snapshot_json);
+      } catch (e) {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+            `failed JSON parse while resolving required missability checks: ${(e as Error).message}. ` +
+            `Fix or clear the snapshot before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      if (typeof profileParsed !== "object" || profileParsed === null || Array.isArray(profileParsed)) {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+            `has a malformed shape (top-level must be an object) while resolving required missability checks. ` +
+            `Fix or clear the snapshot before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      const profileObj = profileParsed as { required_missability_checks?: unknown };
+      if (profileObj.required_missability_checks !== undefined) {
+        if (!Array.isArray(profileObj.required_missability_checks)) {
+          return {
+            blocked: true,
+            violation: new MissabilityGateViolation(
+              `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+              `has required_missability_checks that is not an array. Fix or clear the snapshot before finalizing.`,
+              run_id,
+              [],
+            ),
+          };
+        }
+        for (const id of profileObj.required_missability_checks as Array<unknown>) {
+          if (typeof id !== "string") {
+            return {
+              blocked: true,
+              violation: new MissabilityGateViolation(
+                `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${run_id} ` +
+                `has required_missability_checks containing a non-string entry. Fix or clear the snapshot before finalizing.`,
+                run_id,
+                [],
+              ),
+            };
+          }
+          requiredCheckIds.add(id);
+        }
+      }
+    }
+
+    // Source 2: team.missability_required
+    // Resolution order (resolve-first, sentinel-fallback):
+    //   1. NULL → no team source declared; skip silently.
+    //   2. present-but-blank ("" / whitespace) → malformed identifier; fail closed.
+    //   3. present non-blank → call getTeam FIRST.
+    //      a. Resolves (yaml exists, even if named "ad-hoc") → use its required checks.
+    //      b. Does NOT resolve AND name is a known ensureRun sentinel ("ad-hoc") →
+    //         treat as no-team-source (legit ensureRun with no user-provided team).
+    //      c. Does NOT resolve AND name is NOT a sentinel → malformed source; fail closed.
+    // This means a real .claude/teams/ad-hoc.yaml is fully honored; the sentinel
+    // exemption only fires when the name can't be resolved AND is the known placeholder.
+    const VG4_TEAM_SENTINELS = new Set(["ad-hoc"]);
+    const rawTeam = vg4Row.team;
+    if (rawTeam !== null) {
+      const trimmedTeam = rawTeam.trim();
+      if (trimmedTeam === "") {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — run ${run_id} has a blank team value. ` +
+            `A blank team identifier is malformed. Fix the runs.team column before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      // Resolve first — a real yaml (including "ad-hoc.yaml") takes precedence.
+      const teamResult = getTeam({ name: trimmedTeam, project_path: vg4Row.project_path });
+      if (teamResult) {
+        // Real team found: use its required missability checks.
+        for (const id of teamResult.team.missability_required ?? []) {
+          requiredCheckIds.add(id);
+        }
+      } else if (VG4_TEAM_SENTINELS.has(trimmedTeam)) {
+        // No yaml for this name AND it's the known ensureRun no-team sentinel →
+        // treat as no-team-source; continue silently.
+      } else {
+        // No yaml AND not a sentinel → malformed source; fail closed.
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — run ${run_id} references team '${trimmedTeam}' ` +
+            `but it could not be loaded. Fix the team yaml before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+    }
+
+    // Source 3: forum.required_missability_checks
+    // NULL = no forum declared (no source). Present-but-blank = malformed: fail closed.
+    // Unknown forum id = malformed: fail closed.
+    const rawForum = vg4Row.forum;
+    if (rawForum !== null) {
+      const trimmedForum = rawForum.trim();
+      if (trimmedForum === "") {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — run ${run_id} has a blank forum value. ` +
+            `A blank forum identifier is malformed. Fix the runs.forum column before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      const forumObj = getForum(trimmedForum);
+      if (!forumObj) {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — run ${run_id} references forum '${trimmedForum}' ` +
+            `but it is not a recognised forum id. Fix the forum reference before finalizing.`,
+            run_id,
+            [],
+          ),
+        };
+      }
+      for (const id of forumObj.required_missability_checks ?? []) {
+        requiredCheckIds.add(id);
+      }
+    }
+
+    // ── R1: producibility demotion ────────────────────────────────────────
+    // Generalises the trivial-scope skip from e8662ab to every scope. A REQUIRED
+    // check whose producing artifact kinds / taxonomy sections have an EMPTY
+    // intersection with this run's PLANNED surface can never gather evidence — no
+    // stage in the pipeline emits what it inspects (data-proven offenders:
+    // deprecation-sunset 302/302, all game-cert checks 243/243). Such a check is
+    // demoted to ADVISORY: it still ran and its row is recorded, but it no longer
+    // blocks finalize(complete). Producible checks keep full standard/major
+    // governance — this only removes structurally-impossible requirements.
+    //
+    // Planned surface (fail-safe — the more we count as planned, the fewer
+    // demotions): taxonomy sections[].id (sections) ∪ taxonomy required_artifacts
+    // ∪ profile required_artifacts ∪ actually-archived artifact kinds (kinds).
+    const plannedSections = new Set<string>();
+    const plannedKinds = new Set<string>();
+    if (vg4Row.taxonomy_mapping_json?.trim()) {
+      try {
+        const tax = JSON.parse(vg4Row.taxonomy_mapping_json) as {
+          sections?: Array<{ id?: unknown; required_artifacts?: unknown }>;
+        };
+        for (const s of tax.sections ?? []) {
+          const sid = s?.id;
+          if (typeof sid === "string") plannedSections.add(sid);
+          const reqs = s?.required_artifacts;
+          if (Array.isArray(reqs)) {
+            for (const k of reqs) if (typeof k === "string") plannedKinds.add(k);
+          }
+        }
+      } catch { /* malformed taxonomy → no planned surface from this source */ }
+    }
+    if (vg4Row.profile_snapshot_json?.trim()) {
+      try {
+        const prof = JSON.parse(vg4Row.profile_snapshot_json) as { required_artifacts?: unknown };
+        if (Array.isArray(prof.required_artifacts)) {
+          for (const k of prof.required_artifacts) if (typeof k === "string") plannedKinds.add(k);
+        }
+      } catch { /* already fail-closed above; ignore here */ }
+    }
+    for (const r of db()
+      .prepare(`SELECT DISTINCT kind FROM artifacts WHERE run_id = ? AND kind IS NOT NULL`)
+      .all(run_id) as Array<{ kind: string | null }>) {
+      if (r.kind) plannedKinds.add(r.kind);
+    }
+
+    // Partition required checks into producible (still blocking) and
+    // unproducible (demoted to advisory). Log + annotate each demotion so it is
+    // visible in the check record and the run log.
+    const producibleRequired = new Set<string>();
+    for (const checkId of requiredCheckIds) {
+      if (isCheckProducible(checkId, plannedKinds, plannedSections)) {
+        producibleRequired.add(checkId);
+        continue;
+      }
+      const reason =
+        `no planned artifact/stage can produce its evidence ` +
+        `(planned kinds: [${[...plannedKinds].join(", ")}], sections: [${[...plannedSections].join(", ")}])`;
+      log.info(
+        { run_id, check_id: checkId },
+        `PP-VG-4 advisory_unproducible: required missability check '${checkId}' demoted to advisory — ${reason}. ` +
+          `It still ran and its result is recorded, but it no longer blocks finalize(complete).`,
+      );
+      // Annotate the latest persisted row for this check so the demotion is
+      // visible in the check record (additive: a marker appended to evidence_path;
+      // no schema change).
+      try {
+        const latest = db()
+          .prepare(
+            `SELECT id, evidence_path FROM missability_checks
+              WHERE run_id = ? AND check_id = ?
+              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(run_id, checkId) as { id: string; evidence_path: string | null } | undefined;
+        if (latest) {
+          const marker = `[advisory_unproducible: ${reason}]`;
+          const next = latest.evidence_path ? `${latest.evidence_path} ${marker}` : marker;
+          db()
+            .prepare(`UPDATE missability_checks SET evidence_path = ? WHERE id = ?`)
+            .run(next, latest.id);
+        }
+      } catch { /* annotation is best-effort; the log line is the durable record */ }
+    }
+
+    // Query the latest persisted row per check_id using rowid as the insertion
+    // tiebreak so same-millisecond ties are broken deterministically by insertion
+    // order (the truly-last-inserted row wins). Uses a correlated subquery rather
+    // than GROUP BY / HAVING which can pick a non-last row on ties.
+    // Re-use persisted rows — do NOT re-run runMissabilityChecks.
+    // Only PRODUCIBLE required checks can block; unproducible ones were demoted above.
+    if (producibleRequired.size > 0) {
+      const latestChecks = db()
+        .prepare(
+          `SELECT check_id, status
+             FROM missability_checks m
+            WHERE run_id = ?
+              AND check_id IN (${[...producibleRequired].map(() => "?").join(", ")})
+              AND rowid = (
+                SELECT rowid FROM missability_checks
+                 WHERE run_id = m.run_id AND check_id = m.check_id
+                 ORDER BY created_at DESC, rowid DESC
+                 LIMIT 1
+              )`,
+        )
+        .all(run_id, ...[...producibleRequired]) as Array<{ check_id: string; status: string }>;
+
+      // Build a map of latest status per check_id.
+      const latestStatusById = new Map<string, string>(
+        latestChecks.map(r => [r.check_id, r.status]),
+      );
+
+      const failedRequired: string[] = [];
+      for (const checkId of producibleRequired) {
+        const status = latestStatusById.get(checkId);
+        // A required check with no persisted row counts as 'fail' (hasn't run = unknown = fail-closed).
+        if (!status || status === "fail") {
+          failedRequired.push(checkId);
+        }
+      }
+
+      if (failedRequired.length > 0) {
+        return {
+          blocked: true,
+          violation: new MissabilityGateViolation(
+            `PP-VG-4: finalize_run(complete) blocked — ${failedRequired.length} required missability check(s) ` +
+            `have status='fail' (or are missing) for run ${run_id}: ${failedRequired.join(", ")}. ` +
+            `Required checks are the union of profile-, team-, and forum-declared sets. ` +
+            `Advisory (non-required) failures do not block. Run mcp__pp_harness__run_missability_checks ` +
+            `to re-evaluate and re-persist, then retry finalize. ` +
+            `Or finalize with status='surfaced' to accept the failures.`,
+            run_id,
+            failedRequired,
+          ),
+        };
+      }
+    }
+  }
+
+  return { blocked: false };
+}
+
 export type FinalizeRunInput = {
   run_id: string;
   status: Extract<RunStatus, "complete" | "surfaced" | "aborted">;
@@ -1744,186 +2543,8 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   // (JSON parse failure, unexpected shape), block with a clear message rather
   // than silently skipping. Missing columns (NULL) are treated as no-op.
   if (input.status === "complete") {
-    const snapshotRow = db()
-      .prepare(`SELECT taxonomy_mapping_json, profile_snapshot_json FROM runs WHERE id = ?`)
-      .get(input.run_id) as
-      | { taxonomy_mapping_json: string | null; profile_snapshot_json: string | null }
-      | undefined;
-
-    const requiredKinds = new Set<string>();
-    let trivialScope = false;
-
-    // Parse taxonomy_mapping_json: sections[].required_artifacts
-    // Treat null AND empty/whitespace-only strings as ABSENT (no required kinds).
-    // A truthy-but-blank string ("" / "  ") would otherwise either silently
-    // bypass validation (falsy "") or spuriously fail with a parse error ("  ").
-    // Both are the same "no snapshot" case and must behave identically to null.
-    if (snapshotRow?.taxonomy_mapping_json?.trim()) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(snapshotRow.taxonomy_mapping_json);
-      } catch (e) {
-        throw new ArtifactAvailabilityGateViolation(
-          `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-          `failed JSON parse: ${(e as Error).message}. Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          "<parse_error>",
-        );
-      }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new ArtifactAvailabilityGateViolation(
-          `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-          `is not an object. Unexpected shape; fix the snapshot before finalizing.`,
-          input.run_id,
-          "<malformed>",
-        );
-      }
-      // Strict shape: sections must be present and be an array.
-      // An empty object {}, a missing sections key, or sections=null all indicate
-      // a malformed snapshot that should fail closed rather than silently yielding
-      // zero required kinds.
-      const mapping = parsed as { sections?: unknown; scope?: unknown };
-      // Trivial-scope runs execute a minimum pipeline (often code-only) — the
-      // taxonomy's aspirational artifact kinds (gdd, performance_profile, …)
-      // have no producing stage, so enforcing them makes trivial runs
-      // permanently un-completable. Standard/major runs keep the full gate.
-      if (mapping.scope === "trivial") {
-        trivialScope = true;
-        log.info(
-          { run_id: input.run_id },
-          "PP-VG-2 skipped: trivial-scope run — taxonomy artifact kinds are advisory for the minimum pipeline",
-        );
-      } else {
-      if (!Array.isArray(mapping.sections)) {
-        throw new ArtifactAvailabilityGateViolation(
-          `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-          `has a malformed shape: 'sections' must be an array (got ${
-            mapping.sections === undefined ? "undefined" :
-            mapping.sections === null      ? "null"      :
-            Array.isArray(mapping.sections) ? "array"   :
-            typeof mapping.sections
-          }). Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          "<malformed_sections>",
-        );
-      }
-      for (const sec of mapping.sections as Array<unknown>) {
-        // Each entry in sections must be a plain object (not an array, not a primitive).
-        if (typeof sec !== "object" || sec === null || Array.isArray(sec)) {
-          throw new ArtifactAvailabilityGateViolation(
-            `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-            `contains a section entry that is not an object. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            "<malformed_section_entry>",
-          );
-        }
-        const s = sec as { required_artifacts?: unknown };
-        if (s.required_artifacts !== undefined) {
-          // If required_artifacts is present it MUST be an array of strings.
-          if (!Array.isArray(s.required_artifacts)) {
-            throw new ArtifactAvailabilityGateViolation(
-              `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-              `has a section whose required_artifacts is not an array. Fix or clear the snapshot before finalizing.`,
-              input.run_id,
-              "<malformed_required_artifacts>",
-            );
-          }
-          for (const k of s.required_artifacts as Array<unknown>) {
-            if (typeof k !== "string") {
-              throw new ArtifactAvailabilityGateViolation(
-                `PP-VG-2: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-                `has a section whose required_artifacts contains a non-string entry. Fix or clear the snapshot before finalizing.`,
-                input.run_id,
-                "<malformed_required_artifacts_entry>",
-              );
-            }
-            requiredKinds.add(k);
-          }
-        }
-      }
-      }
-    }
-
-    // Parse profile_snapshot_json: .required_artifacts
-    // Same empty/whitespace normalization as taxonomy_mapping_json above.
-    if (snapshotRow?.profile_snapshot_json?.trim()) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(snapshotRow.profile_snapshot_json);
-      } catch (e) {
-        throw new ArtifactAvailabilityGateViolation(
-          `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-          `failed JSON parse: ${(e as Error).message}. Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          "<parse_error>",
-        );
-      }
-      // Top-level must be a plain object — not an array, not a primitive, not null.
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new ArtifactAvailabilityGateViolation(
-          `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-          `has a malformed shape: top-level must be an object (got ${
-            parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed
-          }). Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          "<malformed_profile>",
-        );
-      }
-      const profile = parsed as { required_artifacts?: unknown };
-      if (profile.required_artifacts !== undefined) {
-        // If required_artifacts is present it MUST be an array of strings.
-        if (!Array.isArray(profile.required_artifacts)) {
-          throw new ArtifactAvailabilityGateViolation(
-            `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-            `has required_artifacts that is not an array. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            "<malformed_required_artifacts>",
-          );
-        }
-        for (const k of profile.required_artifacts as Array<unknown>) {
-          if (typeof k !== "string") {
-            throw new ArtifactAvailabilityGateViolation(
-              `PP-VG-2: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-              `has required_artifacts containing a non-string entry. Fix or clear the snapshot before finalizing.`,
-              input.run_id,
-              "<malformed_required_artifacts_entry>",
-            );
-          }
-          requiredKinds.add(k);
-        }
-      }
-    }
-
-    // For each required kind, verify at least ONE artifact exists RUN-WIDE
-    // (across any stage of this run — the kind can live in a dedicated stage).
-    // Trivial scope: profile/taxonomy artifact kinds are advisory (no producing
-    // stages ran) — see the PP-VG-2 skip above.
-    if (trivialScope) requiredKinds.clear();
-    if (requiredKinds.size > 0) {
-      const archivedKinds = new Set<string>(
-        (db()
-          .prepare(
-            `SELECT DISTINCT a.kind FROM artifacts a
-               JOIN stages s ON s.id = a.stage_id
-              WHERE s.run_id = ? AND a.kind IS NOT NULL`
-          )
-          .all(input.run_id) as Array<{ kind: string }>)
-          .map(r => r.kind),
-      );
-      for (const kind of requiredKinds) {
-        if (!archivedKinds.has(kind)) {
-          throw new ArtifactAvailabilityGateViolation(
-            `PP-VG-2: finalize_run(complete) blocked — required artifact kind '${kind}' has zero ` +
-            `archived rows run-wide for run ${input.run_id}. ` +
-            `The kind is declared in runs.taxonomy_mapping_json or runs.profile_snapshot_json. ` +
-            `Archive at least one '${kind}' artifact (via archive_artifact) before finalizing as complete, ` +
-            `or finalize with status='surfaced' to accept the gap.`,
-            input.run_id,
-            kind,
-          );
-        }
-      }
-    }
+    const vg2 = evaluateVG2(input.run_id);
+    if (vg2.blocked) throw vg2.violation;
   }
 
   // ── PP-VG-1: completion-checklist gate ───────────────────────────────────
@@ -1942,186 +2563,8 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   // Fail-closed on malformed taxonomy_mapping_json (reuses strict-shape
   // check already applied by VG-2 above). NULL/empty = no sections = no block.
   if (input.status === "complete") {
-    // Re-read taxonomy_mapping_json (VG-2 already validated its shape above,
-    // so if we reach here the json is either NULL/absent OR a valid object
-    // with an array `sections`). We need project_path for masterPlanStatus.
-    const vg1Row = db()
-      .prepare(`SELECT taxonomy_mapping_json, project_path FROM runs WHERE id = ?`)
-      .get(input.run_id) as
-      | { taxonomy_mapping_json: string | null; project_path: string }
-      | undefined;
-    if (!vg1Row) throw new Error(`run ${input.run_id} not found during VG-1 resolution`);
-    // Trivial-scope runs: master-plan population is advisory for the minimum
-    // pipeline — the taxonomy's responsible sections have no producing stages.
-    // (Same rationale as the PP-VG-2 trivial skip above.)
-    try {
-      const vg1Scope = (JSON.parse(vg1Row.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
-      if (vg1Scope === "trivial") {
-        log.info({ run_id: input.run_id }, "PP-VG-1 skipped: trivial-scope run");
-        vg1Row.taxonomy_mapping_json = null;
-      }
-    } catch { /* malformed json falls through to the strict checks below */ }
-
-    const responsibleMasterSections = new Set<string>();
-
-    if (vg1Row.taxonomy_mapping_json?.trim()) {
-      // Shape already validated by VG-2 — safe to parse and cast.
-      let mapping: { sections?: Array<{ id?: unknown }> };
-      try {
-        mapping = JSON.parse(vg1Row.taxonomy_mapping_json) as { sections?: Array<{ id?: unknown }> };
-      } catch (e) {
-        // Should not happen (VG-2 already blocked on parse failure), but
-        // fail-closed defensively anyway.
-        throw new CompletionChecklistGateViolation(
-          `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-          `failed JSON parse during VG-1 pass: ${(e as Error).message}. Fix the snapshot before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      if (!Array.isArray(mapping.sections)) {
-        throw new CompletionChecklistGateViolation(
-          `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-          `has a malformed shape: 'sections' must be an array. Fix the snapshot before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      // Fix #2: fail-closed on any section entry that is non-object, missing
-      // an id string, or whose id is not a known TAXONOMY_BY_ID key. Silently
-      // skipping such entries would allow a malformed mapping to report zero
-      // responsible sections and bypass the gate entirely.
-      for (const sec of mapping.sections) {
-        if (typeof sec !== "object" || sec === null || Array.isArray(sec)) {
-          throw new CompletionChecklistGateViolation(
-            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-            `contains a section entry that is not a plain object. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        const secObj = sec as { id?: unknown };
-        if (typeof secObj.id !== "string" || !secObj.id.trim()) {
-          throw new CompletionChecklistGateViolation(
-            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-            `contains a section entry with a missing or non-string id. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        const taxEntry = TAXONOMY_BY_ID[secObj.id];
-        if (!taxEntry) {
-          throw new CompletionChecklistGateViolation(
-            `PP-VG-1: finalize_run(complete) blocked — runs.taxonomy_mapping_json for run ${input.run_id} ` +
-            `contains an unknown taxonomy section id '${secObj.id}'. ` +
-            `Valid ids are 4.1..4.16. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        if (!taxEntry.master_plan_section) {
-          throw new CompletionChecklistGateViolation(
-            `PP-VG-1: finalize_run(complete) blocked — taxonomy section '${secObj.id}' has no ` +
-            `master_plan_section mapping. This is an internal taxonomy data error. Fix before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        // Canonical set check: reject any master_plan_section value not in the
-        // authoritative MASTER_PLAN_SECTIONS list. Fails closed — a taxonomy
-        // entry whose master_plan_section drifted (rename, typo, deleted) cannot
-        // silently add a section to the responsible set or resolve against the
-        // master plan. Surface this as a gate violation so it is caught and fixed.
-        if (!(MASTER_PLAN_SECTIONS as readonly string[]).includes(taxEntry.master_plan_section)) {
-          throw new CompletionChecklistGateViolation(
-            `PP-VG-1: finalize_run(complete) blocked — taxonomy section '${secObj.id}' resolves to ` +
-            `master_plan_section '${taxEntry.master_plan_section}' which is not a member of the ` +
-            `canonical MASTER_PLAN_SECTIONS list. This is an internal taxonomy data error. Fix before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        responsibleMasterSections.add(taxEntry.master_plan_section);
-      }
-    }
-
-    if (responsibleMasterSections.size > 0) {
-      // READ-ONLY: call masterPlanStatus, never write.
-      const planStatus = masterPlanStatus(vg1Row.project_path);
-
-      // Build lookup map: section header → populated flag.
-      const sectionPopulatedMap = new Map<string, boolean>(
-        planStatus.sections.map(s => [s.section, s.populated]),
-      );
-
-      // Fix #3 — explicit canonical map: master_plan_section → COMPLETION_CHECKLIST items.
-      //
-      // masterPlanStatus derives checklist[].pass from the SAME section's populated
-      // flag (pass = section is populated). Gating on checklist items AFTER confirming
-      // population is circular: if populated → checklist pass; if unpopulated → already
-      // caught by the population check below. There is no independent per-item evidence
-      // in the current harness model.
-      //
-      // Design decision (honest, not circular): the gate's real enforcement is the
-      // population check (section unpopulated → blocked). The "checklist_fail" reason
-      // is preserved in the type and message for FUTURE use when per-item evidence
-      // (e.g. linked artifacts or explicit signals) is wired in (tracked enhancement).
-      // For now we gate on POPULATION ONLY and explicitly do NOT emit a
-      // "checklist_fail" blocker — that would be vacuously true (populated = items pass)
-      // or vacuously false (unpopulated = already caught) with no additional signal.
-      //
-      // This explicit section→checklist-items map is kept here for documentation
-      // and to drive future per-item gating when independent evidence is available.
-      // It is NOT used as a gate predicate today — population is the gate.
-      const _SECTION_TO_CHECKLIST_ITEMS: Record<string, string[]> = {
-        "1. Executive summary":                          ["The problem and business outcome are explicit."],
-        "3. Stakeholders and users":                     ["Users, operators, and approvers are identified."],
-        "5. Scope and roadmap":                          ["Scope boundaries are written down."],
-        "7. Acceptance criteria":                        ["Acceptance criteria and non-functional requirements exist."],
-        "11. Architecture and technical strategy":       ["Architecture decisions are documented with tradeoffs."],
-        "12. Interfaces and contracts":                  ["API/event/UI contracts are specified and testable."],
-        "10. Domain and data model":                     ["Data semantics, lineage, retention, and migration are defined."],
-        "14. Security, privacy, and compliance":         ["Security/privacy/compliance requirements are mapped to controls."],
-        "15. Test and verification strategy":            ["Quality strategy covers functional and non-functional verification."],
-        "19. Launch, migration, and rollback plan":      ["Release, rollback, and support plans exist before launch."],
-        "16. Operations and support model":              ["Telemetry, dashboards, and incident ownership are ready before launch."],
-        "Appendices":                                    ["Documentation ownership is assigned.", "If AI is involved, evals, permissions, and human review rules exist."],
-        "17. Team operating model and governance":       ["Governance forums and decision rights are known."],
-        "20. Deprecation and retirement plan":           ["Deprecation and retirement are not left as 'future work'."],
-      };
-      // Suppressed unused-variable warning: map is kept for documentation/future use.
-      void _SECTION_TO_CHECKLIST_ITEMS;
-
-      const unmetSections: CompletionChecklistGateViolation["unmet_sections"] = [];
-
-      for (const section of responsibleMasterSections) {
-        // Gate predicate: population (the authoritative, non-circular signal).
-        // A section is "unmet" when it is still the _To be populated placeholder
-        // or has no content in PROJECT_MASTER.md.
-        const populated = sectionPopulatedMap.get(section) ?? false;
-        if (!populated) {
-          unmetSections.push({ section, reason: "unpopulated" });
-        }
-        // checklist_fail is intentionally NOT emitted here — see comment above.
-        // The population check IS the checklist check in this model.
-      }
-
-      if (unmetSections.length > 0) {
-        const desc = unmetSections
-          .map(u => `'${u.section}' is not populated`)
-          .join(". ");
-        throw new CompletionChecklistGateViolation(
-          `PP-VG-1: finalize_run(complete) blocked for run ${input.run_id} — ` +
-          `${unmetSections.length} responsible master-plan section(s) are unpopulated: ${desc}. ` +
-          `Responsible sections are derived from runs.taxonomy_mapping_json section ids (not artifact.taxonomy_section). ` +
-          `Populate the affected PROJECT_MASTER.md sections (via a master-plan-patcher agent call or ` +
-          `applyMasterPlanPatch) before retrying finalize(complete), ` +
-          `or finalize with status='surfaced' to accept the gap.`,
-          input.run_id,
-          unmetSections,
-        );
-      }
-    }
+    const vg1 = evaluateVG1(input.run_id);
+    if (vg1.blocked) throw vg1.violation;
   }
 
   // ── PP-VG-4: missability gate ─────────────────────────────────────────────
@@ -2139,288 +2582,9 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
   // silently treat as "no required checks".
   // Advisory (non-required) failed checks do NOT block.
   // Only fires on finalize(complete); surfaced/aborted are not blocked.
-  if (input.status === "complete" && !(() => {
-    // Trivial-scope runs execute the minimum pipeline — missability evidence
-    // has no producing stage, so required checks are advisory here (same
-    // rationale as the PP-VG-1/VG-2 trivial skips above).
-    try {
-      const row = db().prepare(`SELECT taxonomy_mapping_json FROM runs WHERE id = ?`).get(input.run_id) as
-        | { taxonomy_mapping_json: string | null }
-        | undefined;
-      const scope = (JSON.parse(row?.taxonomy_mapping_json ?? "{}") as { scope?: unknown }).scope;
-      if (scope === "trivial") {
-        log.info({ run_id: input.run_id }, "PP-VG-4 skipped: trivial-scope run");
-        return true;
-      }
-    } catch { /* malformed json → keep the gate */ }
-    return false;
-  })()) {
-    // Read all three sources for the required check set.
-    const vg4Row = db()
-      .prepare(`SELECT profile_snapshot_json, team, forum, project_path, taxonomy_mapping_json FROM runs WHERE id = ?`)
-      .get(input.run_id) as
-      | {
-          profile_snapshot_json: string | null;
-          team: string | null;
-          forum: string | null;
-          project_path: string;
-          taxonomy_mapping_json: string | null;
-        }
-      | undefined;
-    if (!vg4Row) throw new Error(`run ${input.run_id} not found during VG-4 resolution`);
-
-    const requiredCheckIds = new Set<string>();
-
-    // Source 1: profile_snapshot_json.required_missability_checks
-    if (vg4Row.profile_snapshot_json?.trim()) {
-      let profileParsed: unknown;
-      try {
-        profileParsed = JSON.parse(vg4Row.profile_snapshot_json);
-      } catch (e) {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-          `failed JSON parse while resolving required missability checks: ${(e as Error).message}. ` +
-          `Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      if (typeof profileParsed !== "object" || profileParsed === null || Array.isArray(profileParsed)) {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-          `has a malformed shape (top-level must be an object) while resolving required missability checks. ` +
-          `Fix or clear the snapshot before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      const profileObj = profileParsed as { required_missability_checks?: unknown };
-      if (profileObj.required_missability_checks !== undefined) {
-        if (!Array.isArray(profileObj.required_missability_checks)) {
-          throw new MissabilityGateViolation(
-            `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-            `has required_missability_checks that is not an array. Fix or clear the snapshot before finalizing.`,
-            input.run_id,
-            [],
-          );
-        }
-        for (const id of profileObj.required_missability_checks as Array<unknown>) {
-          if (typeof id !== "string") {
-            throw new MissabilityGateViolation(
-              `PP-VG-4: finalize_run(complete) blocked — runs.profile_snapshot_json for run ${input.run_id} ` +
-              `has required_missability_checks containing a non-string entry. Fix or clear the snapshot before finalizing.`,
-              input.run_id,
-              [],
-            );
-          }
-          requiredCheckIds.add(id);
-        }
-      }
-    }
-
-    // Source 2: team.missability_required
-    // Resolution order (resolve-first, sentinel-fallback):
-    //   1. NULL → no team source declared; skip silently.
-    //   2. present-but-blank ("" / whitespace) → malformed identifier; fail closed.
-    //   3. present non-blank → call getTeam FIRST.
-    //      a. Resolves (yaml exists, even if named "ad-hoc") → use its required checks.
-    //      b. Does NOT resolve AND name is a known ensureRun sentinel ("ad-hoc") →
-    //         treat as no-team-source (legit ensureRun with no user-provided team).
-    //      c. Does NOT resolve AND name is NOT a sentinel → malformed source; fail closed.
-    // This means a real .claude/teams/ad-hoc.yaml is fully honored; the sentinel
-    // exemption only fires when the name can't be resolved AND is the known placeholder.
-    const VG4_TEAM_SENTINELS = new Set(["ad-hoc"]);
-    const rawTeam = vg4Row.team;
-    if (rawTeam !== null) {
-      const trimmedTeam = rawTeam.trim();
-      if (trimmedTeam === "") {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — run ${input.run_id} has a blank team value. ` +
-          `A blank team identifier is malformed. Fix the runs.team column before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      // Resolve first — a real yaml (including "ad-hoc.yaml") takes precedence.
-      const teamResult = getTeam({ name: trimmedTeam, project_path: vg4Row.project_path });
-      if (teamResult) {
-        // Real team found: use its required missability checks.
-        for (const id of teamResult.team.missability_required ?? []) {
-          requiredCheckIds.add(id);
-        }
-      } else if (VG4_TEAM_SENTINELS.has(trimmedTeam)) {
-        // No yaml for this name AND it's the known ensureRun no-team sentinel →
-        // treat as no-team-source; continue silently.
-      } else {
-        // No yaml AND not a sentinel → malformed source; fail closed.
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — run ${input.run_id} references team '${trimmedTeam}' ` +
-          `but it could not be loaded. Fix the team yaml before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-    }
-
-    // Source 3: forum.required_missability_checks
-    // NULL = no forum declared (no source). Present-but-blank = malformed: fail closed.
-    // Unknown forum id = malformed: fail closed.
-    const rawForum = vg4Row.forum;
-    if (rawForum !== null) {
-      const trimmedForum = rawForum.trim();
-      if (trimmedForum === "") {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — run ${input.run_id} has a blank forum value. ` +
-          `A blank forum identifier is malformed. Fix the runs.forum column before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      const forumObj = getForum(trimmedForum);
-      if (!forumObj) {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — run ${input.run_id} references forum '${trimmedForum}' ` +
-          `but it is not a recognised forum id. Fix the forum reference before finalizing.`,
-          input.run_id,
-          [],
-        );
-      }
-      for (const id of forumObj.required_missability_checks ?? []) {
-        requiredCheckIds.add(id);
-      }
-    }
-
-    // ── R1: producibility demotion ────────────────────────────────────────
-    // Generalises the trivial-scope skip from e8662ab to every scope. A REQUIRED
-    // check whose producing artifact kinds / taxonomy sections have an EMPTY
-    // intersection with this run's PLANNED surface can never gather evidence — no
-    // stage in the pipeline emits what it inspects (data-proven offenders:
-    // deprecation-sunset 302/302, all game-cert checks 243/243). Such a check is
-    // demoted to ADVISORY: it still ran and its row is recorded, but it no longer
-    // blocks finalize(complete). Producible checks keep full standard/major
-    // governance — this only removes structurally-impossible requirements.
-    //
-    // Planned surface (fail-safe — the more we count as planned, the fewer
-    // demotions): taxonomy sections[].id (sections) ∪ taxonomy required_artifacts
-    // ∪ profile required_artifacts ∪ actually-archived artifact kinds (kinds).
-    const plannedSections = new Set<string>();
-    const plannedKinds = new Set<string>();
-    if (vg4Row.taxonomy_mapping_json?.trim()) {
-      try {
-        const tax = JSON.parse(vg4Row.taxonomy_mapping_json) as {
-          sections?: Array<{ id?: unknown; required_artifacts?: unknown }>;
-        };
-        for (const s of tax.sections ?? []) {
-          const sid = s?.id;
-          if (typeof sid === "string") plannedSections.add(sid);
-          const reqs = s?.required_artifacts;
-          if (Array.isArray(reqs)) {
-            for (const k of reqs) if (typeof k === "string") plannedKinds.add(k);
-          }
-        }
-      } catch { /* malformed taxonomy → no planned surface from this source */ }
-    }
-    if (vg4Row.profile_snapshot_json?.trim()) {
-      try {
-        const prof = JSON.parse(vg4Row.profile_snapshot_json) as { required_artifacts?: unknown };
-        if (Array.isArray(prof.required_artifacts)) {
-          for (const k of prof.required_artifacts) if (typeof k === "string") plannedKinds.add(k);
-        }
-      } catch { /* already fail-closed above; ignore here */ }
-    }
-    for (const r of db()
-      .prepare(`SELECT DISTINCT kind FROM artifacts WHERE run_id = ? AND kind IS NOT NULL`)
-      .all(input.run_id) as Array<{ kind: string | null }>) {
-      if (r.kind) plannedKinds.add(r.kind);
-    }
-
-    // Partition required checks into producible (still blocking) and
-    // unproducible (demoted to advisory). Log + annotate each demotion so it is
-    // visible in the check record and the run log.
-    const producibleRequired = new Set<string>();
-    for (const checkId of requiredCheckIds) {
-      if (isCheckProducible(checkId, plannedKinds, plannedSections)) {
-        producibleRequired.add(checkId);
-        continue;
-      }
-      const reason =
-        `no planned artifact/stage can produce its evidence ` +
-        `(planned kinds: [${[...plannedKinds].join(", ")}], sections: [${[...plannedSections].join(", ")}])`;
-      log.info(
-        { run_id: input.run_id, check_id: checkId },
-        `PP-VG-4 advisory_unproducible: required missability check '${checkId}' demoted to advisory — ${reason}. ` +
-          `It still ran and its result is recorded, but it no longer blocks finalize(complete).`,
-      );
-      // Annotate the latest persisted row for this check so the demotion is
-      // visible in the check record (additive: a marker appended to evidence_path;
-      // no schema change).
-      try {
-        const latest = db()
-          .prepare(
-            `SELECT id, evidence_path FROM missability_checks
-              WHERE run_id = ? AND check_id = ?
-              ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-          )
-          .get(input.run_id, checkId) as { id: string; evidence_path: string | null } | undefined;
-        if (latest) {
-          const marker = `[advisory_unproducible: ${reason}]`;
-          const next = latest.evidence_path ? `${latest.evidence_path} ${marker}` : marker;
-          db()
-            .prepare(`UPDATE missability_checks SET evidence_path = ? WHERE id = ?`)
-            .run(next, latest.id);
-        }
-      } catch { /* annotation is best-effort; the log line is the durable record */ }
-    }
-
-    // Query the latest persisted row per check_id using rowid as the insertion
-    // tiebreak so same-millisecond ties are broken deterministically by insertion
-    // order (the truly-last-inserted row wins). Uses a correlated subquery rather
-    // than GROUP BY / HAVING which can pick a non-last row on ties.
-    // Re-use persisted rows — do NOT re-run runMissabilityChecks.
-    // Only PRODUCIBLE required checks can block; unproducible ones were demoted above.
-    if (producibleRequired.size > 0) {
-      const latestChecks = db()
-        .prepare(
-          `SELECT check_id, status
-             FROM missability_checks m
-            WHERE run_id = ?
-              AND check_id IN (${[...producibleRequired].map(() => "?").join(", ")})
-              AND rowid = (
-                SELECT rowid FROM missability_checks
-                 WHERE run_id = m.run_id AND check_id = m.check_id
-                 ORDER BY created_at DESC, rowid DESC
-                 LIMIT 1
-              )`,
-        )
-        .all(input.run_id, ...[...producibleRequired]) as Array<{ check_id: string; status: string }>;
-
-      // Build a map of latest status per check_id.
-      const latestStatusById = new Map<string, string>(
-        latestChecks.map(r => [r.check_id, r.status]),
-      );
-
-      const failedRequired: string[] = [];
-      for (const checkId of producibleRequired) {
-        const status = latestStatusById.get(checkId);
-        // A required check with no persisted row counts as 'fail' (hasn't run = unknown = fail-closed).
-        if (!status || status === "fail") {
-          failedRequired.push(checkId);
-        }
-      }
-
-      if (failedRequired.length > 0) {
-        throw new MissabilityGateViolation(
-          `PP-VG-4: finalize_run(complete) blocked — ${failedRequired.length} required missability check(s) ` +
-          `have status='fail' (or are missing) for run ${input.run_id}: ${failedRequired.join(", ")}. ` +
-          `Required checks are the union of profile-, team-, and forum-declared sets. ` +
-          `Advisory (non-required) failures do not block. Run mcp__pp_harness__run_missability_checks ` +
-          `to re-evaluate and re-persist, then retry finalize. ` +
-          `Or finalize with status='surfaced' to accept the failures.`,
-          input.run_id,
-          failedRequired,
-        );
-      }
-    }
+  if (input.status === "complete") {
+    const vg4 = evaluateVG4(input.run_id);
+    if (vg4.blocked) throw vg4.violation;
   }
 
   if (input.summary_md) {
@@ -2594,6 +2758,173 @@ export function finalizeRun(input: FinalizeRunInput): FinalizeRunOutput {
     requested_status: input.status,
     downgraded: effectiveStatus !== input.status,
     surfaced_stage_count: surfacedStageCount,
+  };
+}
+
+function collectVG2MissingRequiredKinds(run_id: string): {
+  missingKinds: string[];
+  malformedSnapshot: boolean;
+} {
+  const resolved = resolveVG2RequiredKinds(run_id) as
+    | { requiredKinds: Set<string>; violation?: undefined }
+    | { requiredKinds: Set<string>; violation: ArtifactAvailabilityGateViolation };
+  if (resolved.violation) {
+    return { missingKinds: [], malformedSnapshot: true };
+  }
+
+  const archivedKinds = new Set<string>(
+    (db()
+      .prepare(
+        `SELECT DISTINCT a.kind FROM artifacts a
+           JOIN stages s ON s.id = a.stage_id
+          WHERE s.run_id = ? AND a.kind IS NOT NULL`
+      )
+      .all(run_id) as Array<{ kind: string }>)
+      .map(r => r.kind),
+  );
+
+  const missingKinds: string[] = [];
+  for (const kind of resolved.requiredKinds) {
+    if (!archivedKinds.has(kind)) missingKinds.push(kind);
+  }
+  return { missingKinds, malformedSnapshot: false };
+}
+
+function extractSurfacedStageReason(notes_json: string | null): string | undefined {
+  if (!notes_json?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(notes_json) as { surfaced_reason?: unknown; reason?: unknown } | null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    if (typeof parsed.surfaced_reason === "string" && parsed.surfaced_reason.trim()) {
+      return parsed.surfaced_reason;
+    }
+    if (typeof parsed.reason === "string" && parsed.reason.trim()) {
+      return parsed.reason;
+    }
+  } catch { /* best-effort only */ }
+  return undefined;
+}
+
+/**
+ * Read-only projection of the run-level completion gates. Mirrors PP-VG-1,
+ * PP-VG-2, PP-VG-4, and PP-VG-7 so operators / resume callers can see whether
+ * the next meaningful action is retrying a surfaced stage, continuing the
+ * stage plan, or simply re-running finalize. Reuses the existing gate helpers
+ * verbatim; VG-4's historical best-effort evidence annotation remains as-is.
+ */
+export function getRunCompletionReadiness(run_id: string): CompletionReadinessResponse {
+  const runRow = db()
+    .prepare(`SELECT status, stage_plan_json FROM runs WHERE id = ?`)
+    .get(run_id) as
+    | { status: RunStatus; stage_plan_json: string | null }
+    | undefined;
+  if (!runRow) throw new Error(`run ${run_id} not found`);
+
+  const stageRows = db()
+    .prepare(`SELECT id, kind, status, plan_index, notes_json FROM stages WHERE run_id = ?`)
+    .all(run_id) as Array<{
+      id: string;
+      kind: string;
+      status: StageStatus;
+      plan_index: number | null;
+      notes_json: string | null;
+    }>;
+
+  const surfaced_stages = stageRows
+    .filter(stage => stage.status === "surfaced")
+    .map(stage => {
+      const reason = extractSurfacedStageReason(stage.notes_json);
+      return reason
+        ? { stage_id: stage.id, kind: stage.kind, plan_index: stage.plan_index, reason }
+        : { stage_id: stage.id, kind: stage.kind, plan_index: stage.plan_index };
+    });
+
+  const incomplete_stages = stageRows
+    .filter(stage => stage.status === "open")
+    .map(stage => ({ stage_id: stage.id, kind: stage.kind, plan_index: stage.plan_index }));
+
+  let remaining_planned_stages: CompletionReadinessResponse["remaining_planned_stages"] = null;
+  if (runRow.stage_plan_json !== null) {
+    try {
+      const parsed = JSON.parse(runRow.stage_plan_json) as Array<{ kind: unknown; gate_type: unknown }> | unknown;
+      if (Array.isArray(parsed) && parsed.every(
+        item =>
+          typeof item === "object" &&
+          item !== null &&
+          !Array.isArray(item) &&
+          typeof (item as { kind?: unknown }).kind === "string" &&
+          typeof (item as { gate_type?: unknown }).gate_type === "string",
+      )) {
+        remaining_planned_stages = parsed.flatMap((stage, plan_index) => {
+          const hasTerminalRow = stageRows.some(
+            row =>
+              row.plan_index === plan_index &&
+              (row.status === "passed" || row.status === "surfaced" || row.status === "skipped"),
+          );
+          return hasTerminalRow
+            ? []
+            : [{ plan_index, kind: stage.kind as string, gate_type: stage.gate_type as string }];
+        });
+      }
+    } catch {
+      remaining_planned_stages = null;
+    }
+  }
+
+  const vg1 = evaluateVG1(run_id);
+  const vg2 = evaluateVG2(run_id);
+  const vg2Missing = collectVG2MissingRequiredKinds(run_id);
+  const vg4 = evaluateVG4(run_id);
+
+  const missing_required_artifacts = vg2Missing.missingKinds;
+  const failed_required_missability_checks =
+    vg4.blocked ? vg4.violation?.failed_required_check_ids ?? [] : [];
+  const unpopulated_master_plan_sections =
+    vg1.blocked ? vg1.violation?.unmet_sections.map(section => section.section) ?? [] : [];
+
+  const hasMalformedSnapshot =
+    vg2Missing.malformedSnapshot ||
+    (vg1.blocked && (vg1.violation?.unmet_sections.length ?? 0) === 0) ||
+    (vg4.blocked && (vg4.violation?.failed_required_check_ids.length ?? 0) === 0);
+
+  // Resume is only useful when it can advance the run: continue an unknown or
+  // unfinished plan, re-run finalize against genuine content blockers, or close
+  // a non-complete run. Surfaced/open stages and malformed persisted gate
+  // inputs are hard stops because /resume would be a no-op until an operator
+  // resolves them first.
+  const resumable =
+    surfaced_stages.length > 0 || incomplete_stages.length > 0 || hasMalformedSnapshot
+      ? false
+      : (
+          remaining_planned_stages === null ||
+          remaining_planned_stages.length > 0 ||
+          missing_required_artifacts.length > 0 ||
+          failed_required_missability_checks.length > 0 ||
+          unpopulated_master_plan_sections.length > 0 ||
+          runRow.status !== "complete"
+        );
+
+  let blocking_reason: string | null = null;
+  if (surfaced_stages.length > 0) {
+    blocking_reason = `${surfaced_stages.length} surfaced stage(s) must be retried or re-gated before resume`;
+  } else if (incomplete_stages.length > 0) {
+    blocking_reason = `${incomplete_stages.length} open stage(s) must be resolved before resume`;
+  } else if (hasMalformedSnapshot) {
+    blocking_reason = "persisted completion snapshot is malformed; fix run metadata before resume";
+  } else if (!resumable && runRow.status === "complete") {
+    blocking_reason = "run is already complete";
+  }
+
+  return {
+    run_id,
+    resumable,
+    blocking_reason,
+    surfaced_stages,
+    incomplete_stages,
+    remaining_planned_stages,
+    missing_required_artifacts,
+    failed_required_missability_checks,
+    unpopulated_master_plan_sections,
   };
 }
 

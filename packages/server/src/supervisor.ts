@@ -14,9 +14,9 @@
  *    block + hard-abort at block_pct),
  *  - touchLastRun(project) on finalize.
  */
-import { RunPilot, EventBus, type PilotEvent } from "@pp/pilot";
+import { RunPilot, resumeRun, EventBus, type PilotEvent } from "@pp/pilot";
 import type { Engine } from "@pp/engine";
-import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey } from "@pp/core";
+import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey, db, type RunStatus } from "@pp/core";
 import type { BusPort } from "./bus.js";
 
 export interface StartRunInput {
@@ -66,6 +66,19 @@ export class RunSupervisor {
   /** Number of runs currently executing (excludes queued). */
   activeCount(): number {
     return this.active.size;
+  }
+
+  /**
+   * Synchronous in-process check: is `runId` already owned by this supervisor
+   * (a live `start()` still executing, or a `resume()` already in flight)?
+   * The resume HTTP route uses this for a fast, no-await 409 before doing any
+   * DB work. `resume()` itself re-checks (and claims) synchronously too, so
+   * this is a fast-path convenience, not the sole race guard — the atomic
+   * `UPDATE ... WHERE status='surfaced'` inside `resumeRun` (packages/core)
+   * is the second, DB-level line of defense for cross-process races.
+   */
+  isActive(runId: string): boolean {
+    return this.active.has(runId);
   }
 
   private acquire(): Promise<void> {
@@ -201,6 +214,112 @@ export class RunSupervisor {
     if (!entry) return false;
     entry.abortController.abort();
     return true;
+  }
+
+  /**
+   * Resume a surfaced/blocked run on the SAME run_id. Mirrors `start()`'s
+   * concurrency-slot + abort-controller + budget-tripwire bookkeeping, but
+   * drives the pilot's `resumeRun` instead of a fresh `RunPilot.execute()`,
+   * and — unlike `start()` — awaits the whole attempt before returning, so
+   * the HTTP response body is the authoritative `RunResumeResponse` (resume
+   * is closer in shape to the synchronous retry/gate post-hoc ops than to a
+   * long-lived backgrounded `start()`).
+   *
+   * Race guard: `runId` is claimed in `this.active` synchronously, before any
+   * `await`, closing the TOCTOU window between two concurrent resume calls in
+   * this same process (the caller's `isActive()` pre-check is a fast-path
+   * convenience on top of this, not the sole guard). The remaining gap
+   * (a resume racing the original run's own `execute()`, or two separate
+   * server processes) is covered by `resumeRun`'s own atomic
+   * `UPDATE ... WHERE status='surfaced'` claim inside packages/core.
+   */
+  async resume(runId: string): Promise<Awaited<ReturnType<typeof resumeRun>>> {
+    if (this.active.has(runId)) {
+      return { run_id: runId, status: this.currentStatus(runId), resumed: false };
+    }
+    const row = db().prepare(`SELECT project_path FROM runs WHERE id = ?`).get(runId) as
+      | { project_path: string }
+      | undefined;
+    if (!row) {
+      return { run_id: runId, status: this.currentStatus(runId), resumed: false };
+    }
+
+    const abortController = new AbortController();
+    // Claim the slot synchronously (no await yet) — see docblock race-guard note.
+    this.active.set(runId, {
+      abortController,
+      startedAt: Date.now(),
+      projectPath: row.project_path,
+      firedTripwires: new Set(),
+    });
+
+    const wasQueued = this.running >= this.max;
+    if (wasQueued) {
+      this.serverBus.publish({ type: "run.queued", run_id: runId, data: { run_id: runId, resumed: true } });
+    }
+    await this.acquire();
+
+    const bus = new EventBus();
+    bus.subscribe((ev) => this.forward(ev));
+    const engine = this.makeEngine();
+
+    try {
+      // Resume reuses the existing live-run event contract: surface the
+      // reopened transition as `run.status=running` before the resumed stage
+      // loop / completion phases begin, mirroring the same event family the UI
+      // already follows for in-flight runs.
+      this.serverBus.publish({
+        type: "run.status",
+        run_id: runId,
+        data: { run_id: runId, status: "running" satisfies RunStatus },
+      });
+      const result = await resumeRun({ runId, engine, bus, signal: abortController.signal });
+      try {
+        touchLastRun(row.project_path);
+      } catch {
+        /* unregistered project — best effort */
+      }
+      if (!result.resumed) {
+        // `resumeRun()` can still refuse progress after the optimistic
+        // pre-resume status publish (e.g. atomic DB claim lost to another
+        // process, or project-lock reacquire failed and reverted to surfaced).
+        // Publish the authoritative non-terminal status so live consumers do
+        // not get stranded in `running` without a matching finalize.
+        this.serverBus.publish({
+          type: "run.status",
+          run_id: runId,
+          data: { run_id: runId, status: result.status },
+        });
+      }
+      if (result.resumed) {
+        this.serverBus.publish({
+          type: "run.finalized",
+          run_id: runId,
+          data: { run_id: runId, status: result.status, finished_at: new Date().toISOString() },
+        });
+      }
+      return result;
+    } catch (err) {
+      this.serverBus.publish({
+        type: "run.finalized",
+        run_id: runId,
+        data: {
+          run_id: runId,
+          status: "crashed",
+          finished_at: new Date().toISOString(),
+          abort_reason: (err as Error)?.message ?? "resume failed",
+        },
+      });
+      throw err;
+    } finally {
+      this.active.delete(runId);
+      this.release();
+    }
+  }
+
+  private currentStatus(runId: string): RunStatus {
+    const row = db().prepare(`SELECT status FROM runs WHERE id = ?`).get(runId) as { status?: RunStatus } | undefined;
+    return row?.status ?? "surfaced";
   }
 
   // ── event bridge ────────────────────────────────────────────────────────

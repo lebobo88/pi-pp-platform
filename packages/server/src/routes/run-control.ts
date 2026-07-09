@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { registerProject, ProjectDirNotFoundError, checkRetryEligible, db } from "@pp/core";
+import { registerProject, ProjectDirNotFoundError, checkRetryEligible, getRunCompletionReadiness, db } from "@pp/core";
 import { retryStage, regateStage, EventBus, type PilotEvent } from "@pp/pilot";
 import { V1, type ServerDeps } from "../deps.js";
 
@@ -73,6 +73,10 @@ function bridgeBus(deps: ServerDeps): EventBus {
 function runIdForStage(stageId: string): string | null {
   const row = db().prepare("SELECT run_id FROM stages WHERE id = ?").get(stageId) as { run_id: string } | undefined;
   return row?.run_id ?? null;
+}
+
+function runExists(runId: string): boolean {
+  return !!db().prepare("SELECT 1 FROM runs WHERE id = ?").get(runId);
 }
 
 export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps): void {
@@ -202,5 +206,32 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
     const res = await regateStage({ stageId, engine: deps.makeEngine(), bus: bridgeBus(deps) });
     if (!res.ok) return reply.code(502).send({ error: "gate_failed", reason: res.reason });
     return reply.code(200).send({ run_id: id, stage_id: stageId, action: "gate", ok: true, outcome: res.outcome });
+  });
+
+  // ── Read-only completion-readiness inspector ──
+  app.get(`${V1}/runs/:id/completion-readiness`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!runExists(id)) return reply.code(404).send({ error: "run_not_found", run_id: id });
+    const readiness = getRunCompletionReadiness(id);
+    return reply.code(200).send(readiness);
+  });
+
+  // ── Resume a surfaced/blocked run on the same run_id ──
+  // Reopens `surfaced -> running`, continues any remaining planned stages,
+  // then reruns missability/master-plan/finalize. See packages/pilot/src/resume.ts.
+  app.post(`${V1}/runs/:id/resume`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!runExists(id)) return reply.code(404).send({ error: "run_not_found", run_id: id });
+
+    // Fast, no-await in-process race guard: reject immediately if this run_id
+    // is already owned by this supervisor (a live start() or another resume()
+    // already in flight). deps.supervisor.resume() re-claims synchronously
+    // too, so this is a fast path, not the sole guard — see its docblock.
+    if (deps.supervisor.isActive(id)) {
+      return reply.code(409).send({ error: "already_active", run_id: id });
+    }
+
+    const result = await deps.supervisor.resume(id);
+    return reply.code(200).send(result);
   });
 }

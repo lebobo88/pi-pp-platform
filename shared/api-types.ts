@@ -85,6 +85,8 @@ export interface RunRow {
   constitution_attestation_id: string | null;
   eights_episodic_handle: string | null;
   audit_bom_handle: string | null;
+  /** v10: persisted resolved StageSpec[] plan (JSON) for run-recovery/resume. NULL on legacy rows. */
+  stage_plan_json: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -100,6 +102,8 @@ export interface StageRow {
   started_at: string;
   finished_at: string | null;
   notes_json: string | null;
+  /** v10: index into RunRow.stage_plan_json for this stage. NULL on legacy rows. */
+  plan_index: number | null;
 }
 
 /** `attempts` table row. */
@@ -448,6 +452,16 @@ export interface TeamRecommendResponse {
   recommendations: TeamRecommendation[];
 }
 
+export interface ModelTierPolicy {
+  default_cap?: ClaudeTier;
+  per_stage_override?: Record<string, ClaudeTier>;
+  scope_adjust?: {
+    trivial?: -1 | 0;
+    standard?: 0;
+    major?: 0 | 1;
+  };
+}
+
 export interface ProfileSpec {
   name: string;
   description: string;
@@ -458,6 +472,11 @@ export interface ProfileSpec {
   required_missability_checks?: string[];
   required_validators?: Record<string, string[]>;
   required_validators_strict?: string[];
+  model_tier_policy?: ModelTierPolicy;
+  /** Tier → concrete model id. UI-authored values prefer `provider/model`. */
+  ladder?: Partial<Record<ClaudeTier, string>>;
+  /** Tier → ordered pool of concrete model ids. Canonical entries are `provider/model`; duplicate detection + priority are based on the full string. */
+  tier_pools?: Partial<Record<ClaudeTier, string[]>>;
   notes?: string;
 }
 
@@ -711,14 +730,17 @@ export interface StartRunRequest {
   /**
    * Per-run override of the effective generation ladder: Claude tier → concrete
    * model id. Highest precedence (above the project profile, global harness
-   * settings ladder, and the catalog default). A partial map only overrides the
-   * tiers it names; absent leaves resolution byte-identical.
+   * settings ladder, and the catalog default). UI-authored values prefer
+   * `provider/model`. A partial map only overrides the tiers it names; absent
+   * leaves resolution byte-identical.
    */
   ladder_override?: Partial<Record<ClaudeTier, string>>;
   /**
    * Per-run override of the effective per-tier model POOLS (rotated across
-   * Reflexion retries + best-of candidates). Same top precedence as
-   * `ladder_override`. A partial map only overrides the tiers it names.
+   * Reflexion retries + best-of candidates). Canonical entries are
+   * `provider/model`, and duplicate detection + priority are based on the full
+   * canonical string. Same top precedence as `ladder_override`. A partial map
+   * only overrides the tiers it names.
    */
   tier_pools_override?: Partial<Record<ClaudeTier, string[]>>;
   /** Triage scope override; omit for "auto". */
@@ -764,6 +786,55 @@ export interface RetryExhaustedResponse {
 export interface StageRetryRequest {
   /** Bypass an exhausted Reflexion ×1 budget (deliberate, logged operator action). */
   override?: boolean;
+}
+
+/**
+ * `GET /runs/:id/completion-readiness` — read-only inspection of exactly what
+ * (if anything) blocks a run from reaching `status = 'complete'`, extracted
+ * from the same VG-1/VG-2/VG-4/VG-7 gate logic `finalizeRun` enforces so the
+ * two paths never drift. Never mutates the run.
+ */
+export interface CompletionReadinessResponse {
+  run_id: string;
+  /** True when `POST /runs/:id/resume` would make forward progress (not necessarily reach `complete` in one call). */
+  resumable: boolean;
+  /** Coarse human-readable summary of why `resumable` is false, or null when resumable. */
+  blocking_reason: string | null;
+  /** Stage rows with `status = 'surfaced'` — must be retried/regated before resume can proceed. */
+  surfaced_stages: Array<{ stage_id: string; kind: string; plan_index: number | null; reason?: string }>;
+  /**
+   * Stage rows with `status = 'open'` — a row exists but the stage never
+   * reached a terminal outcome (e.g. a crash mid-stage). Treated identically
+   * to `surfaced_stages`: must be resolved before resume proceeds; never
+   * silently skipped just because a row exists for that plan slot.
+   */
+  incomplete_stages: Array<{ stage_id: string; kind: string; plan_index: number | null }>;
+  /**
+   * Planned stage-plan slots (from `runs.stage_plan_json`) with no
+   * corresponding stage row in `('passed', 'surfaced', 'skipped')`. Empty
+   * when no plan was persisted (legacy run) and reconstruction found nothing
+   * remaining, or `null` when the plan could not be reconstructed at all
+   * (see `blocking_reason`).
+   */
+  remaining_planned_stages: Array<{ plan_index: number; kind: string; gate_type: string }> | null;
+  missing_required_artifacts: string[];
+  failed_required_missability_checks: string[];
+  unpopulated_master_plan_sections: string[];
+}
+
+/**
+ * `POST /runs/:id/resume` — reopens a `surfaced`/blocked run on the SAME
+ * run_id: continues any remaining planned stages, then reruns
+ * missability/master-plan/finalize. Never forks a child run. When blocked,
+ * makes no writes and returns the same shape `completion-readiness` would.
+ */
+export interface RunResumeResponse {
+  run_id: string;
+  status: RunStatus;
+  /** True when this call made forward progress (continued a stage or reached a new terminal finalize). */
+  resumed: boolean;
+  /** Present when `resumed: false` — the blockers that prevented progress. */
+  readiness?: CompletionReadinessResponse;
 }
 
 /**
@@ -918,6 +989,13 @@ export interface WriteProfileRequest {
   yaml?: string;
 }
 
+/** GET /projects/:path/profile — the raw project file plus the resolved spec. */
+export interface ProjectProfileDocument {
+  path: string;
+  yaml: string;
+  resolved: ProfileSpec;
+}
+
 /** Janitor run mode: `dry_run: true` previews, otherwise it executes. */
 export interface JanitorRunRequest {
   dry_run: boolean;
@@ -971,12 +1049,13 @@ export interface TaxonomySection {
  * is a tier name.
  */
 export interface HarnessLadder {
-  /** tier name → concrete model id (reserved key `tier_pools` excluded). */
+  /** tier name → concrete model id (reserved key `tier_pools` excluded). UI-authored values prefer `provider/model`. */
   [tier: string]: string | Record<string, string[]> | undefined;
   /**
    * Per-tier model pools, mirroring the catalog ladder's `tier_pools`. Layered
-   * above the catalog default and below any per-run / profile override. Reserved
-   * key — not a tier.
+   * above the catalog default and below any per-run / profile override.
+   * Canonical entries are `provider/model`; duplicate detection + priority are
+   * based on the full canonical string. Reserved key — not a tier.
    */
   tier_pools?: Record<string, string[]>;
 }
@@ -1295,6 +1374,10 @@ export const apiPaths = {
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
   runBorda: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/borda`,
   runAbort: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/abort`,
+  /** GET — read-only completion-readiness blockers (see CompletionReadinessResponse). */
+  runCompletionReadiness: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/completion-readiness`,
+  /** POST — resume a surfaced/blocked run on the same run_id (see RunResumeResponse). */
+  runResume: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/resume`,
   runStageRetry: (runId: string, stageId: string) =>
     `${API_BASE}/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
   runStageGate: (runId: string, stageId: string) =>

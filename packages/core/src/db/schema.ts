@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS runs (
   constitution_attestation_id TEXT,
   eights_episodic_handle   TEXT,
   audit_bom_handle         TEXT,
+  -- v10: run-recovery / resume support. The resolved, ordered StageSpec[]
+  -- plan for this run (JSON), persisted once at plan-build time (after
+  -- required-artifact reconciliation/augmentation), so a surfaced/crashed
+  -- run can be resumed on the same run_id from the first unexecuted plan
+  -- slot. NULL on legacy rows and on runs where plan-building aborted.
+  stage_plan_json          TEXT,
   started_at               TEXT NOT NULL,
   finished_at              TEXT
 );
@@ -58,7 +64,13 @@ CREATE TABLE IF NOT EXISTS stages (
   winner_attempt_id   TEXT,
   started_at          TEXT NOT NULL,
   finished_at         TEXT,
-  notes_json          TEXT
+  notes_json          TEXT,
+  -- v10: index into runs.stage_plan_json that produced this stage row. NULL
+  -- on legacy rows and on stages started without a persisted plan (e.g. the
+  -- server test seam's stagesOverride path before this migration). Lets a
+  -- resume compute "first plan slot with no corresponding stage row" instead
+  -- of guessing from 'kind' alone (a plan can legitimately repeat a kind).
+  plan_index          INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_stages_run ON stages(run_id);
 

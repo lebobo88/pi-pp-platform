@@ -23,9 +23,10 @@
   },
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck",
+    "gen:api-types": "node scripts/generate-api-types-sidecars.mjs",
+    "build": "pnpm run gen:api-types && pnpm -r build",
+    "test": "pnpm run gen:api-types && pnpm -r test",
+    "typecheck": "pnpm run gen:api-types && pnpm -r typecheck",
     "parity": "node parity/audit.mjs",
     "dev": "node scripts/dev.mjs",
     "demo": "pnpm -F @pp/ui build && pnpm -F @pp/server build && node scripts/demo.mjs",

@@ -69,6 +69,24 @@ describe("wizardReducer", () => {
     expect("tier_cap" in bestReq).toBe(false);
   });
 
+  it("projects per-run ladder and tier-pool overrides only when populated", () => {
+    const empty = toStartRequest(fill({ projectPath: "C:/x", requestText: "do a thing", mode: "single" }));
+    expect("ladder_override" in empty).toBe(false);
+    expect("tier_pools_override" in empty).toBe(false);
+
+    const req = toStartRequest(fill({
+      projectPath: "C:/x",
+      requestText: "do a thing",
+      mode: "best_of",
+      n: 3,
+      ladderOverrides: { sonnet: "openai/gpt-5.4-mini" },
+      tierPoolOverrides: { sonnet: ["openai/gpt-5.4-mini", "azure-openai/gpt-5.4-mini"] },
+    }));
+    expect(req.ladder_override).toEqual({ sonnet: "openai/gpt-5.4-mini" });
+    expect(req.tier_pools_override).toEqual({ sonnet: ["openai/gpt-5.4-mini", "azure-openai/gpt-5.4-mini"] });
+    expect(req.tier_cap).toBeUndefined();
+  });
+
   it("keeps the best-of ceiling at 8 (server-accepted max)", () => {
     expect(N_MAX).toBe(8);
     expect(stepValid(fill({ mode: "best_of", n: 8 }), 2)).toBe(true);

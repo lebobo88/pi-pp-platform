@@ -15,6 +15,9 @@ import { escalateTierForRetry } from "../src/tier-resolver.js";
 // A per-tier pool applied via the profile/override argument — the deterministic
 // seam that needs no on-disk catalog. Mirrors what a project profile supplies.
 const POOL_OV: LadderOverride = { tier_pools: { sonnet: ["m-a", "m-b", "m-c"] } };
+const PROVIDER_SPECIFIC_POOL_OV: LadderOverride = {
+  tier_pools: { haiku: ["openai/gpt-5.4-mini", "azure-openai/gpt-5.4-mini"] },
+};
 
 describe("generationModelIdForTier — pool rotation", () => {
   it("first attempt draws pool[0] (rotationIndex undefined and 0)", () => {
@@ -34,6 +37,12 @@ describe("generationModelIdForTier — pool rotation", () => {
 
   it("rotationIndex wraps modulo pool length", () => {
     expect(generationModelIdForTier("sonnet", 4, POOL_OV)).toBe("m-b"); // 4 % 3 === 1
+  });
+
+  it("preserves provider-qualified priority order for same-named models on different providers", () => {
+    expect(generationModelIdForTier("haiku", 0, PROVIDER_SPECIFIC_POOL_OV)).toBe("openai/gpt-5.4-mini");
+    expect(generationModelIdForTier("haiku", 1, PROVIDER_SPECIFIC_POOL_OV)).toBe("azure-openai/gpt-5.4-mini");
+    expect(generationModelIdForTier("haiku", 2, PROVIDER_SPECIFIC_POOL_OV)).toBe("openai/gpt-5.4-mini");
   });
 
   it("absent pool falls back to tiers[tier] and ignores rotationIndex", () => {

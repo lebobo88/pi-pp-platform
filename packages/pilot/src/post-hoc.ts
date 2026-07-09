@@ -21,7 +21,6 @@ import {
   db,
   loadProjectProfile,
   isClaudeTier,
-  finalizeRun,
   type Scope,
   type ClaudeTier,
 } from "@pp/core";
@@ -30,6 +29,7 @@ import { EventBus } from "./events.js";
 import { JudgePolicy } from "./judge-policy.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "./types.js";
 import { judge, driveReadiness, finalizePassed, surface, reflexion } from "./phases/stage-loop.js";
+import { resumeRun } from "./resume.js";
 
 export type PostHocResult = {
   ok: boolean;
@@ -160,28 +160,36 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
 }
 
 /**
- * A post-hoc stage pass can clear the LAST blocker of a surfaced run: when no
- * stage remains un-passed, re-finalize the run so the run row doesn't read
- * "surfaced" forever after the operator fixed it. finalizeRun's own guards
- * (PP-VG-*) still apply — a downgrade is surfaced back to the caller's bus.
+ * A post-hoc stage pass can clear the LAST blocker of a surfaced run — not
+ * just its own stage, but every remaining planned stage plus the completion
+ * phases (missability/master-plan/finalize). Delegate to the shared
+ * `resumeRun` flow (packages/pilot/src/resume.ts) rather than a shallow
+ * `finalizeRun({status:"complete"})`: resumeRun's own readiness check
+ * (`getRunCompletionReadiness`) already uses the correct terminal-status
+ * predicate (`'surfaced'`/`'open'` block; `'passed'`/`'skipped'` do not) and
+ * continues any stages this repair didn't touch, instead of only re-checking
+ * finalize eligibility.
+ *
+ * If the run isn't actually `'surfaced'` (e.g. this regate/retry ran against
+ * an already-`'complete'` run, or the run is still mid-execution), resumeRun's
+ * atomic claim is simply a no-op (`resumed: false`) — nothing to do here.
  */
-function refinalizeRunIfClear(ctx: RunContext): void {
-  const open = db()
-    .prepare(`SELECT COUNT(*) AS n FROM stages WHERE run_id = ? AND status NOT IN ('passed', 'complete')`)
-    .get(ctx.run_id) as { n: number };
-  if (open.n > 0) return;
+async function refinalizeRunIfClear(ctx: RunContext): Promise<void> {
   try {
-    const result = finalizeRun({ run_id: ctx.run_id, status: "complete" });
-    emit(ctx, "run.finalized", {
-      status: result.effective_status,
-      requested_status: result.requested_status,
-      post_hoc: true,
-    });
+    const result = await resumeRun({ runId: ctx.run_id, engine: ctx.engine, bus: ctx.bus, signal: ctx.signal });
+    if (result.resumed) {
+      emit(ctx, "run.finalized", {
+        status: result.status,
+        requested_status: "complete",
+        post_hoc: true,
+      });
+    }
   } catch (e) {
-    // A finalize guard (PP-VG-*) refusing "complete" must not fail the
-    // regate/retry HTTP request that merely triggered the recheck — the run
-    // simply stays in its current status and the reason is logged.
-    console.warn(`[pilot] post-hoc run re-finalize blocked: ${(e as Error).message}`);
+    // A finalize guard (PP-VG-*) refusing "complete", or any other resume
+    // failure, must not fail the regate/retry HTTP request that merely
+    // triggered the recheck — the run simply stays in its current status and
+    // the reason is logged.
+    console.warn(`[pilot] post-hoc run resume blocked: ${(e as Error).message}`);
   }
 }
 
@@ -206,13 +214,13 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
     // DEMOTE the passed stage to surfaced. Record the concurring verdict and
     // let the run row catch up to stage reality.
     if (stageWasPassed) {
-      refinalizeRunIfClear(r.ctx);
+      await refinalizeRunIfClear(r.ctx);
       return { ok: true, stage_id: opts.stageId, outcome: "passed" };
     }
     const settled = await driveReadiness(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
     if (settled.action === "finalize") {
       const outcome = await finalizePassed(r.ctx, r.stage, opts.stageId, r.latestAttemptId);
-      refinalizeRunIfClear(r.ctx);
+      await refinalizeRunIfClear(r.ctx);
       return { ok: true, stage_id: opts.stageId, outcome };
     }
     const outcome = await surface(r.ctx, opts.stageId, settled.action === "surface" ? settled.reason : "re-gate blocked by finalize readiness");
@@ -222,7 +230,7 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
   // fail / revise on re-gate: the stage's status is untouched (a passed stage
   // stays passed — the dissenting verdict is recorded, not enforced). The run
   // row must still track stage reality: if every stage is passed, finalize.
-  refinalizeRunIfClear(r.ctx);
+  await refinalizeRunIfClear(r.ctx);
   return { ok: true, stage_id: opts.stageId, outcome: judged.outcome };
 }
 
@@ -245,6 +253,6 @@ export async function retryStage(opts: PostHocOptions): Promise<PostHocResult> {
     r.artifactText,
     { budgetOverride: opts.override === true },
   );
-  if (outcome === "passed") refinalizeRunIfClear(r.ctx);
+  if (outcome === "passed") await refinalizeRunIfClear(r.ctx);
   return { ok: outcome !== "aborted", stage_id: opts.stageId, outcome };
 }

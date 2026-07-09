@@ -165,6 +165,18 @@ describe("mock ↔ server contract (M5e)", () => {
     expect(ok).toMatchObject({ name: "web-ui" });
   });
 
+  it("project profile GET returns raw yaml plus the resolved profile", async () => {
+    const profile = await api.get<{
+      path: string;
+      yaml: string;
+      resolved: { name: string; tier_pools?: Record<string, string[]> };
+    }>(apiPaths.projectProfile("C:/AiAppDeployments/acme-checkout"));
+    expect(profile.path).toContain(".harness/profile.yaml");
+    expect(profile.yaml).toContain("name: web-ui");
+    expect(profile.resolved.name).toBe("web-ui");
+    expect(profile.resolved.tier_pools?.sonnet).toContain("azure-openai/gpt-5.4-mini");
+  });
+
   it("doctor POST is an async ack (202-shaped); accepts {smoke}", async () => {
     const ack = await api.post<{ ok: boolean; started: boolean }>(apiPaths.doctor);
     expect(ack).toMatchObject({ ok: true, started: true });
@@ -197,8 +209,16 @@ describe("mock ↔ server contract (M5e)", () => {
   });
 
   it("settings — generation ladders + judge-pool objects round-trip", async () => {
-    const s = await api.get<{ ladders: Record<string, Record<string, string>>; judge_pool: Array<{ provider: string; model: string }> }>(apiPaths.settings);
-    expect(s.ladders.claude!.fable).toBe("claude-fable-5");
+    const s = await api.get<{
+      ladders: Record<string, Record<string, string> & { tier_pools?: Record<string, string[]> }>;
+      judge_pool: Array<{ provider: string; model: string }>;
+    }>(apiPaths.settings);
+    expect(s.ladders.claude!.fable).toBe("anthropic/claude-fable-5");
+    expect(s.ladders.claude!.tier_pools).toBeDefined();
+    expect(s.ladders.claude!.tier_pools?.sonnet).toEqual([
+      "openai/gpt-5.4-mini",
+      "anthropic/claude-sonnet-4-6",
+    ]);
     expect(s.judge_pool[0]).toHaveProperty("provider");
     expect(s.judge_pool[0]).toHaveProperty("model");
   });

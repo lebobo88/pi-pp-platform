@@ -18,13 +18,21 @@ import { Pill } from "@/features/common/chips";
 import { cn } from "@/lib/cn";
 import { useProjects } from "@/api/queries/projects";
 import { useProfiles, useTeams, useForums } from "@/api/queries/library";
-import { useModels } from "@/api/queries/providers";
+import { useAvailableProviders, useModels, useProviders } from "@/api/queries/providers";
 import { useBudgets, useCaps } from "@/api/queries/budgets";
 import { useStartRun } from "@/api/mutations/runs";
 import { useRecommendTeams } from "@/api/mutations/recommend";
 import { toast } from "@/stores/uiStore";
 import { ApiClientError } from "@/api/client";
 import { formatUsd, formatTokens, estimateTokens } from "@/lib/format";
+import {
+  buildProviderModelChoices,
+  normalizeLadderOverrides,
+  normalizeTierPoolOverrides,
+  resolveProviderModelChoice,
+  type ModelRoutingCatalog,
+  type ResolvedProviderModelChoice,
+} from "@/lib/modelRouting";
 import {
   wizardReducer,
   initialWizardState,
@@ -66,6 +74,8 @@ export function NewRunPage() {
   const { data: teams } = useTeams();
   const { data: forums } = useForums();
   const { data: models } = useModels();
+  const { data: providers } = useProviders();
+  const { data: availableProviders } = useAvailableProviders();
   const { data: caps } = useCaps();
   const { data: budgets } = useBudgets();
   const startRun = useStartRun();
@@ -149,8 +159,61 @@ export function NewRunPage() {
   const dayRemaining = dayCap == null ? null : Math.max(0, dayCap - daySpend);
   const overCap = dayRemaining != null && estimate.maxUsd > dayRemaining;
 
+  const providerLabels = useMemo(
+    () => new Map<string, string>((availableProviders ?? []).map((provider) => [provider.id, provider.display_name])),
+    [availableProviders],
+  );
+  const routingCatalog: ModelRoutingCatalog = useMemo(
+    () => ({
+      configuredProviders: (providers ?? []).filter((provider) => provider.configured).map((provider) => provider.vendor),
+      catalogModels: models ?? [],
+      providerLabels,
+    }),
+    [models, providerLabels, providers],
+  );
+
+  const describeModelChoiceError = (result: ResolvedProviderModelChoice): string => {
+    if (result.ok) return "";
+    switch (result.reason) {
+      case "ambiguous":
+        return `choose a provider-specific model id (${(result.providers ?? []).map((provider) => providerLabels.get(provider) ?? provider).join(", ")})`;
+      case "provider_unconfigured":
+        return `${providerLabels.get(result.provider ?? "") ?? result.provider} is not configured`;
+      case "unknown":
+        return "pick a known provider/model from the suggestions";
+      default:
+        return "pick a provider-specific model from the suggestions";
+    }
+  };
+
   const launch = () => {
-    startRun.mutate(toStartRequest(state), {
+    const normalizedLadder = normalizeLadderOverrides(state.ladderOverrides, routingCatalog);
+    if (!normalizedLadder.ok) {
+      toast({
+        tone: "error",
+        title: "Invalid ladder override",
+        message: `${normalizedLadder.tier}: ${describeModelChoiceError(normalizedLadder.error)}`,
+      });
+      return;
+    }
+    const normalizedPools = normalizeTierPoolOverrides(state.tierPoolOverrides, routingCatalog);
+    if (!normalizedPools.ok) {
+      toast({
+        tone: "error",
+        title: normalizedPools.error === "duplicate" ? "Duplicate pool override" : "Invalid pool override",
+        message:
+          normalizedPools.error === "duplicate"
+            ? `${normalizedPools.tier} contains the same provider/model more than once.`
+            : `${normalizedPools.tier} #${normalizedPools.index + 1}: ${describeModelChoiceError(normalizedPools.error)}`,
+      });
+      return;
+    }
+    const requestState: WizardState = {
+      ...state,
+      ladderOverrides: normalizedLadder.value,
+      tierPoolOverrides: normalizedPools.value,
+    };
+    startRun.mutate(toStartRequest(requestState), {
       onSuccess: (res) => {
         toast({ tone: "success", title: "Run started", message: res.run_id });
         navigate(`/runs/${res.run_id}`);
@@ -213,8 +276,25 @@ export function NewRunPage() {
               onProfile={(p) => set({ profile: p })}
               onTierCap={(t) => set({ tierCap: t })}
               onTierFloor={(t) => set({ tierFloor: t })}
+              onLadderOverride={(tier, modelId) =>
+                set({
+                  ladderOverrides: modelId
+                    ? { ...state.ladderOverrides, [tier]: modelId }
+                    : Object.fromEntries(Object.entries(state.ladderOverrides).filter(([k]) => k !== tier)) as WizardState["ladderOverrides"],
+                })
+              }
+              onTierPoolOverride={(tier, pool) =>
+                set({
+                  tierPoolOverrides: pool.length > 0
+                    ? { ...state.tierPoolOverrides, [tier]: pool }
+                    : Object.fromEntries(Object.entries(state.tierPoolOverrides).filter(([k]) => k !== tier)) as WizardState["tierPoolOverrides"],
+                })
+              }
               onSwitchToTeamMode={() => dispatch({ type: "suggestMode", mode: "team" })}
               onDismissSuggestion={() => dispatch({ type: "dismissModeSuggestion" })}
+              modelSuggestions={models ?? []}
+              providerStatuses={providers ?? []}
+              providerLabels={providerLabels}
             />
           )}
 
@@ -578,8 +658,13 @@ function StepOptions({
   onProfile,
   onTierCap,
   onTierFloor,
+  onLadderOverride,
+  onTierPoolOverride,
   onSwitchToTeamMode,
   onDismissSuggestion,
+  modelSuggestions,
+  providerStatuses,
+  providerLabels,
 }: {
   state: WizardState;
   profiles: string[];
@@ -592,12 +677,130 @@ function StepOptions({
   onProfile: (p: string) => void;
   onTierCap: (t: ClaudeTier | "") => void;
   onTierFloor: (t: ClaudeTier | "") => void;
+  onLadderOverride: (tier: ClaudeTier, modelId: string) => void;
+  onTierPoolOverride: (tier: ClaudeTier, pool: string[]) => void;
   onSwitchToTeamMode: () => void;
   onDismissSuggestion: () => void;
+  modelSuggestions: ModelInfo[];
+  providerStatuses: Array<{ vendor: string; configured: boolean }>;
+  providerLabels: Map<string, string>;
 }) {
   const tiersDisabled = tierControlsDisabled(state.mode);
   const showModeSuggestion =
     (state.scope === "major" || suggestTeamMode) && state.mode !== "team" && !state.dismissedModeSuggestion;
+  const [ladderDrafts, setLadderDrafts] = useState<Partial<Record<ClaudeTier, string>>>({});
+  const [poolEditDrafts, setPoolEditDrafts] = useState<Record<string, string>>({});
+  const [poolDrafts, setPoolDrafts] = useState<Partial<Record<ClaudeTier, string>>>({});
+  const poolEditDraftKey = (tier: ClaudeTier, index: number) => `${tier}:${index}`;
+  const setPoolDraft = (tier: ClaudeTier, value: string) => setPoolDrafts((prev) => ({ ...prev, [tier]: value }));
+  const setLadderDraft = (tier: ClaudeTier, value: string) => setLadderDrafts((prev) => ({ ...prev, [tier]: value }));
+  const setPoolEditDraft = (tier: ClaudeTier, index: number, value: string) =>
+    setPoolEditDrafts((prev) => ({ ...prev, [poolEditDraftKey(tier, index)]: value }));
+  const routingCatalog: ModelRoutingCatalog = useMemo(
+    () => ({
+      configuredProviders: providerStatuses.filter((provider) => provider.configured).map((provider) => provider.vendor),
+      catalogModels: modelSuggestions,
+      providerLabels,
+    }),
+    [modelSuggestions, providerLabels, providerStatuses],
+  );
+  const routingChoices = useMemo(() => buildProviderModelChoices(routingCatalog), [routingCatalog]);
+  const describeModelChoiceError = (result: ResolvedProviderModelChoice): string => {
+    if (result.ok) return "";
+    switch (result.reason) {
+      case "ambiguous":
+        return `choose a provider-specific model id (${(result.providers ?? []).map((provider) => providerLabels.get(provider) ?? provider).join(", ")})`;
+      case "provider_unconfigured":
+        return `${providerLabels.get(result.provider ?? "") ?? result.provider} is not configured`;
+      case "unknown":
+        return "pick a known provider/model from the suggestions";
+      default:
+        return "pick a provider-specific model from the suggestions";
+    }
+  };
+  const resolveChoice = (value: string, title = "Unknown model id") => {
+    const resolved = resolveProviderModelChoice(value, routingCatalog);
+    if (!resolved.ok) {
+      toast({ tone: "error", title, message: describeModelChoiceError(resolved) });
+      return null;
+    }
+    return resolved;
+  };
+  const clearLadderDraft = (tier: ClaudeTier) =>
+    setLadderDrafts((prev) => {
+      const next = { ...prev };
+      delete next[tier];
+      return next;
+    });
+  const clearPoolEditDraft = (tier: ClaudeTier, index: number) =>
+    setPoolEditDrafts((prev) => {
+      const next = { ...prev };
+      delete next[poolEditDraftKey(tier, index)];
+      return next;
+    });
+  const clearPoolEditDraftsForTier = (tier: ClaudeTier) =>
+    setPoolEditDrafts((prev) =>
+      Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(`${tier}:`))),
+    );
+  const commitLadderDraft = (tier: ClaudeTier, value: string) => {
+    const raw = value.trim();
+    if (!raw) {
+      clearLadderDraft(tier);
+      return;
+    }
+    const resolved = resolveChoice(value, "Invalid ladder override");
+    if (!resolved) return;
+    onLadderOverride(tier, resolved.canonical);
+    clearLadderDraft(tier);
+  };
+  const commitPoolEditDraft = (tier: ClaudeTier, index: number, value: string) => {
+    const raw = value.trim();
+    if (!raw) {
+      clearPoolEditDraft(tier, index);
+      return;
+    }
+    const resolved = resolveChoice(value, "Invalid pool override");
+    if (!resolved) return;
+    const siblings = (state.tierPoolOverrides[tier] ?? []).filter((_, idx) => idx !== index);
+    if (siblings.includes(resolved.canonical)) {
+      toast({ tone: "error", title: "Duplicate pool model", message: "Each pool entry must be unique per provider/model." });
+      return;
+    }
+    updatePoolModel(tier, index, resolved.canonical);
+    clearPoolEditDraft(tier, index);
+  };
+  const addPoolModel = (tier: ClaudeTier) => {
+    const id = poolDrafts[tier]?.trim() ?? "";
+    if (!id) return;
+    const resolved = resolveChoice(id);
+    if (!resolved) return;
+    const next = [...(state.tierPoolOverrides[tier] ?? [])];
+    if (next.includes(resolved.canonical)) {
+      toast({ tone: "warn", title: "Duplicate pool model", message: "That exact provider/model is already in the pool." });
+      return;
+    }
+    next.push(resolved.canonical);
+    onTierPoolOverride(tier, next);
+    setPoolDraft(tier, "");
+  };
+  const updatePoolModel = (tier: ClaudeTier, index: number, modelId: string) => {
+    const next = [...(state.tierPoolOverrides[tier] ?? [])];
+    next[index] = modelId;
+    onTierPoolOverride(tier, next);
+  };
+  const movePoolModel = (tier: ClaudeTier, index: number, delta: -1 | 1) => {
+    const next = [...(state.tierPoolOverrides[tier] ?? [])];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    onTierPoolOverride(tier, next);
+    clearPoolEditDraftsForTier(tier);
+  };
+  const removePoolModel = (tier: ClaudeTier, index: number) => {
+    const next = (state.tierPoolOverrides[tier] ?? []).filter((_, idx) => idx !== index);
+    onTierPoolOverride(tier, next);
+    clearPoolEditDraftsForTier(tier);
+  };
   return (
     <>
       <Card title="Scope override">
@@ -643,12 +846,103 @@ function StepOptions({
               {profiles.map((p) => (<option key={p} value={p}>{p}</option>))}
             </select>
           </div>
-          <TierSelect label="Tier cap" value={state.tierCap} disabled={tiersDisabled} onChange={onTierCap} />
-          <TierSelect label="Tier floor" value={state.tierFloor} disabled={tiersDisabled} onChange={onTierFloor} />
+          <TierSelect testId="wizard-tier-cap" label="Tier cap" value={state.tierCap} disabled={tiersDisabled} onChange={onTierCap} />
+          <TierSelect testId="wizard-tier-floor" label="Tier floor" value={state.tierFloor} disabled={tiersDisabled} onChange={onTierFloor} />
         </div>
         {tiersDisabled && (
           <p className="mt-2 text-[11px] text-warn">Tier caps are ignored in best-of mode (the daemon 422s on them) — candidates rotate tiers by design.</p>
         )}
+      </Card>
+
+      <Card title="Advanced model routing">
+        <p className="mb-2 text-[11px] text-ink-3">Optional per-run overrides. These win over the project profile, global settings, and catalog defaults for this run only. Use provider-qualified ids like <span className="mono">openai/gpt-5.4-mini</span> to preserve the exact priority order you want.</p>
+        <datalist id="wizard-model-routing-ids">
+          {routingChoices.map((choice) => (
+            <option key={choice.canonical} value={choice.canonical}>
+              {choice.label}
+            </option>
+          ))}
+        </datalist>
+        <div className="space-y-3">
+          {CLAUDE_TIERS.map((tier) => (
+            <div key={tier} className="rounded-sm bg-bg-1 p-2">
+              <div className="flex items-center gap-2">
+                <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
+                <input
+                  list="wizard-model-routing-ids"
+                  value={ladderDrafts[tier] ?? state.ladderOverrides[tier] ?? ""}
+                  spellCheck={false}
+                  autoComplete="off"
+                  data-testid={`wizard-ladder-override-${tier}`}
+                  onChange={(e) => setLadderDraft(tier, e.target.value)}
+                  onBlur={(e) => commitLadderDraft(tier, e.target.value)}
+                  placeholder="optional provider/model override…"
+                  className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  className="text-[11px] text-ink-3 underline-offset-2 hover:text-ink-1 hover:underline"
+                  onClick={() => {
+                    clearLadderDraft(tier);
+                    onLadderOverride(tier, "");
+                  }}
+                >
+                  clear
+                </button>
+              </div>
+              <div className="mt-2 pl-[4.5rem]">
+                <div className="mb-1 text-[11px] text-ink-3">Optional per-run pool for <span className="mono">{tier}</span></div>
+                {(state.tierPoolOverrides[tier] ?? []).length > 0 ? (
+                  <ul className="space-y-1">
+                    {(state.tierPoolOverrides[tier] ?? []).map((poolModel, index, arr) => (
+                      <li key={`${tier}-${index}`} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
+                        <span className="mono w-4 text-[11px] text-ink-3">{index + 1}</span>
+                        <input
+                          list="wizard-model-routing-ids"
+                          value={poolEditDrafts[poolEditDraftKey(tier, index)] ?? poolModel}
+                          spellCheck={false}
+                          autoComplete="off"
+                          data-testid={`wizard-tier-pool-${tier}-${index}`}
+                          onChange={(e) => setPoolEditDraft(tier, index, e.target.value)}
+                          onBlur={(e) => commitPoolEditDraft(tier, index, e.target.value)}
+                          className="mono flex-1 rounded-sm border border-line-2 bg-bg-0 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                        />
+                        <button type="button" className="text-ink-3 hover:text-ink-1" disabled={index === 0} onClick={() => movePoolModel(tier, index, -1)}>↑</button>
+                        <button type="button" className="text-ink-3 hover:text-ink-1" disabled={index === arr.length - 1} onClick={() => movePoolModel(tier, index, 1)}>↓</button>
+                        <button type="button" className="text-fail/70 hover:text-fail" onClick={() => removePoolModel(tier, index)}>✕</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-[11px] text-ink-3">No per-run pool override for this tier.</p>
+                )}
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    list="wizard-model-routing-ids"
+                    value={poolDrafts[tier] ?? ""}
+                    spellCheck={false}
+                    autoComplete="off"
+                    data-testid={`wizard-tier-pool-add-${tier}`}
+                    onChange={(e) => setPoolDraft(tier, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addPoolModel(tier);
+                    }}
+                    placeholder="add provider/model…"
+                    className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                  />
+                  <Button
+                    size="sm"
+                    disabled={!(poolDrafts[tier] ?? "").trim()}
+                    onClick={() => addPoolModel(tier)}
+                    data-testid={`wizard-tier-pool-add-btn-${tier}`}
+                  >
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </Card>
 
       <Card title="Estimated cost">
@@ -668,11 +962,24 @@ function StepOptions({
   );
 }
 
-function TierSelect({ label, value, disabled, onChange }: { label: string; value: ClaudeTier | ""; disabled?: boolean; onChange: (v: ClaudeTier | "") => void }) {
+function TierSelect({
+  testId,
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  testId: string;
+  label: string;
+  value: ClaudeTier | "";
+  disabled?: boolean;
+  onChange: (v: ClaudeTier | "") => void;
+}) {
   return (
     <div>
       <label className="block text-[12px] text-ink-2">{label}</label>
       <select
+        data-testid={testId}
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value as ClaudeTier | "")}
@@ -705,6 +1012,8 @@ function StepReview({
     state.teamSource === "recommended"
       ? `recommended${appliedRec ? ` (${appliedRec.confidence})` : ""}`
       : "manual";
+  const ladderOverrideCount = Object.keys(state.ladderOverrides).length;
+  const poolOverrideCount = Object.keys(state.tierPoolOverrides).length;
   const rows: [string, string][] = [
     ["project", state.projectPath],
     ["mode", state.mode === "best_of" ? `best-of ${state.n}` : state.mode],
@@ -714,6 +1023,7 @@ function StepReview({
     ["scope", state.scope],
     ["profile", state.profile || "auto-detect"],
     ["tier cap", state.tierCap || "—"],
+    ["model routing", ladderOverrideCount || poolOverrideCount ? `ladder ${ladderOverrideCount} tier(s), pools ${poolOverrideCount} tier(s)` : "default"],
     ["stages (est)", String(stageCount)],
   ];
   return (

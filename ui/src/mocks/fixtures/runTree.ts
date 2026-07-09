@@ -52,6 +52,13 @@ const run: RunRow = {
   constitution_attestation_id: "att_5521",
   eights_episodic_handle: null,
   audit_bom_handle: null,
+  stage_plan_json: JSON.stringify([
+    { kind: "spec", gate_type: "spec" },
+    { kind: "design", gate_type: "design" },
+    { kind: "contracts", gate_type: "contract" },
+    { kind: "implementation", gate_type: "code_style" },
+    { kind: "docs", gate_type: "docs_polish" },
+  ]),
   started_at: T0,
   finished_at: null,
 };
@@ -69,6 +76,7 @@ const stages: StageRow[] = [
     started_at: "2026-07-01T14:02:12.000Z",
     finished_at: "2026-07-01T14:03:40.000Z",
     notes_json: null,
+    plan_index: 0,
   },
   {
     id: "stg_design",
@@ -80,6 +88,7 @@ const stages: StageRow[] = [
     started_at: "2026-07-01T14:03:41.000Z",
     finished_at: "2026-07-01T14:06:20.000Z",
     notes_json: JSON.stringify({ reflexion: true, retries: 1 }),
+    plan_index: 1,
   },
   {
     id: "stg_contracts",
@@ -91,6 +100,7 @@ const stages: StageRow[] = [
     started_at: "2026-07-01T14:06:21.000Z",
     finished_at: "2026-07-01T14:08:02.000Z",
     notes_json: null,
+    plan_index: 2,
   },
   {
     id: "stg_impl",
@@ -102,6 +112,7 @@ const stages: StageRow[] = [
     started_at: "2026-07-01T14:08:03.000Z",
     finished_at: "2026-07-01T14:13:55.000Z",
     notes_json: JSON.stringify({ best_of: 3, borda_winner: "att_impl_b" }),
+    plan_index: 3,
   },
   {
     id: "stg_docs",
@@ -113,6 +124,7 @@ const stages: StageRow[] = [
     started_at: "2026-07-01T14:13:56.000Z",
     finished_at: null,
     notes_json: JSON.stringify({ surfaced_reason: "missability: changelog entry missing" }),
+    plan_index: 4,
   },
 ];
 

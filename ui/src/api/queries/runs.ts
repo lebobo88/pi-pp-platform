@@ -9,6 +9,7 @@ import {
   type RunStatus,
   type ReplayBundle,
   type MissabilityCheckRow,
+  type CompletionReadinessResponse,
 } from "@shared/api-types";
 
 export interface RunsFilter {
@@ -86,6 +87,20 @@ export function useRunBorda(runId: string | undefined) {
     queryKey: ["runs", "borda", runId ?? ""],
     queryFn: ({ signal }) =>
       api.get<Array<{ stage_id: string; borda: unknown }>>(apiPaths.runBorda(runId!), { signal }),
+    enabled: !!runId,
+  });
+}
+
+/**
+ * Read-only completion-readiness blockers for a run (surfaced/incomplete
+ * stages, remaining planned stages, missing artifacts, failed missability
+ * checks, unpopulated master-plan sections). Drives the "Resume" action's
+ * enabled state and the blocker-category breakdown in the run detail view.
+ */
+export function useRunCompletionReadiness(runId: string | undefined) {
+  return useQuery({
+    queryKey: qk.runCompletionReadiness(runId ?? ""),
+    queryFn: ({ signal }) => api.get<CompletionReadinessResponse>(apiPaths.runCompletionReadiness(runId!), { signal }),
     enabled: !!runId,
   });
 }

@@ -10,6 +10,7 @@ import {
   type InstallableProvider,
   type HarnessSettings,
   type OAuthLoginState,
+  type ClaudeTier,
 } from "@shared/api-types";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
@@ -28,6 +29,15 @@ import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
 import { toast } from "@/stores/uiStore";
 import { formatUsd, formatDuration } from "@/lib/format";
+import {
+  buildProviderModelChoices,
+  normalizeLadderOverrides,
+  normalizeTierPoolOverrides,
+  providerModelLabel,
+  resolveProviderModelChoice,
+  type ModelRoutingCatalog,
+  type ResolvedProviderModelChoice,
+} from "@/lib/modelRouting";
 
 /** POST /providers/:vendor/models/refresh — re-fetch a provider's live model list. */
 function useRefreshProviderModels(vendor: string) {
@@ -53,6 +63,10 @@ export function ProvidersPage() {
   // env_key_hint / display_name captions come from the installable-provider set.
   const hintFor = useMemo(
     () => new Map<string, InstallableProvider>((available ?? []).map((a) => [a.id, a])),
+    [available],
+  );
+  const providerLabels = useMemo(
+    () => new Map<string, string>((available ?? []).map((a) => [a.id, a.display_name])),
     [available],
   );
   const q = query.trim().toLowerCase();
@@ -102,13 +116,13 @@ export function ProvidersPage() {
         </>
       )}
 
-      <SettingsPanel providers={providers ?? []} models={models ?? []} />
+      <SettingsPanel providers={providers ?? []} models={models ?? []} providerLabels={providerLabels} />
 
       <Card title="Model catalog" flush>
         <DataTable
           columns={modelColumns}
           rows={models ?? []}
-          rowKey={(m) => m.id}
+          rowKey={(m) => `${m.vendor}/${m.id}`}
           initialSort={{ key: "in", dir: "desc" }}
           empty={<EmptyState title="No models" compact />}
         />
@@ -201,105 +215,367 @@ function AddProviderPicker({ configured }: { configured: Set<string> }) {
 const MODEL_DATALIST_ID = "pp-model-ids";
 
 /** Options for one provider's live model list (GET /providers/:vendor/models). */
-function ProviderModelOptions({ vendor, exclude }: { vendor: string; exclude: Set<string> }) {
+function ProviderModelOptions({
+  vendor,
+  providerLabel,
+  exclude,
+}: {
+  vendor: string;
+  providerLabel: string;
+  exclude: Set<string>;
+}) {
   const { data } = useProviderModels(vendor);
   return (
     <>
       {(data?.models ?? [])
-        .filter((id) => !exclude.has(id))
+        .filter((id) => !exclude.has(`${vendor}/${id}`))
         .map((id) => (
-          <option key={id} value={id}>
-            {vendor}
+          <option key={`${vendor}/${id}`} value={`${vendor}/${id}`}>
+            {providerLabel} / {id}
           </option>
         ))}
     </>
   );
 }
 
-function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; models: ModelInfo[] }) {
+function SettingsPanel({
+  providers,
+  models,
+  providerLabels,
+}: {
+  providers: ProviderStatus[];
+  models: ModelInfo[];
+  providerLabels: Map<string, string>;
+}) {
   const { data: settings } = useSettings();
   const save = useSaveSettings();
   const qc = useQueryClient();
   const [draft, setDraft] = useState<HarnessSettings | null>(null);
   const [judgeDraft, setJudgeDraft] = useState("");
+  const [ladderInputDrafts, setLadderInputDrafts] = useState<Record<string, string>>({});
+  const [poolEditDrafts, setPoolEditDrafts] = useState<Record<string, string>>({});
+  const [poolDrafts, setPoolDrafts] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (settings) setDraft(settings);
+    if (settings) {
+      setDraft(settings);
+      setJudgeDraft("");
+      setLadderInputDrafts({});
+      setPoolEditDrafts({});
+      setPoolDrafts({});
+    }
   }, [settings]);
 
   const configuredVendorList = useMemo(
     () => providers.filter((p) => p.configured).map((p) => p.vendor),
     [providers],
   );
-  const configuredVendors = useMemo(
-    () => new Set(configuredVendorList),
-    [configuredVendorList],
+  const catalogIds = useMemo(
+    () => new Set(models.map((m) => `${m.vendor}/${m.id}`)),
+    [models],
   );
-  const catalogIds = useMemo(() => new Set(models.map((m) => m.id)), [models]);
-
-  /** Provider for a model id: a provider-qualified id ("openai/gpt-5.5") pins
-   * the vendor outright when that vendor is configured; else priced catalog,
-   * then each provider's live list. */
-  const vendorFor = (id: string): string | null => {
-    const slash = id.indexOf("/");
-    if (slash > 0) {
-      const prefix = id.slice(0, slash);
-      if (configuredVendorList.includes(prefix)) return prefix;
-    }
-    const m = models.find((x) => x.id === id);
-    if (m) return m.vendor;
-    for (const v of configuredVendorList) {
-      const pm = qc.getQueryData<ProviderModels>(providerModelsKey(v));
-      if (pm?.models.includes(id)) return v;
-    }
-    return null;
-  };
 
   if (!draft) return null;
 
+  const routingCatalog = (): ModelRoutingCatalog => ({
+    configuredProviders: configuredVendorList,
+    catalogModels: models,
+    liveModelsByProvider: new Map(
+      configuredVendorList.map((vendor) => [
+        vendor,
+        qc.getQueryData<ProviderModels>(providerModelsKey(vendor))?.models ?? [],
+      ]),
+    ),
+    providerLabels,
+  });
+
+  const describeModelChoiceError = (result: ResolvedProviderModelChoice): string => {
+    if (result.ok) return "";
+    switch (result.reason) {
+      case "ambiguous":
+        return `choose a provider-specific model id (${(result.providers ?? []).map((p) => providerLabels.get(p) ?? p).join(", ")})`;
+      case "provider_unconfigured":
+        return `${providerLabels.get(result.provider ?? "") ?? result.provider} is not configured`;
+      case "unknown":
+        return "pick a known model from the suggestions (or refresh that provider's models)";
+      default:
+        return "pick a provider-specific model from the suggestions";
+    }
+  };
+
+  const resolveModelInput = (value: string, title = "Unknown model id") => {
+    const resolved = resolveProviderModelChoice(value, routingCatalog());
+    if (!resolved.ok) {
+      toast({ tone: "error", title, message: describeModelChoiceError(resolved) });
+      return null;
+    }
+    return resolved;
+  };
+
+  const normalizeSettingsDraft = (source: HarnessSettings): HarnessSettings | null => {
+    const normalizedLadders: HarnessSettings["ladders"] = {};
+    for (const [ladderName, tiers] of Object.entries(source.ladders)) {
+      const tierEntries = Object.entries(tiers).filter(([tier]) => tier !== "tier_pools");
+      const ladderOverrides: Partial<Record<ClaudeTier, string>> = {};
+      for (const [tier, modelId] of tierEntries) {
+        if (typeof modelId !== "string" || !modelId.trim()) {
+          toast({ tone: "error", title: "Missing ladder model", message: `${ladderName}.${tier} needs a provider-specific model id.` });
+          return null;
+        }
+        ladderOverrides[tier as ClaudeTier] = modelId;
+      }
+      const normalizedLadder = normalizeLadderOverrides(ladderOverrides, routingCatalog());
+      if (!normalizedLadder.ok) {
+        toast({
+          tone: "error",
+          title: "Invalid ladder model",
+          message: `${ladderName}.${normalizedLadder.tier}: ${describeModelChoiceError(normalizedLadder.error)}`,
+        });
+        return null;
+      }
+      const normalizedPools = normalizeTierPoolOverrides(getTierPools(tiers) as Partial<Record<ClaudeTier, string[]>>, routingCatalog());
+      if (!normalizedPools.ok) {
+        toast({
+          tone: "error",
+          title: normalizedPools.error === "duplicate" ? "Duplicate pool model" : "Invalid pool model",
+          message:
+            normalizedPools.error === "duplicate"
+              ? `${ladderName}.${normalizedPools.tier} contains the same provider/model more than once.`
+              : `${ladderName}.${normalizedPools.tier} #${normalizedPools.index + 1}: ${describeModelChoiceError(normalizedPools.error)}`,
+        });
+        return null;
+      }
+      normalizedLadders[ladderName] = {
+        ...normalizedLadder.value,
+        ...(Object.keys(normalizedPools.value).length > 0 ? { tier_pools: normalizedPools.value } : {}),
+      };
+    }
+    return { ...source, ladders: normalizedLadders };
+  };
+
   const judgeProviders = new Set(draft.judge_pool.map((j) => j.provider));
   const crossVendorOk = judgeProviders.size >= 2;
+  type LadderDraft = HarnessSettings["ladders"][string];
+
+  const getTierPools = (tiers: LadderDraft) =>
+    tiers.tier_pools && typeof tiers.tier_pools === "object" ? tiers.tier_pools : {};
+
+  const setLadder = (ladderName: string, next: LadderDraft) =>
+    setDraft({ ...draft, ladders: { ...draft.ladders, [ladderName]: next } });
+
+  const setTierModel = (ladderName: string, tier: string, modelId: string) => {
+    const tiers = draft.ladders[ladderName]!;
+    setLadder(ladderName, { ...tiers, [tier]: modelId });
+  };
+
+  const setTierPools = (ladderName: string, pools: Record<string, string[]>) => {
+    const tiers = draft.ladders[ladderName]!;
+    const entries = Object.entries(pools).filter(([, ids]) => ids.length > 0);
+    const next: LadderDraft = { ...tiers };
+    if (entries.length === 0) {
+      delete next.tier_pools;
+    } else {
+      next.tier_pools = Object.fromEntries(entries);
+    }
+    setLadder(ladderName, next);
+  };
+
+  const ladderDraftKey = (ladderName: string, tier: string) => `${ladderName}:${tier}`;
+  const poolDraftKey = (ladderName: string, tier: string) => `${ladderName}:${tier}`;
+  const poolEditDraftKey = (ladderName: string, tier: string, index: number) => `${ladderName}:${tier}:${index}`;
+  const setLadderInputDraft = (ladderName: string, tier: string, value: string) =>
+    setLadderInputDrafts((prev) => ({ ...prev, [ladderDraftKey(ladderName, tier)]: value }));
+  const setPoolDraft = (ladderName: string, tier: string, value: string) =>
+    setPoolDrafts((prev) => ({ ...prev, [poolDraftKey(ladderName, tier)]: value }));
+  const setPoolEditDraft = (ladderName: string, tier: string, index: number, value: string) =>
+    setPoolEditDrafts((prev) => ({ ...prev, [poolEditDraftKey(ladderName, tier, index)]: value }));
+  const clearLadderInputDraft = (ladderName: string, tier: string) =>
+    setLadderInputDrafts((prev) => {
+      const next = { ...prev };
+      delete next[ladderDraftKey(ladderName, tier)];
+      return next;
+    });
+  const clearPoolEditDraft = (ladderName: string, tier: string, index: number) =>
+    setPoolEditDrafts((prev) => {
+      const next = { ...prev };
+      delete next[poolEditDraftKey(ladderName, tier, index)];
+      return next;
+    });
+  const clearPoolEditDraftsForTier = (ladderName: string, tier: string) =>
+    setPoolEditDrafts((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([key]) => !key.startsWith(`${ladderName}:${tier}:`)),
+      ),
+    );
+  const commitTierModelInput = (ladderName: string, tier: string, value: string) => {
+    const raw = value.trim();
+    if (!raw) {
+      clearLadderInputDraft(ladderName, tier);
+      return;
+    }
+    const resolved = resolveModelInput(raw);
+    if (!resolved) return;
+    setTierModel(ladderName, tier, resolved.canonical);
+    clearLadderInputDraft(ladderName, tier);
+  };
+  const commitPoolModelInput = (ladderName: string, tier: string, index: number, value: string) => {
+    const raw = value.trim();
+    if (!raw) {
+      clearPoolEditDraft(ladderName, tier, index);
+      return;
+    }
+    const resolved = resolveModelInput(raw);
+    if (!resolved) return;
+    const siblings = (getTierPools(draft.ladders[ladderName]!)[tier] ?? []).filter((_, idx) => idx !== index);
+    if (siblings.includes(resolved.canonical)) {
+      toast({ tone: "error", title: "Duplicate pool model", message: "Each pool entry must be unique per provider/model." });
+      return;
+    }
+    updatePoolModel(ladderName, tier, index, resolved.canonical);
+    clearPoolEditDraft(ladderName, tier, index);
+  };
+
+  const addPoolModel = (ladderName: string, tier: string) => {
+    const key = poolDraftKey(ladderName, tier);
+    const id = poolDrafts[key]?.trim() ?? "";
+    if (!id) return;
+    const resolved = resolveModelInput(id);
+    if (!resolved) return;
+    const tiers = draft.ladders[ladderName]!;
+    const pools = { ...getTierPools(tiers) };
+    const next = [...(pools[tier] ?? [])];
+    if (next.includes(resolved.canonical)) {
+      toast({ tone: "warn", title: "Duplicate pool model", message: "That exact provider/model is already in the pool." });
+      return;
+    }
+    next.push(resolved.canonical);
+    pools[tier] = next;
+    setTierPools(ladderName, pools);
+    setPoolDraft(ladderName, tier, "");
+  };
+
+  const updatePoolModel = (ladderName: string, tier: string, index: number, modelId: string) => {
+    const tiers = draft.ladders[ladderName]!;
+    const pools = { ...getTierPools(tiers) };
+    const next = [...(pools[tier] ?? [])];
+    next[index] = modelId;
+    pools[tier] = next;
+    setTierPools(ladderName, pools);
+  };
+
+  const movePoolModel = (ladderName: string, tier: string, index: number, delta: -1 | 1) => {
+    const tiers = draft.ladders[ladderName]!;
+    const pools = { ...getTierPools(tiers) };
+    const next = [...(pools[tier] ?? [])];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    pools[tier] = next;
+    setTierPools(ladderName, pools);
+    clearPoolEditDraftsForTier(ladderName, tier);
+  };
+
+  const removePoolModel = (ladderName: string, tier: string, index: number) => {
+    const tiers = draft.ladders[ladderName]!;
+    const pools = { ...getTierPools(tiers) };
+    const next = (pools[tier] ?? []).filter((_, idx) => idx !== index);
+    if (next.length === 0) delete pools[tier];
+    else pools[tier] = next;
+    setTierPools(ladderName, pools);
+    clearPoolEditDraftsForTier(ladderName, tier);
+  };
 
   const addJudge = () => {
     const id = judgeDraft.trim();
     if (!id) return;
-    if (draft.judge_pool.some((j) => j.model === id)) {
+    const resolved = resolveModelInput(id, "Unknown judge model");
+    if (!resolved) return;
+    if (draft.judge_pool.some((j) => j.provider === resolved.provider && j.model === resolved.modelId)) {
       setJudgeDraft("");
       return;
     }
-    const provider = vendorFor(id);
-    if (!provider) {
-      toast({ tone: "error", title: "Unknown model id", message: "pick a model from the suggestions (or refresh the provider's models)" });
-      return;
-    }
-    setDraft({ ...draft, judge_pool: [...draft.judge_pool, { provider, model: id }] });
+    setDraft({ ...draft, judge_pool: [...draft.judge_pool, { provider: resolved.provider, model: resolved.modelId }] });
     setJudgeDraft("");
   };
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
-  const commit = () =>
-    save.mutate(draft, {
+  const hasPendingInputDrafts = Object.keys(ladderInputDrafts).length > 0 || Object.keys(poolEditDrafts).length > 0;
+  const applyInputDrafts = (source: HarnessSettings): HarnessSettings | null => {
+    const next = structuredClone(source) as HarnessSettings;
+    for (const [key, value] of Object.entries(ladderInputDrafts)) {
+      if (!value.trim()) continue;
+      const [ladderName, tier] = key.split(":");
+      if (!ladderName || !tier || !next.ladders[ladderName]) continue;
+      const resolved = resolveModelInput(value, "Invalid ladder model");
+      if (!resolved) return null;
+      next.ladders[ladderName] = { ...next.ladders[ladderName]!, [tier]: resolved.canonical };
+    }
+    for (const [key, value] of Object.entries(poolEditDrafts)) {
+      if (!value.trim()) continue;
+      const [ladderName, tier, indexRaw] = key.split(":");
+      const index = Number(indexRaw);
+      if (!ladderName || !tier || !Number.isInteger(index) || !next.ladders[ladderName]) continue;
+      const resolved = resolveModelInput(value, "Invalid pool model");
+      if (!resolved) return null;
+      const tiers = next.ladders[ladderName]!;
+      const pools = { ...getTierPools(tiers) };
+      const current = [...(pools[tier] ?? [])];
+      if (index < 0 || index >= current.length) continue;
+      const siblings = current.filter((_, idx) => idx !== index);
+      if (siblings.includes(resolved.canonical)) {
+        toast({ tone: "error", title: "Duplicate pool model", message: "Each pool entry must be unique per provider/model." });
+        return null;
+      }
+      current[index] = resolved.canonical;
+      pools[tier] = current;
+      next.ladders[ladderName] = {
+        ...tiers,
+        tier_pools: pools,
+      };
+    }
+    return next;
+  };
+  const commit = () => {
+    const drafted = applyInputDrafts(draft);
+    if (!drafted) return;
+    const normalized = normalizeSettingsDraft(drafted);
+    if (!normalized) return;
+    setDraft(normalized);
+    setLadderInputDrafts({});
+    setPoolEditDrafts({});
+    save.mutate(normalized, {
       onSuccess: () => toast({ tone: "success", title: "Settings saved" }),
       onError: (e) => toast({ tone: "error", title: "Save failed", message: e instanceof Error ? e.message : "" }),
     });
-  const SaveBtn = <Button size="sm" variant="primary" disabled={!dirty || save.isPending} onClick={commit}>Save</Button>;
+  };
+  const SaveBtn = <Button size="sm" variant="primary" disabled={(!dirty && !hasPendingInputDrafts) || save.isPending} onClick={commit}>Save</Button>;
+  const suggestionChoices = buildProviderModelChoices({
+    configuredProviders: configuredVendorList,
+    catalogModels: models,
+    providerLabels,
+  });
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       {/* Shared autocomplete: configured vendors' priced models + each configured provider's live model list. */}
       <datalist id={MODEL_DATALIST_ID}>
-        {models.filter((m) => configuredVendors.has(m.vendor)).map((m) => (
-          <option key={`${m.vendor}/${m.id}`} value={m.id}>
-            {m.vendor}
-            {m.tier ? ` · ${m.tier}` : ""}
+        {suggestionChoices.map((choice) => (
+          <option key={choice.canonical} value={choice.canonical}>
+            {choice.label}
           </option>
         ))}
         {configuredVendorList.map((v) => (
-          <ProviderModelOptions key={v} vendor={v} exclude={catalogIds} />
+          <ProviderModelOptions
+            key={v}
+            vendor={v}
+            providerLabel={providerLabels.get(v) ?? v}
+            exclude={catalogIds}
+          />
         ))}
       </datalist>
 
       <Card title="Generation ladders" actions={SaveBtn}>
-        <p className="mb-2 text-[11px] text-ink-3">Map each tier of a generation ladder to a model id. Suggestions come from the priced catalog plus each configured provider's live model list (Refresh models on a provider card re-fetches it).</p>
+        <p className="mb-2 text-[11px] text-ink-3">Map each tier of a generation ladder to a provider-qualified model id. Suggestions come from the priced catalog plus each configured provider's live model list (Refresh models on a provider card re-fetches it).</p>
+        <p className="mb-2 text-[11px] text-ink-3">Per-tier pools rotate across Reflexion retries and best-of candidates. The plain ladder mapping remains the single-model fallback when a tier has no pool, and pool priority is preserved top-to-bottom exactly as written.</p>
         <div className="space-y-3">
           {Object.entries(draft.ladders).map(([ladderName, tiers]) => (
             <div key={ladderName} className="space-y-2">
@@ -307,28 +583,72 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
               {Object.entries(tiers)
                 .filter(([tier]) => tier !== "tier_pools")
                 .map(([tier, modelId]) => (
-                <div key={tier} className="flex items-center gap-2">
-                  <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
-                  <input
-                    list={MODEL_DATALIST_ID}
-                    value={typeof modelId === "string" ? modelId : ""}
-                    spellCheck={false}
-                    autoComplete="off"
-                    data-testid={`ladder-${ladderName}-${tier}`}
-                    onChange={(e) =>
-                      setDraft({ ...draft, ladders: { ...draft.ladders, [ladderName]: { ...tiers, [tier]: e.target.value } } })
-                    }
-                    onBlur={(e) => {
-                      const id = e.target.value.trim();
-                      if (!id) return;
-                      const provider = vendorFor(id);
-                      if (!provider || !configuredVendors.has(provider)) {
-                        toast({ tone: "error", title: "Unknown model id", message: "pick a model from the suggestions (or refresh the provider's models)" });
-                      }
-                    }}
-                    className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
-                  />
-                  {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
+                <div key={tier} className="rounded-sm bg-bg-1 p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="mono w-16 text-[12px] text-ink-2">{tier}</span>
+                    <input
+                      list={MODEL_DATALIST_ID}
+                      value={ladderInputDrafts[ladderDraftKey(ladderName, tier)] ?? (typeof modelId === "string" ? modelId : "")}
+                      spellCheck={false}
+                      autoComplete="off"
+                      data-testid={`ladder-${ladderName}-${tier}`}
+                      onChange={(e) => setLadderInputDraft(ladderName, tier, e.target.value)}
+                      onBlur={(e) => commitTierModelInput(ladderName, tier, e.target.value)}
+                      className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                    />
+                    {tier === "fable" && <Pill tone="judge" title="capability-gated, never auto-escalated">gated</Pill>}
+                  </div>
+
+                  <div className="mt-2 pl-[4.5rem]">
+                    <div className="mb-1 text-[11px] text-ink-3">Pool rotation for <span className="mono">{tier}</span></div>
+                    {(getTierPools(tiers)[tier] ?? []).length > 0 ? (
+                      <ul className="space-y-1">
+                        {(getTierPools(tiers)[tier] ?? []).map((poolModel, index, arr) => (
+                          <li key={`${tier}-${index}`} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
+                            <span className="mono w-4 text-[11px] text-ink-3">{index + 1}</span>
+                            <input
+                              list={MODEL_DATALIST_ID}
+                              value={poolEditDrafts[poolEditDraftKey(ladderName, tier, index)] ?? poolModel}
+                              spellCheck={false}
+                              autoComplete="off"
+                              data-testid={`tier-pool-${ladderName}-${tier}-${index}`}
+                              onChange={(e) => setPoolEditDraft(ladderName, tier, index, e.target.value)}
+                              onBlur={(e) => commitPoolModelInput(ladderName, tier, index, e.target.value)}
+                              className="mono flex-1 rounded-sm border border-line-2 bg-bg-0 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                            />
+                            <button type="button" className="text-ink-3 hover:text-ink-1" disabled={index === 0} onClick={() => movePoolModel(ladderName, tier, index, -1)}>↑</button>
+                            <button type="button" className="text-ink-3 hover:text-ink-1" disabled={index === arr.length - 1} onClick={() => movePoolModel(ladderName, tier, index, 1)}>↓</button>
+                            <button type="button" className="text-fail/70 hover:text-fail" onClick={() => removePoolModel(ladderName, tier, index)}>✕</button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px] text-ink-3">No pool configured — retries fall back to the single ladder model.</p>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        list={MODEL_DATALIST_ID}
+                        value={poolDrafts[poolDraftKey(ladderName, tier)] ?? ""}
+                        spellCheck={false}
+                        autoComplete="off"
+                        data-testid={`tier-pool-add-${ladderName}-${tier}`}
+                        onChange={(e) => setPoolDraft(ladderName, tier, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addPoolModel(ladderName, tier);
+                        }}
+                        placeholder={`add ${tier} pool model id…`}
+                        className="mono flex-1 rounded-sm border border-line-2 bg-bg-2 px-2 py-1 text-[12px] text-ink-1 outline-none focus:border-accent"
+                      />
+                      <Button
+                        size="sm"
+                        disabled={!(poolDrafts[poolDraftKey(ladderName, tier)] ?? "").trim()}
+                        onClick={() => addPoolModel(ladderName, tier)}
+                        data-testid={`tier-pool-add-btn-${ladderName}-${tier}`}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -342,7 +662,7 @@ function SettingsPanel({ providers, models }: { providers: ProviderStatus[]; mod
           {draft.judge_pool.map((j, i) => (
             <li key={`${j.provider}:${j.model}`} className="flex items-center gap-2 rounded-sm bg-bg-2 px-2 py-1">
               <span className="mono w-4 text-[11px] text-ink-3">{i + 1}</span>
-              <span className="mono flex-1 text-[12px] text-ink-1">{j.model}</span>
+              <span className="mono flex-1 text-[12px] text-ink-1">{providerModelLabel(j.provider, j.model, providerLabels)}</span>
               <Pill>{j.provider}</Pill>
               <button type="button" className="text-ink-3 hover:text-ink-1" disabled={i === 0}
                 onClick={() => {

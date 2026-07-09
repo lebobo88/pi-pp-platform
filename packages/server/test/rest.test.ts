@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -11,6 +11,29 @@ process.env.PP_PLATFORM_DIR = join(home, "platform");
 delete process.env.PP_ECOSYSTEM;
 delete process.env.PP_API_TOKEN;
 const dbPath = join(home, "state.db");
+mkdirSync(process.env.PP_PLATFORM_DIR, { recursive: true });
+writeFileSync(
+  join(process.env.PP_PLATFORM_DIR, "catalog.json"),
+  JSON.stringify({
+    generation_ladders: {
+      claude: {
+        provider: "anthropic",
+        order: ["haiku", "sonnet", "opus"],
+        off_ladder: ["fable"],
+        tiers: {
+          haiku: "claude-haiku-4-5-20251001",
+          sonnet: "claude-sonnet-4-6",
+          opus: "claude-opus-4-7",
+          fable: "claude-fable-5",
+        },
+        tier_pools: {
+          sonnet: ["openai/gpt-5.5", "claude-sonnet-4-6"],
+        },
+      },
+    },
+  }),
+  "utf8",
+);
 // Isolate the user scope too: the developer machine may have ~/.claude/skills
 // (AgentSmith) installed, which would shadow the builtin skills under test.
 // Must happen before buildApp is imported (teams.ts binds USER_TEAMS_DIR at
@@ -83,16 +106,25 @@ describe("health + library reads", () => {
 
   it("GET /api/v1/settings returns defaults; PUT persists", async () => {
     const def = (await get("/api/v1/settings")).json() as {
-      ladders: Record<string, Record<string, string>>;
+      ladders: Record<string, Record<string, string> & { tier_pools?: Record<string, string[]> }>;
       judge_pool: Array<{ provider: string; model: string }>;
     };
     // Default catalog ships the "claude" ladder with fable off-ladder.
     expect(def.ladders.claude!.fable).toBe("claude-fable-5");
+    expect(def.ladders.claude!.tier_pools?.sonnet).toEqual(["openai/gpt-5.5", "claude-sonnet-4-6"]);
     expect(Array.isArray(def.judge_pool)).toBe(true);
     expect(def.judge_pool[0]).toMatchObject({ provider: "openai" });
 
     const next = {
-      ladders: { claude: { fable: "claude-fable-5", opus: "claude-opus-4-7", sonnet: "claude-sonnet-4-6", haiku: "claude-haiku-4-5-20251001" } },
+      ladders: {
+        claude: {
+          fable: "claude-fable-5",
+          opus: "claude-opus-4-7",
+          sonnet: "claude-sonnet-4-6",
+          haiku: "claude-haiku-4-5-20251001",
+          tier_pools: { sonnet: ["openai/gpt-5.5", "azure-openai/gpt-5.5"] },
+        },
+      },
       judge_pool: [{ provider: "openai", model: "gpt-5.4" }],
     };
     const put = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: next });
@@ -101,6 +133,40 @@ describe("health + library reads", () => {
 
     const bad = await app.inject({ method: "PUT", url: "/api/v1/settings", payload: { judge_pool: [] } });
     expect(bad.statusCode).toBe(422);
+  });
+
+  it("GET /api/v1/projects/:path/profile returns raw yaml plus the resolved project profile", async () => {
+    const project = mkdtempSync(join(tmpdir(), "pp-srv-project-"));
+    mkdirSync(join(project, ".harness"), { recursive: true });
+    writeFileSync(
+      join(project, ".harness", "profile.yaml"),
+      [
+        "name: checkout-custom",
+        "description: Custom project profile",
+        "extends:",
+        "  - web-ui",
+        "ladder:",
+        "  sonnet: openai/gpt-5.5",
+        "tier_pools:",
+        "  sonnet:",
+        "    - openai/gpt-5.5",
+        "    - azure-openai/gpt-5.5",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const r = await get(`/api/v1/projects/${encodeURIComponent(project)}/profile`);
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({
+      path: join(project, ".harness", "profile.yaml"),
+      yaml: expect.stringContaining("name: checkout-custom"),
+      resolved: {
+        name: "checkout-custom",
+        ladder: { sonnet: "openai/gpt-5.5" },
+        tier_pools: { sonnet: ["openai/gpt-5.5", "azure-openai/gpt-5.5"] },
+      },
+    });
   });
 
   it("GET /api/v1/skills + /skills/:id (404 on unknown)", async () => {

@@ -42,6 +42,8 @@ export async function startBestOfStage(opts: {
   kind: string;
   gate_type: string;
   n: number;
+  /** v10: index into the run's persisted stage_plan_json, when a plan was built. */
+  plan_index?: number | null;
 }): Promise<{ stage_id: string; candidates: CandidateSlot[]; shuffle_seed: number }> {
   if (opts.n < 2 || opts.n > 8) throw new Error(`n must be in [2, 8], got ${opts.n}`);
 
@@ -106,8 +108,8 @@ export async function startBestOfStage(opts: {
   txImmediate(() => {
     db()
       .prepare(
-        `INSERT INTO stages(id, run_id, kind, gate_type, status, started_at, notes_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO stages(id, run_id, kind, gate_type, status, started_at, notes_json, plan_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         stage_id,
@@ -124,6 +126,7 @@ export async function startBestOfStage(opts: {
             candidate_paths: candidates.map(c => c.worktree_path),
           },
         }),
+        opts.plan_index ?? null,
       );
   });
 

@@ -1,7 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { qk } from "@/api/queryKeys";
-import { apiPaths, type Project, type ProjectDetail, type DocContent } from "@shared/api-types";
+import {
+  apiPaths,
+  type Project,
+  type ProjectDetail,
+  type DocContent,
+  type ProjectProfileDocument,
+} from "@shared/api-types";
 
 export function useProjects() {
   return useQuery({
@@ -14,6 +20,14 @@ export function useProject(path: string | undefined) {
   return useQuery({
     queryKey: qk.project(path ?? ""),
     queryFn: ({ signal }) => api.get<ProjectDetail>(apiPaths.project(path!), { signal }),
+    enabled: !!path,
+  });
+}
+
+export function useProjectProfile(path: string | undefined) {
+  return useQuery({
+    queryKey: qk.projectProfile(path ?? ""),
+    queryFn: ({ signal }) => api.get<ProjectProfileDocument | null>(apiPaths.projectProfile(path!), { signal }),
     enabled: !!path,
   });
 }

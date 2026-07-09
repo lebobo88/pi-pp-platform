@@ -38,6 +38,10 @@ export * from "./orchestrator/loop-ceiling.js";
 export * from "./orchestrator/profile-detect.js";
 export * from "./orchestrator/design-templates.js";
 export { forceUnlock, type ForceUnlockResult } from "./util/lock.js";
+// v10 resume: the pilot's resume flow re-acquires the per-project advisory
+// lock (finalizeRun always releases it, even on a surfaced/aborted stop) the
+// same way startRun does before continuing a stopped run's stage loop.
+export { ProjectLock, ProjectLockBusyError, type LockMetadata } from "./util/lock.js";
 export { parseFrontmatter, type FlatFrontmatter } from "./util/frontmatter.js";
 // Pilot seam (M3): autogenesis analyzer consumed by @pp/pilot's finalize phase.
 export { analyzeAndPropose, listProposals, setProposalStatus } from "./orchestrator/autogenesis-analyzer.js";

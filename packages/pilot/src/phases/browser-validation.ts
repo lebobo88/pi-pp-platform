@@ -60,7 +60,7 @@ async function degradeOpen(ctx: RunContext, stage_id: string, reason: string, ma
 }
 
 export async function runBrowserValidationStage(ctx: RunContext, stage: StageSpec): Promise<StageOutcome> {
-  const { stage_id } = startStage({ run_id: ctx.run_id, kind: stage.kind, gate_type: stage.gate_type });
+  const { stage_id } = startStage({ run_id: ctx.run_id, kind: stage.kind, gate_type: stage.gate_type, plan_index: stage.planIndex ?? null });
   emit(ctx, "stage.started", { kind: stage.kind, gate_type: stage.gate_type, agent: stage.agent }, { stage_id });
 
   const routes = ctx.profile?.runtime_smoke_test?.routes ?? ["/"];

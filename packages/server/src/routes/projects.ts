@@ -46,6 +46,15 @@ const agentsMdFile = (projectPath: string) => join(projectPath, "AGENTS.md");
 const constitutionFile = (projectPath: string) => join(projectPath, "CONSTITUTION.md");
 const profileFile = (projectPath: string) => join(projectPath, ".harness", "profile.yaml");
 
+function projectProfileDocument(projectPath: string) {
+  const path = profileFile(projectPath);
+  if (!existsSync(path)) return null;
+  const yaml = readFileSync(path, "utf8");
+  const resolved = loadProjectProfile(projectPath);
+  if (!resolved) return null;
+  return { path, yaml, resolved };
+}
+
 export function registerProjectRoutes(app: FastifyInstance): void {
   // ── CRUD ──
   app.get(`${V1}/projects`, async () => listProjects());
@@ -91,7 +100,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   // ── Profile read/write (DELTA) ──
   app.get(`${V1}/projects/:path/profile`, async (req) => {
     const { path } = req.params as { path: string };
-    return loadProjectProfile(path);
+    return projectProfileDocument(path);
   });
   app.put(`${V1}/projects/:path/profile`, async (req, reply) => {
     const { path } = req.params as { path: string };

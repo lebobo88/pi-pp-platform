@@ -140,6 +140,7 @@ export const mockRunSummaries: RunSummary[] = [
 export const mockProviders: ProviderStatus[] = [
   { vendor: "anthropic", configured: true, cli_installed: false, cli_version: null, has_api_key: true, logged_in: false, masked_key: "sk-ant-…9f2c", degraded: false },
   { vendor: "openai", configured: true, cli_installed: false, cli_version: null, has_api_key: true, logged_in: false, masked_key: "sk-…a71b", degraded: false },
+  { vendor: "azure-openai", configured: true, cli_installed: false, cli_version: null, has_api_key: true, logged_in: false, masked_key: "azu…c19f", degraded: false },
   { vendor: "google", configured: false, cli_installed: false, cli_version: null, has_api_key: false, logged_in: false, masked_key: null, degraded: false },
 ];
 
@@ -149,7 +150,9 @@ export const mockModels: ModelInfo[] = [
   { id: "claude-sonnet-4-6", vendor: "anthropic", tier: "sonnet", input_per_1m: 3, output_per_1m: 15 },
   { id: "claude-haiku-4-5-20251001", vendor: "anthropic", tier: "haiku", input_per_1m: 0.8, output_per_1m: 4 },
   { id: "gpt-5.4", vendor: "openai", tier: null, input_per_1m: 4, output_per_1m: 12 },
+  { id: "gpt-5.4-mini", vendor: "openai", tier: null, input_per_1m: 0.8, output_per_1m: 2.4 },
   { id: "gpt-5.3-codex", vendor: "openai", tier: null, input_per_1m: 3, output_per_1m: 9 },
+  { id: "gpt-5.4-mini", vendor: "azure-openai", tier: null, input_per_1m: 0.9, output_per_1m: 2.7, note: "Regional Azure pricing sample." },
   { id: "gemini-2.5-pro", vendor: "google", tier: null, input_per_1m: 3.5, output_per_1m: 10.5 },
   { id: "gemini-2.5-flash", vendor: "google", tier: null, input_per_1m: 0.3, output_per_1m: 0.9 },
 ];
@@ -157,10 +160,13 @@ export const mockModels: ModelInfo[] = [
 export const mockSettings: HarnessSettings = {
   ladders: {
     claude: {
-      haiku: "claude-haiku-4-5-20251001",
-      sonnet: "claude-sonnet-4-6",
-      opus: "claude-opus-4-7",
-      fable: "claude-fable-5",
+      haiku: "anthropic/claude-haiku-4-5-20251001",
+      sonnet: "anthropic/claude-sonnet-4-6",
+      opus: "anthropic/claude-opus-4-7",
+      fable: "anthropic/claude-fable-5",
+      tier_pools: {
+        sonnet: ["openai/gpt-5.4-mini", "anthropic/claude-sonnet-4-6"],
+      },
     },
   },
   judge_pool: [
@@ -173,6 +179,7 @@ export const mockSettings: HarnessSettings = {
 /** GET /providers/available — catalog providers + a curated pi set (add-provider picker). */
 export const mockAvailableProviders: InstallableProvider[] = [
   { id: "openai", display_name: "OpenAI", env_key_hint: "OPENAI_API_KEY", in_catalog: true, enabled: true, configured: true },
+  { id: "azure-openai", display_name: "Azure OpenAI", env_key_hint: "AZURE_OPENAI_API_KEY", in_catalog: true, enabled: true, configured: true },
   { id: "google", display_name: "Google", env_key_hint: "GEMINI_API_KEY", in_catalog: true, enabled: true, configured: false },
   { id: "anthropic", display_name: "Anthropic", env_key_hint: "ANTHROPIC_API_KEY", in_catalog: true, enabled: true, configured: true },
   { id: "mistral", display_name: "Mistral", env_key_hint: "MISTRAL_API_KEY", in_catalog: false, enabled: false, configured: false },
@@ -478,9 +485,10 @@ export const mockEvolutionProposals: EvolutionProposal[] = [
 export const mockDoctor: DoctorReport = {
   cli_versions: { codex: "codex 0.34.0", gemini: "gemini 0.9.2", claude: "claude 2.1.4", git: "git 2.45.1", node: "v22.20.0" },
   db_reachable: true,
-  vendors_configured: { openai: true, google: false, anthropic: true },
+  vendors_configured: { openai: true, "azure-openai": true, google: false, anthropic: true },
   vendor_credentials: {
     openai: { cli: true, api_key: true, logged_in: false },
+    "azure-openai": { cli: true, api_key: true, logged_in: false },
     google: { cli: true, api_key: false, logged_in: false },
     anthropic: { cli: true, api_key: true, logged_in: true },
   },

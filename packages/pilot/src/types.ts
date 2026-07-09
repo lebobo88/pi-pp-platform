@@ -88,6 +88,16 @@ export type StageSpec = {
    * an artifact without mutating the project tree.
    */
   execution?: "session-coding" | "session-readonly" | "completion";
+  /**
+   * v10: index into the run's persisted `stage_plan_json` array that this
+   * StageSpec came from. Set by `RunPilot.execute()` (and the resume flow)
+   * right before dispatch, so the created `stages` row can be stamped with
+   * `plan_index` and a later resume can compute "first plan slot with no
+   * stage row" instead of guessing from `kind` alone. `undefined` for
+   * plans that bypass persistence (e.g. `stagesOverride` test/server seam
+   * before a plan is persisted).
+   */
+  planIndex?: number;
 };
 
 export type StageOutcome = "passed" | "surfaced" | "aborted";

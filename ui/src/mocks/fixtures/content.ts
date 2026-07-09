@@ -1,4 +1,4 @@
-import type { ProjectDetail, DocContent } from "@shared/api-types";
+import type { ProjectDetail, DocContent, ProjectProfileDocument } from "@shared/api-types";
 import { mockProjects, mockRunSummaries } from "./catalog";
 
 /** Project detail keyed by path — enriches the base Project with doc status. */
@@ -100,4 +100,66 @@ export const mockConstitution: DocContent = {
 3. **Attested amendments only.** This document changes solely via
    \`/pp:constitution amend\` with an attestation id.
 `,
+};
+
+export const mockProjectProfiles: Record<string, ProjectProfileDocument> = {
+  "C:/AiAppDeployments/acme-checkout": {
+    path: "C:/AiAppDeployments/acme-checkout/.harness/profile.yaml",
+    yaml: [
+      "name: web-ui",
+      "description: User-facing checkout app with a coupon flow override.",
+      "ladder:",
+      "  sonnet: openai/gpt-5.4",
+      "tier_pools:",
+      "  sonnet:",
+      "    - openai/gpt-5.4-mini",
+      "    - azure-openai/gpt-5.4-mini",
+      "    - anthropic/claude-sonnet-4-6",
+      "",
+    ].join("\n"),
+    resolved: {
+      name: "web-ui",
+      description: "User-facing checkout app with a coupon flow override.",
+      required_taxonomy_sections: ["4.4", "4.13"],
+      required_artifacts: ["screen_state_matrix", "a11y_plan"],
+      required_validators_strict: ["browser_validation"],
+      ladder: { sonnet: "openai/gpt-5.4" },
+      tier_pools: { sonnet: ["openai/gpt-5.4-mini", "azure-openai/gpt-5.4-mini", "anthropic/claude-sonnet-4-6"] },
+      model_tier_policy: { default_cap: "opus", scope_adjust: { trivial: -1, standard: 0, major: 1 } },
+    },
+  },
+  "C:/AiAppDeployments/orbit-api": {
+    path: "C:/AiAppDeployments/orbit-api/.harness/profile.yaml",
+    yaml: [
+      "name: api-platform",
+      "description: Contracts-first API service.",
+      "",
+    ].join("\n"),
+    resolved: {
+      name: "api-platform",
+      description: "Contracts-first API service.",
+      required_taxonomy_sections: ["4.7", "4.9", "4.10"],
+      required_artifacts: ["openapi", "event_catalog"],
+      required_validators_strict: ["contracts_lint"],
+    },
+  },
+  "C:/AiAppDeployments/pi-pp-platform": {
+    path: "C:/AiAppDeployments/pi-pp-platform/.harness/profile.yaml",
+    yaml: [
+      "name: internal-tool",
+      "description: Internal tooling with a custom haiku rotation.",
+      "tier_pools:",
+      "  haiku:",
+      "    - anthropic/claude-haiku-4-5-20251001",
+      "    - google/gemini-2.5-flash",
+      "",
+    ].join("\n"),
+    resolved: {
+      name: "internal-tool",
+      description: "Internal tooling with a custom haiku rotation.",
+      required_taxonomy_sections: ["4.3", "4.8", "4.13"],
+      required_artifacts: ["feature_spec", "code"],
+      tier_pools: { haiku: ["anthropic/claude-haiku-4-5-20251001", "google/gemini-2.5-flash"] },
+    },
+  },
 };

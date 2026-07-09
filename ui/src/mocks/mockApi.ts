@@ -6,7 +6,7 @@
  *
  *   VITE_MOCK=1 pnpm -F ui dev
  */
-import { apiPaths, type ApiError, type RunListResponse } from "@shared/api-types";
+import { apiPaths, type ApiError, type RunListResponse, type CompletionReadinessResponse } from "@shared/api-types";
 import {
   mockProjects,
   mockRunSummaries,
@@ -30,6 +30,7 @@ import {
   mockMissabilityChecks,
   mockReplayBundle,
   mockProjectDetails,
+  mockProjectProfiles,
   mockMasterPlan,
   mockAgentsMd,
   mockConstitution,
@@ -61,6 +62,8 @@ function mockContentFor(path: string): ArtifactContent {
 }
 
 const LATENCY_MS = 140;
+const settingsState = structuredClone(mockSettings);
+const projectProfilesState = structuredClone(mockProjectProfiles);
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -79,6 +82,11 @@ function decode(seg: string): string {
   } catch {
     return seg;
   }
+}
+
+function profileNameFromYaml(yaml: string): string | null {
+  const m = yaml.match(/^\s*name\s*:\s*([^\r\n#]+?)\s*$/m);
+  return m?.[1]?.trim() ?? null;
 }
 
 /** Opaque keyset run cursor: base64url of `"<started_at>|<id>"` — mirrors the server. */
@@ -140,6 +148,12 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
   const gate = p.match(/^\/api\/v1\/runs\/([^/]+)\/stages\/([^/]+)\/gate$/);
   if (method === "POST" && gate) {
     return json({ run_id: decode(gate[1]!), stage_id: decode(gate[2]!), action: "gate", ok: true });
+  }
+  const resume = p.match(/^\/api\/v1\/runs\/([^/]+)\/resume$/);
+  if (method === "POST" && resume) {
+    // Demo fixture always reports full completion — the mock run tree has no
+    // real surfaced/blocked state to recover from.
+    return json({ run_id: decode(resume[1]!), status: "complete", resumed: true });
   }
 
   // Provider key: WRITE-ONLY. Never echo the raw key — respond with the masked
@@ -237,13 +251,36 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
   // Profile write (PUT /projects/:path/profile, body {name} | {yaml}).
   const writeProfile = p.match(/^\/api\/v1\/projects\/([^/]+)\/profile$/);
   if (method === "PUT" && writeProfile) {
+    const projectPath = decode(writeProfile[1]!);
     const b = (body as { yaml?: string; name?: string } | null) ?? {};
-    if (b.name) return json({ path: `${decode(writeProfile[1]!)}/.harness/profile.yaml`, name: b.name });
+    if (b.name) {
+      const prev = projectProfilesState[projectPath];
+      projectProfilesState[projectPath] = {
+        path: `${projectPath}/.harness/profile.yaml`,
+        yaml: `name: ${b.name}\n`,
+        resolved: {
+          ...(prev?.resolved ?? { name: b.name, description: "Mock profile" }),
+          name: b.name,
+        },
+      };
+      if (mockProjectDetails[projectPath]) mockProjectDetails[projectPath]!.active_profile = b.name;
+      return json({ path: `${projectPath}/.harness/profile.yaml`, name: b.name });
+    }
     if (typeof b.yaml === "string") {
       if (/INVALID|!!bad/.test(b.yaml) || !/name\s*:/.test(b.yaml)) {
         return errorResponse(422, "validation failed", { yaml: "profile must be a mapping with a string `name`" });
       }
-      return json({ path: `${decode(writeProfile[1]!)}/.harness/profile.yaml`, yaml: b.yaml });
+      const name = profileNameFromYaml(b.yaml);
+      projectProfilesState[projectPath] = {
+        path: `${projectPath}/.harness/profile.yaml`,
+        yaml: b.yaml,
+        resolved: {
+          ...(projectProfilesState[projectPath]?.resolved ?? { name: name ?? "mock-profile", description: "Mock profile" }),
+          name: name ?? projectProfilesState[projectPath]?.resolved.name ?? "mock-profile",
+        },
+      };
+      if (name && mockProjectDetails[projectPath]) mockProjectDetails[projectPath]!.active_profile = name;
+      return json({ path: `${projectPath}/.harness/profile.yaml`, yaml: b.yaml });
     }
     return errorResponse(422, "validation failed", { body: "provide `name` (built-in) or `yaml` (raw profile)" });
   }
@@ -261,7 +298,8 @@ function routeMutation(method: string, url: URL, body: unknown): Response | null
 
   // Settings (generation ladders + judge pool) — echoes the persisted body.
   if (method === "PUT" && p === apiPaths.settings) {
-    return json(body ?? mockSettings);
+    Object.assign(settingsState, structuredClone(body ?? mockSettings));
+    return json(settingsState);
   }
 
   // Evolution review lifecycle — mirrors the real server: approve/reject from
@@ -357,6 +395,11 @@ function route(method: string, url: URL, body: unknown): Response | null {
   if (projAgents) return json(mockAgentsMd);
   const projConst = p.match(/^\/api\/v1\/projects\/([^/]+)\/constitution$/);
   if (projConst) return json(mockConstitution);
+  const projProfile = p.match(/^\/api\/v1\/projects\/([^/]+)\/profile$/);
+  if (projProfile) {
+    const path = decode(projProfile[1]!);
+    return json(projectProfilesState[path] ?? null);
+  }
   const projMatch = p.match(/^\/api\/v1\/projects\/([^/]+)$/);
   if (projMatch) {
     const path = decode(projMatch[1]!);
@@ -389,6 +432,21 @@ function route(method: string, url: URL, body: unknown): Response | null {
   if (runReplay) return json(mockReplayBundle);
   const runMiss = p.match(/^\/api\/v1\/runs\/([^/]+)\/missability$/);
   if (runMiss) return json(mockMissabilityChecks);
+  const runReadiness = p.match(/^\/api\/v1\/runs\/([^/]+)\/completion-readiness$/);
+  if (runReadiness) {
+    const id = decode(runReadiness[1]!);
+    return json({
+      run_id: id,
+      resumable: true,
+      blocking_reason: null,
+      surfaced_stages: [],
+      incomplete_stages: [],
+      remaining_planned_stages: [],
+      missing_required_artifacts: [],
+      failed_required_missability_checks: [],
+      unpopulated_master_plan_sections: [],
+    } satisfies CompletionReadinessResponse);
+  }
   const runBorda = p.match(/^\/api\/v1\/runs\/([^/]+)\/borda$/);
   if (runBorda) {
     return json([
@@ -423,7 +481,7 @@ function route(method: string, url: URL, body: unknown): Response | null {
   }
   if (p === apiPaths.budgets) return json(mockBudgets);
   if (p === apiPaths.janitor) return json(mockJanitorEmpty);
-  if (p === apiPaths.settings) return json(mockSettings);
+  if (p === apiPaths.settings) return json(settingsState);
   if (p === apiPaths.taxonomy) return json(mockTaxonomy);
   if (p === apiPaths.forums) return json(mockForums);
   const forumMatch = p.match(/^\/api\/v1\/forums\/([^/]+)$/);
