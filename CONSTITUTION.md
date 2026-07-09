@@ -50,6 +50,10 @@ machine-checkable claim.
   pipeline ready).
 - No PII may be logged at any severity. Secrets are scrubbed before
   reaching the event bus.
+- Every SSE event frame must be persisted to the `events` table in
+  SQLite before broadcast to subscribers. The in-memory ring buffer is
+  for live delivery only, not durability. Events older than 30 days
+  are purged by the janitor.
 
 ---
 
