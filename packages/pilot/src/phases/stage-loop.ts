@@ -38,10 +38,10 @@ import {
   type AttemptStatus,
   type AttemptNotes,
 } from "@pp/core";
-import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
+import { providerForModel, hasCredential, providersWithCredential, isProviderAvailable } from "@pp/engine";
 import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
 import { resolveTier, escalateTierForRetry } from "../tier-resolver.js";
-import { generationModelIdForTier } from "../generation-model.js";
+import { generationModelIdForTierAvailable } from "../generation-model.js";
 import { providerToProducer, type JudgeSelection } from "../judge-policy.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
@@ -439,7 +439,16 @@ async function handleErroredAttempt(
   // Rotation index 1 draws the next pool model for the tier (a different
   // provider when a pool spans vendors); with no pool configured this returns
   // the same model id, so a same-provider transient simply retries in place.
-  const retryModel = rotate ? generationModelIdForTier(tier, 1, ctx.ladderOverride) : errored.modelId;
+  // The availability filter skips any pool model whose provider is in cooldown
+  // (the one that just errored is now recorded as rate/quota), so rotation lands
+  // on a live provider when the pool offers one — falling back to the plain
+  // index-1 rotation when none are available.
+  const retryModel = rotate
+    ? generationModelIdForTierAvailable(tier, 1, ctx.ladderOverride, (id) => {
+        const p = providerForModel(id, ctx.engine.authStorage);
+        return !p || isProviderAvailable(p);
+      })
+    : errored.modelId;
 
   const gen1 = await generate(ctx, stage, stage_id, retryModel, tier, 0, errored.attempt_id, [], undefined, rubricMd);
 

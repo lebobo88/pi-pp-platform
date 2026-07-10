@@ -19,6 +19,12 @@ import { resolveProviderApiKey } from "./auth.js";
 import { defaultComplete, type LlmComplete } from "./llm.js";
 import { critique } from "./critique.js";
 import { assistantErrorMessage, classifyProviderError, type GenProvider } from "./envelope.js";
+import {
+  clearProviderCooldown,
+  recordProviderError,
+  recordProviderBalance,
+  type ProviderBalanceEntry,
+} from "./provider-health.js";
 
 /** Any provider present in the catalog judge pool. */
 export type ProbeProvider = string;
@@ -55,17 +61,66 @@ export async function doctorProbe(provider: ProbeProvider, deps: DoctorDeps): Pr
     // Inspect the resolved message and report the real cause as ok:false.
     if (msg.stopReason === "error") {
       const errorMessage = assistantErrorMessage(msg) ?? "provider resolved stopReason=error";
+      const errorClass = classifyProviderError(errorMessage);
+      // Feed the health registry so cooldowns reflect a probe that hit quota/rate.
+      recordProviderError(provider, errorClass, errorMessage);
       return {
         ok: false,
         latency_ms: Date.now() - t0,
         model: modelId,
         provider,
-        error: `${classifyProviderError(errorMessage)}: ${errorMessage}`,
+        error: `${errorClass}: ${errorMessage}`,
       };
     }
+    // A healthy probe is a real success — clear any cooldown (this is exactly
+    // the "successful manual probe clears state" path the /providers/:vendor/test
+    // route relies on).
+    clearProviderCooldown(provider);
     return { ok: true, latency_ms: Date.now() - t0, model: modelId, provider };
   } catch (err) {
+    // A thrown error (auth/network) marks the provider unhealthy but sets no
+    // cooldown — it is not a quota/rate signal, so routing is left untouched.
+    recordProviderError(provider, "provider_error", (err as Error).message);
     return { ok: false, latency_ms: 0, model: modelId, provider, error: (err as Error).message };
+  }
+}
+
+/**
+ * Probe a provider's account balance where an API exists for it. Only DeepSeek
+ * exposes a public balance endpoint (GET /user/balance); every other provider
+ * returns undefined and the UI shows health-registry state instead. The stored
+ * key is read server-side only and NEVER echoed. A successful probe is recorded
+ * into the health registry as the provider's last-known balance.
+ */
+export async function probeProviderBalance(
+  provider: ProbeProvider,
+  deps: DoctorDeps,
+): Promise<ProviderBalanceEntry | undefined> {
+  if (provider !== "deepseek") return undefined;
+  const apiKey = await resolveProviderApiKey(deps.authStorage, provider);
+  if (!apiKey) return undefined;
+  try {
+    const res = await fetch("https://api.deepseek.com/user/balance", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as {
+      balance_infos?: Array<{ currency?: string; total_balance?: string }>;
+    };
+    const info = body.balance_infos?.[0];
+    if (!info) return undefined;
+    const amount = Number(info.total_balance);
+    if (!Number.isFinite(amount)) return undefined;
+    const balance: ProviderBalanceEntry = {
+      amount,
+      currency: info.currency ?? "USD",
+      as_of: Date.now(),
+    };
+    recordProviderBalance(provider, balance);
+    return balance;
+  } catch {
+    return undefined;
   }
 }
 

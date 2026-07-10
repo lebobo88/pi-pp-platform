@@ -26,6 +26,7 @@ import {
 import {
   JUDGE_POOLS,
   eligibleJudgeProviders,
+  isProviderAvailable,
   type GenProvider,
 } from "@pp/engine";
 import { JudgeUnavailableError } from "./errors.js";
@@ -177,6 +178,13 @@ export class JudgePolicy {
       const excluded = new Set(input.excludeProviders);
       eligible = eligible.filter((p) => !excluded.has(p));
     }
+
+    // Health-registry availability: drop providers in an active cooldown (a live
+    // rate-limit window or a quota hold observed on an earlier call this run).
+    // Purely subtractive, exactly like excludeProviders — it can only SHRINK an
+    // already-eligible pool, and an empty result still throws below (the
+    // cross-vendor invariant is never fabricated around).
+    eligible = eligible.filter((p) => isProviderAvailable(p));
 
     // Same-vendor different-model invariant: if the only same-vendor option
     // would reuse the generator's exact model id, it cannot serve — drop it.

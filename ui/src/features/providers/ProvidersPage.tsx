@@ -19,6 +19,7 @@ import { Modal } from "@/components/Modal";
 import { DataTable, type Column } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusChip, StatusDot } from "@/components/StatusChip";
+import type { StatusTone } from "@/lib/status";
 import { KeyValue } from "@/components/KeyValue";
 import { Pill, TierChip } from "@/features/common/chips";
 import { useProviders, useModels, useAvailableProviders, useProviderModels, providerModelsKey, useOAuthProviders, useProviderLoginState } from "@/api/queries/providers";
@@ -701,6 +702,33 @@ function SettingsPanel({
   );
 }
 
+/** Problem-state health chips (WS2). ok / unknown fall through to the
+ * credential-driven label below. */
+const HEALTH_CHIP: Partial<Record<NonNullable<ProviderStatus["health"]>, { tone: StatusTone; label: string }>> = {
+  rate_limited: { tone: "warn", label: "rate-limited" },
+  quota_exhausted: { tone: "fail", label: "credits exhausted" },
+  error: { tone: "warn", label: "provider error" },
+};
+
+/** Live mm:ss countdown to a rate-limit cooldown expiry; renders nothing once elapsed. */
+function CooldownCountdown({ until }: { until: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ms = new Date(until).getTime() - now;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const s = Math.ceil(ms / 1000);
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return (
+    <span className="mono text-[11px] text-warn" data-testid="provider-cooldown">
+      cooldown {mm}:{String(ss).padStart(2, "0")}
+    </span>
+  );
+}
+
 function ProviderCard({
   provider,
   envKeyHint = null,
@@ -710,23 +738,34 @@ function ProviderCard({
   envKeyHint?: string | null;
   canOAuthLogin?: boolean;
 }) {
-  // A subscription/CLI login that hasn't produced a usable key yet reads as a
+  const qc = useQueryClient();
+  // A live health problem (rate-limit / credits / error) wins the chip; otherwise
+  // a subscription/CLI login that hasn't produced a usable key reads as a
   // distinct "logged in" state — ready-ish, but not the full "ready" of a
   // resolvable credential.
-  const tone = provider.degraded
+  const healthChip = provider.health ? HEALTH_CHIP[provider.health] : undefined;
+  const tone: StatusTone = provider.degraded
     ? "warn"
-    : provider.configured
-      ? "pass"
-      : provider.logged_in
-        ? "judge"
-        : "dim";
+    : healthChip
+      ? healthChip.tone
+      : provider.configured
+        ? "pass"
+        : provider.logged_in
+          ? "judge"
+          : "dim";
   const statusLabel = provider.degraded
     ? "degraded"
-    : provider.configured
-      ? "ready"
-      : provider.logged_in
-        ? "logged in"
-        : "unconfigured";
+    : healthChip
+      ? healthChip.label
+      : provider.configured
+        ? "ready"
+        : provider.logged_in
+          ? "logged in"
+          : "unconfigured";
+  // Last-error tooltip on the chip when the registry recorded one.
+  const chipTitle = provider.last_error
+    ? `${provider.last_error}${provider.last_error_at ? ` (${new Date(provider.last_error_at).toLocaleString()})` : ""}`
+    : undefined;
   const [keyOpen, setKeyOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -736,14 +775,22 @@ function ProviderCard({
 
   return (
     <Card
-      title={<span className="flex items-center gap-2 text-ink-1"><StatusDot tone={tone} pulse={provider.configured && !provider.degraded} /> {provider.vendor}</span>}
-      actions={<StatusChip tone={tone} label={statusLabel} />}
+      title={<span className="flex items-center gap-2 text-ink-1"><StatusDot tone={tone} pulse={provider.configured && !provider.degraded && !healthChip} /> {provider.vendor}</span>}
+      actions={
+        <span className="flex items-center gap-2">
+          {provider.cooldown_until && <CooldownCountdown until={provider.cooldown_until} />}
+          <StatusChip tone={tone} label={statusLabel} title={chipTitle} />
+        </span>
+      }
     >
       <KeyValue
         labelWidth={92}
         rows={[
           { label: "api key", value: provider.has_api_key ? (provider.masked_key ?? "set") : "—", mono: true },
           { label: "configured", value: provider.configured ? "yes" : "no" },
+          ...(provider.balance
+            ? [{ label: "balance", value: `${provider.balance.amount.toFixed(2)} ${provider.balance.currency}`, mono: true }]
+            : []),
           ...(provider.logged_in ? [{ label: "cli login", value: "detected" }] : []),
           ...(envKeyHint ? [{ label: "env key", value: envKeyHint, mono: true }] : []),
         ]}
@@ -762,7 +809,14 @@ function ProviderCard({
           disabled={test.isPending}
           onClick={() =>
             test.mutate(undefined, {
-              onSuccess: (r) => setTestResult(r),
+              onSuccess: (r) => {
+                setTestResult(r);
+                // A healthy probe cleared any server-side cooldown + refreshed the
+                // balance — re-fetch provider status so the chip/countdown/balance
+                // reflect the cleared state immediately (belt-and-suspenders with
+                // the provider.status SSE frame the route also publishes).
+                if (r.ok) void qc.invalidateQueries({ queryKey: qk.providers });
+              },
               onError: (e) => toast({ tone: "error", title: "Test failed", message: e instanceof Error ? e.message : "" }),
             })
           }

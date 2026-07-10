@@ -1,10 +1,18 @@
 import { describe, it, expect, afterEach } from "vitest";
+import {
+  recordProviderError,
+  clearProviderCooldown,
+  __resetProviderHealthForTests,
+} from "@pp/engine";
 import { JudgePolicy } from "../src/judge-policy.js";
 import { JudgeUnavailableError } from "../src/errors.js";
 
 const KILL = ["PP_DISABLE_OPENAI", "PP_DISABLE_GOOGLE", "PP_DISABLE_ANTHROPIC", "PP_DISABLE_GEMINI"];
 afterEach(() => {
   for (const k of KILL) delete process.env[k];
+  // The health registry is process-global — reset it so a cooldown set by one
+  // test never leaks into another (availability is an always-on select() filter).
+  __resetProviderHealthForTests();
 });
 
 const claudeGen = { generatorProducer: "claude", generatorModel: "claude-sonnet-4-6" };
@@ -100,6 +108,37 @@ describe("JudgePolicy — failover exclusions + default_model", () => {
     expect(() =>
       jp.select("run1", { gateType: "spec", ...claudeGen, excludeProviders: ["openai", "google"] }),
     ).toThrow(JudgeUnavailableError);
+  });
+});
+
+describe("JudgePolicy — health-registry cooldown filter (WS2)", () => {
+  it("drops a provider in cooldown so re-selection lands on a live vendor", () => {
+    const jp = new JudgePolicy();
+    // Force preference toward openai, but record it rate-limited → it must be
+    // filtered out and the spec (cross-vendor) gate must pick google instead.
+    recordProviderError("openai", "rate_limited", "429 rate limit — try again in 30s");
+    const sel = jp.select("run1", { gateType: "spec", ...claudeGen, preferredProvider: "openai" });
+    expect(sel.provider).not.toBe("openai");
+    expect(sel.provider).toBe("google");
+  });
+
+  it("a quota-exhausted provider is held out until the cooldown is cleared", () => {
+    const jp = new JudgePolicy();
+    recordProviderError("google", "quota_exhausted", "insufficient_quota");
+    const held = jp.select("run1", { gateType: "spec", ...claudeGen, preferredProvider: "google" });
+    expect(held.provider).not.toBe("google");
+    // A successful probe clears the hold → google becomes selectable again.
+    clearProviderCooldown("google");
+    const cleared = jp.select("run2", { gateType: "spec", ...claudeGen, preferredProvider: "google" });
+    expect(cleared.provider).toBe("google");
+  });
+
+  it("filtering to empty still throws (never fabricate a verdict)", () => {
+    const jp = new JudgePolicy();
+    // Both non-generator vendors cooled down on a cross-vendor spec gate → halt.
+    recordProviderError("openai", "quota_exhausted", "insufficient_quota");
+    recordProviderError("google", "rate_limited", "429 too many requests");
+    expect(() => jp.select("run1", { gateType: "spec", ...claudeGen })).toThrow(JudgeUnavailableError);
   });
 });
 
