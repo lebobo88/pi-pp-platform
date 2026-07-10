@@ -126,11 +126,13 @@ async function post(base: string, path: string, body?: unknown) {
       ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
       : { method: "POST" };
   const res = await fetch(base + path, init);
+  // ANTI-PATTERN-OK: standard test JSON helper for unknown response shapes; mirrors run-control.test.ts:92
   return { status: res.status, json: (await res.json().catch(() => null)) as any };
 }
 
 async function getJson(base: string, path: string) {
   const res = await fetch(base + path);
+  // ANTI-PATTERN-OK: standard test JSON helper for unknown response shapes; mirrors run-control.test.ts:96
   return { status: res.status, json: (await res.json().catch(() => null)) as any };
 }
 
