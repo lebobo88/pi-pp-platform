@@ -1007,7 +1007,7 @@ export interface RunComparisonStageSlot {
 }
 export interface RunComparisonStageRow {
     stage_kind: string;
-    /** Alignment key within this kind (plan_index when present, else 0-based ordinal). */
+    /** Alignment key within this kind: 0-based ordinal by started_at within each (run, kind). */
     plan_order: number;
     /** Keyed by run_id. null = run has no stage for this (kind, plan_order) slot. */
     per_run: Record<string, RunComparisonStageSlot | null>;

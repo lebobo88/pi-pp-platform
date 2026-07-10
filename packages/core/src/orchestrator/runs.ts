@@ -3856,7 +3856,7 @@ export type RunComparisonStageSlot = {
 
 export type RunComparisonStageRow = {
   stage_kind: string;
-  /** Alignment key within this kind: plan_index when present, else 0-based ordinal by started_at. */
+  /** Alignment key within this kind: 0-based ordinal by started_at within each (run, kind). */
   plan_order: number;
   /** Keyed by run_id. null = this run has no stage for this (kind, plan_order) slot. */
   per_run: Record<string, RunComparisonStageSlot | null>;
@@ -4004,17 +4004,44 @@ export function getRunComparison(ids: string[]): RunComparisonResult | null {
         tokens: number;
       }>;
 
-    // Assign plan_order: use plan_index when present; else 0-based ordinal
-    // within (run_id, kind) sorted by started_at (already ASC from the query).
+    // Assign plan_order: always use 0-based per-(run, kind) ordinal sorted by
+    // started_at (already ASC from the query). plan_index is a run-GLOBAL
+    // ordinal and misaligns same-kind stages across runs that have different
+    // plan lengths or stage orderings, so it is intentionally ignored here.
     const kindOrdinal: Record<string, number> = {};
     stagesByRun[run_id] = stages.map((s) => {
-      const plan_order =
-        s.plan_index != null
-          ? s.plan_index
-          : (kindOrdinal[s.kind] = (kindOrdinal[s.kind] ?? 0));
-      if (s.plan_index == null) kindOrdinal[s.kind] = plan_order + 1;
+      const plan_order = kindOrdinal[s.kind] ?? 0;
+      kindOrdinal[s.kind] = plan_order + 1;
       return { ...s, plan_order };
     });
+  }
+
+  // ── Batch winner-verdict lookup ─────────────────────────────────────────
+  // Collect all winner_attempt_ids up-front and execute one query to get
+  // their latest non-retracted verdict outcome, eliminating the N×M per-slot
+  // individual SELECTs that previously appeared inside the alignment loop.
+  const allWinnerAttemptIds: string[] = [];
+  for (const run_id of ids) {
+    for (const s of stagesByRun[run_id] ?? []) {
+      if (s.winner_attempt_id) allWinnerAttemptIds.push(s.winner_attempt_id);
+    }
+  }
+  const winnerVerdictOutcomes = new Map<string, string>(); // attempt_id → latest outcome
+  if (allWinnerAttemptIds.length > 0) {
+    const placeholders = allWinnerAttemptIds.map(() => "?").join(",");
+    const vrows = d
+      .prepare(
+        `SELECT attempt_id, outcome FROM verdicts
+          WHERE attempt_id IN (${placeholders}) AND retracted_at IS NULL
+          ORDER BY created_at DESC`,
+      )
+      .all(allWinnerAttemptIds) as Array<{ attempt_id: string; outcome: string }>;
+    // First occurrence per attempt_id is the latest (DESC order).
+    for (const vrow of vrows) {
+      if (!winnerVerdictOutcomes.has(vrow.attempt_id)) {
+        winnerVerdictOutcomes.set(vrow.attempt_id, vrow.outcome);
+      }
+    }
   }
 
   // ── Stage alignment ───────────────────────────────────────────────────────
@@ -4050,18 +4077,11 @@ export function getRunComparison(ids: string[]): RunComparisonResult | null {
         continue;
       }
 
-      // Winning attempt's latest non-retracted verdict outcome.
-      let winningVerdictOutcome: string | null = null;
-      if (stage.winner_attempt_id) {
-        const vrow = d
-          .prepare(
-            `SELECT outcome FROM verdicts
-              WHERE attempt_id = ? AND retracted_at IS NULL
-              ORDER BY created_at DESC LIMIT 1`,
-          )
-          .get(stage.winner_attempt_id) as { outcome: string } | undefined;
-        winningVerdictOutcome = vrow?.outcome ?? null;
-      }
+      // Winning attempt's latest non-retracted verdict outcome — resolved from
+      // the pre-built map (single batched query executed above, not per-slot).
+      const winningVerdictOutcome = stage.winner_attempt_id
+        ? (winnerVerdictOutcomes.get(stage.winner_attempt_id) ?? null)
+        : null;
 
       per_run_slot[run_id] = {
         status: stage.status,
