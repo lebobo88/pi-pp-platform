@@ -22,6 +22,7 @@ import { registerProviderRoutes } from "./routes/providers.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerStatic } from "./routes/static.js";
 import type { ServerDeps } from "./deps.js";
+import { register, ppRequestDuration } from "./metrics.js";
 
 export interface BuildAppOptions {
   /** Override the @pp/core SQLite path (tests). */
@@ -96,6 +97,49 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   };
 
   registerSecurity(app, { token: opts.token ?? process.env.PP_API_TOKEN });
+
+  // ── Prometheus metrics ─────────────────────────────────────────────────────
+  // /metrics is an ops surface consumed by Prometheus scrapers, not UI clients.
+  // It is intentionally NOT included in shared/api-types.ts apiPaths because it
+  // is outside the UI wire contract and should not be proxied or typed-checked
+  // by the frontend.
+  app.get("/metrics", async (_req, reply) => {
+    reply
+      .header("Content-Type", register.contentType)
+      .send(await register.metrics());
+  });
+
+  // Stamp request start time for duration histogram.
+  app.addHook("onRequest", (req, _reply, done) => {
+    (req as unknown as Record<string, unknown>)._metricsStart = Date.now();
+    done();
+  });
+
+  // Record request duration on response; skip SSE streams and /metrics itself.
+  const SSE_ROUTES = new Set(["/api/v1/events", "/api/v1/runs/:id/events"]);
+  app.addHook("onResponse", (req, reply, done) => {
+    try {
+      const route: string = (req.routeOptions as { url?: string }).url ?? "";
+      if (route !== "/metrics" && !SSE_ROUTES.has(route)) {
+        const startMs = (req as unknown as Record<string, unknown>)._metricsStart as number | undefined;
+        if (startMs !== undefined) {
+          const durationSec = (Date.now() - startMs) / 1000;
+          ppRequestDuration.observe(
+            {
+              method: req.method,
+              route: route || "unmatched",
+              status_code: String(reply.statusCode),
+            },
+            durationSec,
+          );
+        }
+      }
+    } catch {
+      /* metrics must never break the response path */
+    }
+    done();
+  });
+  // ──────────────────────────────────────────────────────────────────────────
 
   registerLegacyRoutes(app);
   registerLibraryRoutes(app, deps);
