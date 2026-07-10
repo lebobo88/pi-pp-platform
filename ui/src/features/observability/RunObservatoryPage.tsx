@@ -299,6 +299,7 @@ export function RunObservatoryPage() {
               <PhaseTimeline
                 entries={overlay.phaseTimeline ?? []}
                 persistedTimings={tree?.phases}
+                runFinished={!!tree?.run.finished_at}
               />
               <StagePipeline
                 nodes={pipeline}

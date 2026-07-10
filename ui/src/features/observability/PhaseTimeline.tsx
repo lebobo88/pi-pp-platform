@@ -8,7 +8,9 @@
  *     from the phases DB table. Bar widths are proportional to wall_ms,
  *     making relative phase cost immediately visible.
  *
- * The persisted view takes precedence when persistedTimings is non-empty.
+ * The persisted Gantt view is shown only when BOTH persistedTimings is non-empty
+ * AND runFinished is true. A still-running run that already has ≥1 completed
+ * phase must continue showing the live dot-list, not the static Gantt.
  */
 import { Card } from "@/components/Card";
 import { cn } from "@/lib/cn";
@@ -142,15 +144,20 @@ function LiveView({ entries }: { entries: PhaseTimelineEntry[] }) {
 export function PhaseTimeline({
   entries,
   persistedTimings,
+  runFinished,
 }: {
   entries: PhaseTimelineEntry[];
-  /** v12: persisted phase-timing rows from the phases DB table. When present
-   *  and non-empty, renders a Gantt bar view instead of the live dot list. */
+  /** v12: persisted phase-timing rows from the phases DB table. */
   persistedTimings?: PhaseTiming[];
+  /** True only when the run has a finished_at timestamp (terminal state).
+   *  The Gantt view requires both this and a non-empty persistedTimings —
+   *  a live run that already has completed phases must stay on the dot-list. */
+  runFinished?: boolean;
 }) {
   const hasPersistedTimings = (persistedTimings?.length ?? 0) > 0;
+  const showGantt = hasPersistedTimings && !!runFinished;
 
-  if (!hasPersistedTimings && entries.length === 0) {
+  if (!showGantt && entries.length === 0) {
     return (
       <Card title="Phase Timeline">
         <p className="py-2 text-center text-[12px] text-ink-3">No phase data yet.</p>
@@ -160,7 +167,7 @@ export function PhaseTimeline({
 
   return (
     <Card title="Phase Timeline">
-      {hasPersistedTimings ? (
+      {showGantt ? (
         <GanttView timings={persistedTimings!} />
       ) : (
         <LiveView entries={entries} />
