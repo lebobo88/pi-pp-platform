@@ -1,11 +1,61 @@
 /**
  * GateFeed — typed live event feed, newest-first.
- * Renders the overlay.gateEvents ring (capped at 200).
+ *
+ * For completed runs (`isFinished=true`) the feed is hydrated from the REST
+ * gate-history endpoint (GET /api/v1/runs/:id/gates) which covers all gate
+ * types recorded in the DB: TDD checks, artifact validations, verdicts, and
+ * smoke results. For live runs the SSE-driven `events` prop is used instead.
  */
 import { Card } from "@/components/Card";
 import { cn } from "@/lib/cn";
 import type { GateEvent, GateEventKind } from "@/stores/liveRunStore";
+import type { GateHistoryEntry } from "@shared/api-types";
+import { useRunGateHistory } from "@/api/queries/runs";
 import { shortId } from "@/lib/format";
+
+/* ── Map gate history entries to GateEvent for rendering ─────────────── */
+
+function historyEntryToGateEvent(entry: GateHistoryEntry, index: number): GateEvent {
+  switch (entry.gate) {
+    case "tdd_check":
+      return {
+        seq: index,
+        at: entry.ts,
+        kind: "validation",
+        stageId: entry.stage_id,
+        outcome: entry.status,
+        detail: `TDD ${entry.phase}-phase — ${entry.passed_count ?? 0} passed, ${entry.failed_count ?? 0} failed`,
+      };
+    case "artifact_validation":
+      return {
+        seq: index,
+        at: entry.ts,
+        kind: "validation",
+        stageId: entry.stage_id,
+        outcome: entry.status,
+        detail: `${entry.validator_kind}${entry.reason ? `: ${entry.reason}` : ""}`,
+      };
+    case "verdict":
+      return {
+        seq: index,
+        at: entry.ts,
+        kind: "verdict",
+        stageId: entry.stage_id,
+        attemptId: entry.attempt_id,
+        outcome: entry.retracted ? "retracted" : entry.outcome,
+        detail: `${entry.judge_producer} / ${entry.judge_model_id}${entry.cross_vendor ? " [cross-vendor]" : ""}`,
+      };
+    case "smoke":
+      return {
+        seq: index,
+        at: entry.ts,
+        kind: "smoke",
+        stageId: entry.stage_id,
+        outcome: entry.status,
+        detail: `candidate ${entry.candidate_index}${entry.reason ? `: ${entry.reason}` : ""}`,
+      };
+  }
+}
 
 /* ── Kind chip colors ─────────────────────────────────────────────────── */
 
@@ -40,9 +90,9 @@ function KindChip({ kind }: { kind: GateEventKind }) {
 
 function OutcomeChip({ outcome }: { outcome: string }) {
   const isPass =
-    outcome === "ok" || outcome === "pass" || outcome === "updated";
-  const isFail = outcome === "fail" || outcome === "error";
-  const isWarn = outcome === "retry" || outcome === "surfaced" || outcome === "revise";
+    outcome === "ok" || outcome === "pass" || outcome === "updated" || outcome === "verified";
+  const isFail = outcome === "fail" || outcome === "error" || outcome === "violation";
+  const isWarn = outcome === "retry" || outcome === "surfaced" || outcome === "revise" || outcome === "retracted";
 
   const color = isPass
     ? "var(--pass)"
@@ -138,24 +188,36 @@ function GateEventRow({ ev }: GateEventRowProps) {
 
 interface GateFeedProps {
   events: GateEvent[];
+  /** Run id for REST hydration on completed runs. */
+  runId?: string;
+  /** When true, hydrate from GET /api/v1/runs/:id/gates instead of the SSE ring. */
+  isFinished?: boolean;
 }
 
-export function GateFeed({ events }: GateFeedProps) {
-  // Render newest-first; cap at ring size (200)
-  const sorted = [...events].reverse().slice(0, 200);
+export function GateFeed({ events, runId, isFinished }: GateFeedProps) {
+  const { data: gateHistory } = useRunGateHistory(runId, !!isFinished);
+
+  // For finished runs, prefer the REST gate history (all gate types, complete).
+  // For live runs, use the SSE-driven event ring (newest-first, capped at 200).
+  const displayEvents: GateEvent[] =
+    isFinished && gateHistory
+      ? gateHistory.map(historyEntryToGateEvent).reverse().slice(0, 200)
+      : [...events].reverse().slice(0, 200);
+
+  const totalCount = isFinished && gateHistory ? gateHistory.length : events.length;
 
   return (
     <Card
-      title={`Gate Feed (${events.length})`}
+      title={`Gate Feed (${totalCount})`}
       flush
     >
-      {sorted.length === 0 ? (
+      {displayEvents.length === 0 ? (
         <div className="px-3 py-4 text-center text-[12px] text-ink-3">
           No events yet.
         </div>
       ) : (
         <div className="max-h-[480px] overflow-y-auto px-3">
-          {sorted.map((ev, i) => (
+          {displayEvents.map((ev, i) => (
             <GateEventRow key={`${ev.seq}-${i}`} ev={ev} />
           ))}
         </div>

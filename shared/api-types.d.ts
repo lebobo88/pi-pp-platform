@@ -979,6 +979,66 @@ export interface HarnessSettings {
         model: string;
     }>;
 }
+/** A TDD pre/post execution result from the tdd_checks table. */
+export type TddCheckGateEntry = {
+    gate: "tdd_check";
+    id: string;
+    stage_id: string;
+    phase: string;
+    mode: string;
+    test_runner: string;
+    status: string;
+    passed_count: number | null;
+    failed_count: number | null;
+    duration_ms: number;
+    reason: string | null;
+    ts: string;
+};
+/** A structural artifact validator result from the artifact_validations table. */
+export type ArtifactValidationGateEntry = {
+    gate: "artifact_validation";
+    id: string;
+    stage_id: string;
+    artifact_id: string | null;
+    validator_kind: string;
+    artifact_kind: string | null;
+    artifact_path: string;
+    status: string;
+    duration_ms: number;
+    reason: string | null;
+    ts: string;
+};
+/** A judge verdict from the verdicts table (joined through attempts → stages). */
+export type VerdictGateEntry = {
+    gate: "verdict";
+    id: string;
+    stage_id: string;
+    attempt_id: string;
+    judge_producer: string;
+    judge_model_id: string;
+    rubric_id: string | null;
+    /** "pass" | "fail" | "revise" */
+    outcome: VerdictOutcome;
+    cross_vendor: boolean;
+    /** True when this verdict was retracted (retracted_at IS NOT NULL). */
+    retracted: boolean;
+    ts: string;
+};
+/** A smoke/assertion result extracted from stages.notes_json.smoke_results. */
+export type SmokeGateEntry = {
+    gate: "smoke";
+    stage_id: string;
+    candidate_index: number;
+    status: string;
+    reason: string | null;
+    ts: string;
+};
+/**
+ * One entry in `GET /api/v1/runs/:id/gates` — discriminated by `gate`.
+ * Unified, timestamp-ascending history of every gate check for a run:
+ * TDD pre/post checks, artifact validations, judge verdicts, and smoke results.
+ */
+export type GateHistoryEntry = TddCheckGateEntry | ArtifactValidationGateEntry | VerdictGateEntry | SmokeGateEntry;
 /** Non-2xx response body. `details` carries per-field errors on 422. */
 export interface ApiError {
     error: string;
@@ -1224,6 +1284,8 @@ export declare const apiPaths: {
      *  the bearer as `?token=` — EventSource cannot send headers. */
     readonly runEvents: (runId: string) => string;
     readonly runEventLog: (runId: string) => string;
+    /** GET — unified gate history (tdd_checks, artifact_validations, verdicts, smoke) for a run; 404 when run unknown. */
+    readonly runGates: (runId: string) => string;
     readonly runReplay: (runId: string) => string;
     readonly runMissability: (runId: string) => string;
     readonly runBorda: (runId: string) => string;

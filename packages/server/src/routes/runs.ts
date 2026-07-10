@@ -6,7 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, resolve, sep } from "node:path";
-import { listRuns, getRun, getEventLog, buildReplayBundle, db, type RunStatus } from "@pp/core";
+import { listRuns, getRun, getEventLog, getGateHistory, buildReplayBundle, db, type RunStatus } from "@pp/core";
 import { V1 } from "../deps.js";
 
 function contentKind(path: string): string {
@@ -55,6 +55,13 @@ export function registerRunRoutes(app: FastifyInstance): void {
       type: q.type,
       limit: q.limit != null ? Number(q.limit) : undefined,
     });
+  });
+
+  app.get(`${V1}/runs/:id/gates`, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const entries = getGateHistory(id);
+    if (entries === null) return reply.code(404).send({ error: `run ${id} not found` });
+    return entries;
   });
 
   app.get(`${V1}/runs/:id/missability`, async (req) => {

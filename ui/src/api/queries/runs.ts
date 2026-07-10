@@ -11,6 +11,7 @@ import {
   type MissabilityCheckRow,
   type CompletionReadinessResponse,
   type EventLogEntry,
+  type GateHistoryEntry,
 } from "@shared/api-types";
 
 export interface RunsFilter {
@@ -70,6 +71,19 @@ export function useRunEventLog(runId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: qk.runEventLog(runId ?? ""),
     queryFn: ({ signal }) => api.get<EventLogEntry[]>(apiPaths.runEventLog(runId!), { signal }),
+    enabled: !!runId && enabled,
+  });
+}
+
+/**
+ * Unified gate history for a run — fetched from GET /api/v1/runs/:id/gates.
+ * Only enabled when `enabled` is true (gate it on run.finished_at, like
+ * useRunEventLog, so live runs keep using the SSE stream).
+ */
+export function useRunGateHistory(runId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.runGateHistory(runId ?? ""),
+    queryFn: ({ signal }) => api.get<GateHistoryEntry[]>(apiPaths.runGates(runId!), { signal }),
     enabled: !!runId && enabled,
   });
 }
