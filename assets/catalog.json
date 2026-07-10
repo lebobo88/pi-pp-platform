@@ -1,6 +1,6 @@
 {
   "_comment": "Bundled default provider/model catalog — the single source of truth for which providers exist, their models + pricing, the generation ladders, and the judge pool. A user override at ~/.pi-pp-platform/catalog.json (dir honors PP_PLATFORM_DIR) deep-merges over this default, winning per provider-id and per model-id. An absent/partial user file reproduces the historical 3-vendor behavior for everything it does not mention. Keep in sync with assets/catalog.json.",
-  "_updated": "2026-07-03",
+  "_updated": "2026-07-10",
   "version": 1,
   "default_ladder": "claude",
   "generation_ladders": {
@@ -96,27 +96,33 @@
       "models": {
         "claude-fable-5": {
           "input_per_1m": 10,
-          "output_per_1m": 50
+          "output_per_1m": 50,
+          "context_window": 200000
         },
         "claude-opus-4-7": {
           "input_per_1m": 5,
-          "output_per_1m": 25
+          "output_per_1m": 25,
+          "context_window": 200000
         },
         "claude-opus-4-6": {
           "input_per_1m": 5,
-          "output_per_1m": 25
+          "output_per_1m": 25,
+          "context_window": 200000
         },
         "claude-sonnet-4-6": {
           "input_per_1m": 3,
-          "output_per_1m": 15
+          "output_per_1m": 15,
+          "context_window": 200000
         },
         "claude-haiku-4-5-20251001": {
           "input_per_1m": 1,
-          "output_per_1m": 5
+          "output_per_1m": 5,
+          "context_window": 200000
         },
         "claude-haiku-4-5": {
           "input_per_1m": 1,
-          "output_per_1m": 5
+          "output_per_1m": 5,
+          "context_window": 200000
         }
       }
     },

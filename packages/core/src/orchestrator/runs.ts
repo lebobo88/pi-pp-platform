@@ -461,6 +461,17 @@ export type RecordAttemptInput = {
   agent_type?: string;
   /** Provider id resolved for the generator model (e.g. "github-copilot"). Omit when unresolvable. */
   provider?: string;
+  /**
+   * v13: context-window usage observability. Tokens consumed as context
+   * (input + cacheRead + cacheWrite) for this call. Nullable — omit when
+   * usage data is unavailable.
+   */
+  context_used?: number;
+  /**
+   * v13: catalog context_window for the model at generation time. Nullable —
+   * omit when the model is absent from every known catalog.
+   */
+  context_max?: number;
 };
 export type RecordAttemptOutput = { attempt_id: string };
 
@@ -530,8 +541,10 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
         `INSERT INTO attempts(
           id, stage_id, producer, model_id, prompt_hash, artifact_path,
           tokens_in, tokens_out, cost_usd, wall_ms,
-          retry_index, parent_attempt_id, status, attempted_tier, notes_json, agent_type, provider, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          retry_index, parent_attempt_id, status, attempted_tier, notes_json, agent_type, provider,
+          context_used, context_max,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -551,6 +564,8 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
         input.notes ? JSON.stringify(input.notes) : null,
         input.agent_type ?? null,
         (input.provider && input.provider.trim()) ? input.provider : null,
+        input.context_used ?? null,
+        input.context_max ?? null,
         now()
       );
 

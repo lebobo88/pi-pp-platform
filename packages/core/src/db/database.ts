@@ -240,6 +240,17 @@ function applyMigrations(conn: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_phases_run ON phases(run_id);
   `);
 
+  // v13: context-window usage observability (Opportunity 5). Nullable, additive-only.
+  // context_used = input + cacheRead + cacheWrite; context_max = catalog context_window.
+  // NULL on legacy rows and on attempts where the model's context window is unknown.
+  const attemptColsV13 = conn.prepare("PRAGMA table_info(attempts)").all() as Array<{ name: string }>;
+  if (!attemptColsV13.some(c => c.name === "context_used")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN context_used INTEGER");
+  }
+  if (!attemptColsV13.some(c => c.name === "context_max")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN context_max INTEGER");
+  }
+
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.
   conn.exec(`

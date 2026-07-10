@@ -235,6 +235,24 @@ export interface PiModelRefreshResult {
 }
 
 /**
+ * Context-window size (tokens) for a model id. Checked against pi's builtin
+ * catalog first (highest fidelity), then the platform catalog (covers
+ * custom/extended entries such as the anthropic ladder models with explicit
+ * context_window set in packages/core/catalog.json). Returns undefined when
+ * the window is not known — callers should degrade gracefully.
+ */
+export function contextWindowForModel(modelId: string): number | undefined {
+  const piModel = allPiModels().find((m) => m.id === modelId);
+  if (piModel?.context_window != null) return piModel.context_window;
+  const cat = catalog();
+  for (const p of Object.values(cat.providers)) {
+    const entry = p.models[modelId];
+    if (entry?.context_window != null) return entry.context_window;
+  }
+  return undefined;
+}
+
+/**
  * Best-effort live model refresh for a dynamic provider (fetches the latest
  * model list from the endpoint when a credential is present). Returns the
  * refreshed model list with `refreshed: true`, or the static list with

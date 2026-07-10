@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS attempts (
   -- NULL on non-claude producers and on legacy rows; the daemon does not
   -- enforce — recorded for cost-by-tier analytics and replay determinism.
   attempted_tier      TEXT,
+  -- v13: context-window usage observability (Opportunity 5). Both nullable;
+  -- absent on legacy rows and when the model's context window is unknown.
+  -- context_used = input + cacheRead + cacheWrite (prompt tokens for this call).
+  -- context_max  = catalog context_window for the model at generation time.
+  context_used        INTEGER,
+  context_max         INTEGER,
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_stage  ON attempts(stage_id);

@@ -7,6 +7,7 @@
  */
 import type { AssistantMessage, Model, Api, Usage } from "@earendil-works/pi-ai/compat";
 import { computeCost, knownProviderIds, normalizeProviderAlias } from "@pp/core";
+import { contextWindowForModel } from "./models.js";
 
 /**
  * An open provider id (pi's provider space). Historically this was the closed
@@ -49,6 +50,17 @@ export interface GenResult {
   files_changed?: boolean;
   /** Coding sessions: files written by the text-materializer fallback (0 = fallback unused). */
   materialized_files?: number;
+  /**
+   * Tokens consumed as context in this call (input + cacheRead + cacheWrite).
+   * Proxy for how much of the context window this attempt used. Undefined when
+   * usage data was unavailable.
+   */
+  context_used_tokens?: number;
+  /**
+   * Maximum context-window size for the model, sourced from the catalog.
+   * Undefined when the model is not present in any catalog.
+   */
+  context_max_tokens?: number;
 }
 
 /**
@@ -97,6 +109,7 @@ export function buildGenResult<TApi extends Api>(
   const tokens_out = usage.output;
   const catalogCost = usage.cost?.total ?? 0;
   const cost_usd = catalogCost > 0 ? catalogCost : computeCost(model.id, tokens_in, tokens_out);
+  const context_max_tokens = contextWindowForModel(model.id);
   return {
     text: overrides.text ?? messageText(msg),
     parsed: overrides.parsed,
@@ -110,6 +123,8 @@ export function buildGenResult<TApi extends Api>(
     stop_reason: overrides.stop_reason ?? msg.stopReason,
     session_file: overrides.session_file,
     usage_detail: usage,
+    context_used_tokens: tokens_in > 0 ? tokens_in : undefined,
+    context_max_tokens,
   };
 }
 
@@ -141,6 +156,7 @@ export function buildGenResultFromTotals<TApi extends Api>(
 ): GenResult {
   const cost_usd =
     totals.cost_usd > 0 ? totals.cost_usd : computeCost(model.id, totals.tokens_in, totals.tokens_out);
+  const context_max_tokens = contextWindowForModel(model.id);
   return {
     text: fields.text,
     parsed: fields.parsed,
@@ -157,5 +173,7 @@ export function buildGenResultFromTotals<TApi extends Api>(
     tool_call_count: fields.tool_call_count,
     files_changed: fields.files_changed,
     materialized_files: fields.materialized_files,
+    context_used_tokens: totals.tokens_in > 0 ? totals.tokens_in : undefined,
+    context_max_tokens,
   };
 }

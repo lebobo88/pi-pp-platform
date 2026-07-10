@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS attempts (
   retry_index         INTEGER NOT NULL DEFAULT 0,          -- 0 = first try, 1 = reflexion retry
   parent_attempt_id   TEXT,                                 -- non-null when this is a retry
   status              TEXT NOT NULL,                       -- ok | error | timeout
+  -- v13: context-window usage observability (Opportunity 5). Both nullable;
+  -- absent on legacy rows and when the model's context window is unknown.
+  -- context_used = input + cacheRead + cacheWrite (prompt tokens for this call).
+  -- context_max  = catalog context_window for the model at generation time.
+  context_used        INTEGER,
+  context_max         INTEGER,
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_stage  ON attempts(stage_id);

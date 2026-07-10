@@ -22,6 +22,8 @@ import { log } from "../util/logger.js";
 export interface CatalogModel {
   input_per_1m: number;
   output_per_1m: number;
+  /** Context window size in tokens. Used by the observability layer to compute fill %. */
+  context_window?: number;
   /** True when pi does NOT ship this model and it must be projected into a custom models.json. */
   custom?: boolean;
 }

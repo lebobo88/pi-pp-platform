@@ -125,6 +125,10 @@ export interface AttemptRow {
   created_at: string;
   /** Provider id that served this attempt's model (e.g. "github-copilot"). Absent on historical rows. */
   provider?: string;
+  /** v13: prompt tokens consumed in this call (context fill numerator). NULL/absent on legacy rows. */
+  context_used?: number | null;
+  /** v13: catalog context_window for the model at generation time (context fill denominator). NULL/absent on legacy rows. */
+  context_max?: number | null;
 }
 
 /** `verdicts` table row. */
@@ -1243,6 +1247,12 @@ export type AttemptCompletedEvent = SseEnvelope<
     zero_change?: boolean;
     /** Provider id resolved for this attempt's model — same as AttemptStartedEvent.provider for convenience. */
     provider?: string;
+    /** v13: prompt tokens consumed (context fill numerator). Absent when unknown. */
+    context_used_tokens?: number | null;
+    /** v13: catalog context_window for the model (context fill denominator). Absent when unknown. */
+    context_max_tokens?: number | null;
+    /** v13: context fill fraction, rounded to 3 decimals (used/max). Absent when either operand is unknown. */
+    context_pct?: number | null;
   }
 >;
 export type VerdictRecordedEvent = SseEnvelope<
@@ -1311,6 +1321,22 @@ export type PhaseCompletedEvent = SseEnvelope<
   { phase: string; wall_ms: number }
 >;
 
+/**
+ * Emitted by the supervisor when an attempt's context fill fraction exceeds 0.75
+ * (context_pct > 75%). Mirrors the budget.tripwire pattern: fire once per
+ * attempt and degrade gracefully when context data is absent.
+ */
+export type ContextWarningEvent = SseEnvelope<
+  "context.warning",
+  {
+    stage_id: string;
+    attempt_id: string;
+    context_pct: number;
+    context_used_tokens: number;
+    context_max_tokens: number;
+  }
+>;
+
 export type RunSseEvent =
   | RunStartedEvent
   | RunContextEvent
@@ -1329,7 +1355,8 @@ export type RunSseEvent =
   | MissabilityResultEvent
   | BudgetTickEvent
   | RunFinalizedEvent
-  | PhaseCompletedEvent;
+  | PhaseCompletedEvent
+  | ContextWarningEvent;
 
 /** Any SSE event across either stream. */
 export type EventLogEntry = RunSseEvent;
@@ -1373,6 +1400,7 @@ export const RUN_SSE_EVENT_TYPES: readonly RunSseEvent["type"][] = [
   "budget.tick",
   "run.finalized",
   "phase.completed",
+  "context.warning",
 ];
 
 /* ────────────────────────────────────────────────────────────────────────

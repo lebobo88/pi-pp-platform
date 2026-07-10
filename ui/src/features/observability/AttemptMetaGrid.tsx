@@ -11,8 +11,14 @@ import {
   Pill,
 } from "@/features/common/chips";
 import { formatUsd, formatTokens, shortId } from "@/lib/format";
+import { Meter, type MeterTick } from "@/components/Meter";
 import type { AttemptMeta, LiveRunOverlay } from "@/stores/liveRunStore";
 import type { VerdictOutcome } from "@shared/api-types";
+
+const CONTEXT_METER_TICKS: MeterTick[] = [
+  { at: 0.5, tone: "warn", label: "50% context" },
+  { at: 0.75, tone: "fail", label: "75% context" },
+];
 
 function ZeroBadge() {
   return (
@@ -165,6 +171,20 @@ function AttemptMetaCard({
           </>
         )}
       </div>
+
+      {/* Context fill meter — rendered only when context data is present */}
+      {meta.contextUsedTokens != null && meta.contextMaxTokens != null && meta.contextMaxTokens > 0 && (
+        <div className="mt-2">
+          <Meter
+            label="context"
+            value={meta.contextUsedTokens}
+            max={meta.contextMaxTokens}
+            readout={`${((meta.contextUsedTokens / meta.contextMaxTokens) * 100).toFixed(1)}%`}
+            ticks={CONTEXT_METER_TICKS}
+            height={5}
+          />
+        </div>
+      )}
 
       {/* Zero-change badge */}
       {meta.zeroChange && (

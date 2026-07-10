@@ -83,6 +83,12 @@ export type AttemptMeta = {
   zeroChange?: boolean;
   /** Provider id resolved for this attempt's model (e.g. "github-copilot"). Absent on historical rows. */
   provider?: string;
+  /** v13: prompt tokens consumed in this call (context fill numerator). */
+  contextUsedTokens?: number;
+  /** v13: catalog context_window for the model (context fill denominator). */
+  contextMaxTokens?: number;
+  /** v13: context fill fraction 0–1, rounded to 3 decimals. */
+  contextPct?: number;
   status: "running" | "ok";
 };
 
@@ -471,6 +477,9 @@ class LiveRunStore {
             ? { materializedFiles: d.materialized_files.length }
             : {}),
           ...(d.zero_change != null ? { zeroChange: d.zero_change } : {}),
+          ...(d.context_used_tokens != null ? { contextUsedTokens: d.context_used_tokens } : {}),
+          ...(d.context_max_tokens != null ? { contextMaxTokens: d.context_max_tokens } : {}),
+          ...(d.context_pct != null ? { contextPct: d.context_pct } : {}),
           status: "ok",
         };
         // provider: never OVERWRITE an existing (started-frame) value; only

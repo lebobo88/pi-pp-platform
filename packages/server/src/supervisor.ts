@@ -379,6 +379,42 @@ export class RunSupervisor {
       },
     });
 
+    // context.warning — mirrors the budget-tripwire pattern: fire once per
+    // attempt when context fill exceeds 75%. Graceful-degradation: emit only
+    // when the completed frame carries both context_used_tokens and
+    // context_max_tokens (absent when the model's window is unknown).
+    const d = ev.data as {
+      stage_id?: string;
+      attempt_id?: string;
+      context_pct?: number | null;
+      context_used_tokens?: number | null;
+      context_max_tokens?: number | null;
+    };
+    if (
+      d.context_pct != null &&
+      d.context_pct > 0.75 &&
+      d.context_used_tokens != null &&
+      d.context_max_tokens != null &&
+      d.stage_id &&
+      d.attempt_id
+    ) {
+      runLog?.warn(
+        { stage_id: d.stage_id, attempt_id: d.attempt_id, context_pct: d.context_pct },
+        "context.warning: attempt context fill > 75%",
+      );
+      this.serverBus.publish({
+        type: "context.warning",
+        run_id: ev.run_id,
+        data: {
+          stage_id: d.stage_id,
+          attempt_id: d.attempt_id,
+          context_pct: d.context_pct,
+          context_used_tokens: d.context_used_tokens,
+          context_max_tokens: d.context_max_tokens,
+        },
+      });
+    }
+
     for (const cap of getBudgetCaps()) {
       if (!cap.limit_usd || cap.limit_usd <= 0) continue;
       const scope = cap.scope === "run" ? runScope : cap.scope === "day" ? dayScope : null;

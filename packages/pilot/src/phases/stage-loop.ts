@@ -557,6 +557,8 @@ async function generate(
     // Bind the row to the pre-minted id so the streamed attempt.output frames
     // and this persisted attempt share one id (constraint: they MUST match).
     attempt_slot_id: attemptSlotId,
+    context_used: genResult.context_used_tokens,
+    context_max: genResult.context_max_tokens,
   });
 
   // Record the engine session (transcript file) for replay/audit when one exists
@@ -572,6 +574,13 @@ async function generate(
     });
   }
 
+  const contextPct =
+    genResult.context_used_tokens != null &&
+    genResult.context_max_tokens != null &&
+    genResult.context_max_tokens > 0
+      ? Math.round((genResult.context_used_tokens / genResult.context_max_tokens) * 1000) / 1000
+      : undefined;
+
   emit(
     ctx,
     "attempt.completed",
@@ -586,6 +595,9 @@ async function generate(
       materialized_files: genResult.materialized_files,
       zero_change: zeroChange,
       provider: genProvider || undefined,
+      context_used_tokens: genResult.context_used_tokens,
+      context_max_tokens: genResult.context_max_tokens,
+      context_pct: contextPct,
     },
     { stage_id, attempt_id: attempt.attempt_id },
   );

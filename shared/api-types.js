@@ -62,6 +62,7 @@ exports.RUN_SSE_EVENT_TYPES = [
     "budget.tick",
     "run.finalized",
     "phase.completed",
+    "context.warning",
 ];
 /* ────────────────────────────────────────────────────────────────────────
  * REST path builder
