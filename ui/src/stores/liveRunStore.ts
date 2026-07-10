@@ -814,6 +814,31 @@ class LiveRunStore {
     }
   }
 
+  /**
+   * Reset a single run's overlay to its fresh state. Does NOT touch log
+   * buffers — call clearLogs() separately with the attempt ids to clear.
+   * Used by ReplayPlayer before re-ingesting from the beginning.
+   */
+  resetRun(runId: string): void {
+    this.overlays.delete(runId);
+    this.pendingStartedMeta.delete(runId);
+    this.dirtyOverlays.add(runId);
+    this.schedule();
+  }
+
+  /**
+   * Clear the log buffers for the given attempt ids.
+   * Used by ReplayPlayer before re-ingesting from the beginning so that
+   * attempt.output chunks are not double-appended.
+   */
+  clearLogs(attemptIds: string[]): void {
+    for (const id of attemptIds) {
+      this.logs.delete(id);
+      this.dirtyLogs.add(id);
+    }
+    if (attemptIds.length > 0) this.schedule();
+  }
+
   /** Test / teardown helper. */
   reset(): void {
     this.logs.clear();
