@@ -19,6 +19,7 @@ import type { Engine } from "@pp/engine";
 import { budgetStatus, getBudgetCaps, touchLastRun, localDayKey, db, getFinalizationArtifacts, type RunStatus } from "@pp/core";
 import type { BusPort } from "./bus.js";
 import type { FastifyBaseLogger } from "fastify";
+import { ppActiveRuns, ppBudgetTripwires } from "./metrics.js";
 
 export interface StartRunInput {
   projectPath: string;
@@ -161,6 +162,7 @@ export class RunSupervisor {
           : this.logger;
         if (res.run_id) {
           this.active.delete(res.run_id);
+          try { ppActiveRuns.dec(); } catch { /* ignore */ }
           runLog?.info({ status: res.status, abortReason: res.abort_reason }, "Run finalized");
         }
         try {
@@ -211,6 +213,7 @@ export class RunSupervisor {
         projectPath: input.projectPath,
         firedTripwires: new Set(),
       });
+      try { ppActiveRuns.inc(); } catch { /* ignore */ }
       this.logger?.child({ run_id }).info({ mode: input.mode, project: input.projectPath }, "Run started");
     }
     return { run_id, queued: wasQueued };
@@ -265,6 +268,7 @@ export class RunSupervisor {
       projectPath: row.project_path,
       firedTripwires: new Set(),
     });
+    try { ppActiveRuns.inc(); } catch { /* ignore */ }
 
     const wasQueued = this.running >= this.max;
     if (wasQueued) {
@@ -331,6 +335,7 @@ export class RunSupervisor {
       throw err;
     } finally {
       this.active.delete(runId);
+      try { ppActiveRuns.dec(); } catch { /* ignore */ }
       this.release();
     }
   }
@@ -433,6 +438,7 @@ export class RunSupervisor {
           run_id: ev.run_id,
           data: { scope: cap.scope, pct: 100, limit_usd: cap.limit_usd, cost_usd: cost, action: "block" },
         });
+        try { ppBudgetTripwires.inc({ action: "block" }); } catch { /* ignore */ }
         // Hard cap: abort the run.
         entry.abortController.abort();
       } else if (pct >= cap.warn_pct) {
@@ -444,6 +450,7 @@ export class RunSupervisor {
           run_id: ev.run_id,
           data: { scope: cap.scope, pct: 80, limit_usd: cap.limit_usd, cost_usd: cost, action: "downgrade" },
         });
+        try { ppBudgetTripwires.inc({ action: "downgrade" }); } catch { /* ignore */ }
       }
     }
   }

@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { ServerResponse } from "node:http";
 import { V1, type ServerDeps } from "../deps.js";
 import type { SseFrame } from "../bus.js";
+import { ppSseConnections } from "../metrics.js";
 
 function writeFrame(raw: ServerResponse, frame: SseFrame): void {
   raw.write(`id: ${frame.seq}\n`);
@@ -28,6 +29,8 @@ function stream(req: FastifyRequest, reply: FastifyReply, deps: ServerDeps, runI
     "X-Accel-Buffering": "no",
   });
 
+  const streamLabel = runId === undefined ? "global" : "run";
+  try { ppSseConnections.inc({ stream: streamLabel }); } catch { /* ignore */ }
   req.log.info({ runId }, "SSE stream opened");
 
   // Replay from the ring buffer on Last-Event-ID resume.
@@ -56,8 +59,12 @@ function stream(req: FastifyRequest, reply: FastifyReply, deps: ServerDeps, runI
     }
   }, 15_000);
 
+  let cleaned = false;
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     req.log.info({ runId }, "SSE stream closed");
+    try { ppSseConnections.dec({ stream: streamLabel }); } catch { /* ignore */ }
     clearInterval(heartbeat);
     unsubscribe();
   };

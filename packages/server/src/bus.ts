@@ -9,6 +9,7 @@
  */
 
 import { db } from "@pp/core";
+import { ppEventsPublished } from "./metrics.js";
 
 /** One SSE frame. `seq` is monotonic per bus; `run_id` present on run-scoped frames. */
 export interface SseFrame<TData = unknown> {
@@ -97,6 +98,7 @@ export function createInMemoryBus(ringSize = DEFAULT_RING): BusPort {
         data: scrubEventValue(input.data),
       };
       persistFrame(frame);
+      try { ppEventsPublished.inc(); } catch { /* metrics must not break the bus */ }
       ring.push(frame);
       if (ring.length > ringSize) ring.shift();
       for (const fn of subscribers) {
