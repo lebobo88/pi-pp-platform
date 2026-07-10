@@ -29,6 +29,7 @@ import {
   ensureAgentsAndClaudeMd,
   ensureTaxonomyBlueprint,
   persistStagePlan,
+  recordPhaseTiming,
   type TeamSpec,
   type Forum,
   type Scope,
@@ -135,18 +136,20 @@ export class RunPilot {
     const stages: StageReport[] = [];
     try {
       // ── Phases 1/2/4: triage refinement, profile snapshot, taxonomy. ───────
-      await runTriagePhase(ctx, o.scopeOverride);
-      runProfilePhase(ctx);
-      // Assemble the effective-ladder override now that the profile is resolved:
-      // per-run request override (highest) merged OVER the profile's ladder /
-      // tier_pools. Threaded through every tier resolution in the stage loop.
-      ctx.ladderOverride = mergeLadderOverride(
-        ctx.profile?.ladder,
-        ctx.profile?.tier_pools,
-        o.ladderOverride,
-        o.tierPoolsOverride,
-      );
-      await runTaxonomyPhase(ctx);
+      await phaseTimer(ctx, "triage", () => runTriagePhase(ctx, o.scopeOverride));
+      await phaseTimer(ctx, "profile", () => {
+        runProfilePhase(ctx);
+        // Assemble the effective-ladder override now that the profile is resolved:
+        // per-run request override (highest) merged OVER the profile's ladder /
+        // tier_pools. Threaded through every tier resolution in the stage loop.
+        ctx.ladderOverride = mergeLadderOverride(
+          ctx.profile?.ladder,
+          ctx.profile?.tier_pools,
+          o.ladderOverride,
+          o.tierPoolsOverride,
+        );
+      });
+      await phaseTimer(ctx, "taxonomy", () => runTaxonomyPhase(ctx));
 
       // ── Phase 5: ensure AGENTS.md + taxonomy blueprint + seed tier_decisions.
       ensureAgentsAndClaudeMd(ctx.projectPath);
@@ -175,35 +178,37 @@ export class RunPilot {
         // slot with no stage row" rather than guessing from `kind` alone.
         plan.stages.forEach((s, i) => { s.planIndex = i; });
         persistStagePlan(ctx.run_id, plan.stages);
-        for (const stage of plan.stages) {
-          if (ctx.signal?.aborted) {
-            ctx.finalStatus = "aborted";
-            ctx.abortReason = "aborted by signal";
-            break;
+        await phaseTimer(ctx, "stage_loop", async () => {
+          for (const stage of plan.stages) {
+            if (ctx.signal?.aborted) {
+              ctx.finalStatus = "aborted";
+              ctx.abortReason = "aborted by signal";
+              break;
+            }
+            const outcome = await dispatchStage(ctx, stage);
+            stages.push({ kind: stage.kind, outcome });
+            if (outcome === "aborted") {
+              ctx.finalStatus = "aborted";
+              break;
+            }
+            if (outcome === "surfaced") {
+              ctx.finalStatus = "surfaced";
+              break; // surface halts the pipeline
+            }
           }
-          const outcome = await dispatchStage(ctx, stage);
-          stages.push({ kind: stage.kind, outcome });
-          if (outcome === "aborted") {
-            ctx.finalStatus = "aborted";
-            break;
-          }
-          if (outcome === "surfaced") {
-            ctx.finalStatus = "surfaced";
-            break; // surface halts the pipeline
-          }
-        }
+        });
       }
 
       // ── Phases 7/8: missability + master-plan (complete path only). ────────
       if (ctx.finalStatus === "complete") {
-        const missability = runMissabilityPhase(ctx);
+        const missability = await phaseTimer(ctx, "missability", () => runMissabilityPhase(ctx));
         if (missability.passed) {
-          runMasterPlanPhase(ctx);
+          await phaseTimer(ctx, "master_plan", () => runMasterPlanPhase(ctx));
         }
       }
 
       // ── Phase 9: finalize (+ autogenesis). ─────────────────────────────────
-      await runFinalizePhase(ctx, stages);
+      await phaseTimer(ctx, "finalize", () => runFinalizePhase(ctx, stages));
     } catch (err) {
       // AbortSignal → aborted; anything else → crashed.
       const aborted = ctx.signal?.aborted || (err as Error)?.name === "AbortError";
@@ -469,6 +474,33 @@ function buildCliFlags(o: RunPilotOptions): Record<string, unknown> | null {
     flags.tier_pools_override = o.tierPoolsOverride;
   }
   return Object.keys(flags).length > 0 ? flags : null;
+}
+
+/**
+ * Wrap a synchronous or asynchronous phase function with wall-clock timing.
+ * Always returns a Promise so callers can uniformly `await` it. On completion
+ * emits a "phase.completed" bus event and persists a phases row via
+ * recordPhaseTiming. Non-fatal: a DB/emit failure is caught so the pilot
+ * can never be killed by an observability write.
+ */
+async function phaseTimer<T>(
+  ctx: RunContext,
+  phase: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const startMs = Date.now();
+  const started_at = new Date(startMs).toISOString();
+  const result = await fn();
+  const finishMs = Date.now();
+  const wall_ms = finishMs - startMs;
+  const finished_at = new Date(finishMs).toISOString();
+  try {
+    emit(ctx, "phase.completed", { phase, wall_ms });
+    recordPhaseTiming({ run_id: ctx.run_id, phase, started_at, finished_at, wall_ms });
+  } catch {
+    // observability writes must never crash the pilot
+  }
+  return result;
 }
 
 export { EventBus };

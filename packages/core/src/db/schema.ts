@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -355,4 +355,19 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   key         TEXT PRIMARY KEY,
   value_json  TEXT NOT NULL
 );
+
+-- v12: Phase-level timing (observability Opportunity 3). One row per named
+-- pilot phase per run: triage, profile, taxonomy, stage_loop, missability,
+-- master_plan, finalize. Enables Gantt-style duration rendering in the UI
+-- and post-run analytics without scanning the event log. Additive-only;
+-- missing rows on legacy runs degrade gracefully (no data shown).
+CREATE TABLE IF NOT EXISTS phases (
+  id          INTEGER PRIMARY KEY,
+  run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  phase       TEXT NOT NULL,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  wall_ms     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phases_run ON phases(run_id);
 `;

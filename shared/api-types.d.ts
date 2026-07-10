@@ -140,6 +140,17 @@ export interface MissabilityCheckRow {
     evidence_path: string | null;
     created_at: string;
 }
+/** `phases` table row — one per named pilot phase per run (v12). */
+export interface PhaseTiming {
+    id: number;
+    run_id: string;
+    /** Phase name: triage | profile | taxonomy | stage_loop | missability | master_plan | finalize */
+    phase: string;
+    started_at: string;
+    finished_at: string;
+    /** Elapsed wall-clock time in milliseconds. */
+    wall_ms: number;
+}
 /**
  * Full run detail — the shape returned by the daemon's `getRun(run_id)`
  * (orchestrator/runs.ts): raw rows for the run and every descendant, joined
@@ -151,6 +162,8 @@ export interface RunTree {
     attempts: AttemptRow[];
     verdicts: VerdictRow[];
     artifacts: ArtifactRow[];
+    /** v12: phase-level timing rows, ordered by started_at. Empty on legacy runs. */
+    phases: PhaseTiming[];
 }
 /**
  * Compact run listing — the projection returned by `listRuns` (SELECT id,
@@ -1152,7 +1165,12 @@ export type RunFinalizedEvent = SseEnvelope<"run.finalized", {
     abort_reason?: string;
     artifacts?: FinalizationArtifactRef[];
 }>;
-export type RunSseEvent = RunStartedEvent | RunContextEvent | StageStartedEvent | StageFinalizedEvent | StageSurfacedEvent | AttemptStartedEvent | AttemptOutputEvent | AttemptCompletedEvent | VerdictRecordedEvent | VerdictRetractedEvent | ReflexionRetryEvent | BordaUpdatedEvent | SmokeStatusEvent | ValidationResultEvent | MissabilityResultEvent | BudgetTickEvent | RunFinalizedEvent;
+/** Emitted when a named pilot phase (triage, profile, taxonomy, stage_loop, missability, master_plan, finalize) completes. */
+export type PhaseCompletedEvent = SseEnvelope<"phase.completed", {
+    phase: string;
+    wall_ms: number;
+}>;
+export type RunSseEvent = RunStartedEvent | RunContextEvent | StageStartedEvent | StageFinalizedEvent | StageSurfacedEvent | AttemptStartedEvent | AttemptOutputEvent | AttemptCompletedEvent | VerdictRecordedEvent | VerdictRetractedEvent | ReflexionRetryEvent | BordaUpdatedEvent | SmokeStatusEvent | ValidationResultEvent | MissabilityResultEvent | BudgetTickEvent | RunFinalizedEvent | PhaseCompletedEvent;
 /** Any SSE event across either stream. */
 export type EventLogEntry = RunSseEvent;
 export type SseEvent = GlobalSseEvent | RunSseEvent;

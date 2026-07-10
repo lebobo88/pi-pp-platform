@@ -171,6 +171,18 @@ export interface MissabilityCheckRow {
   created_at: string;
 }
 
+/** `phases` table row — one per named pilot phase per run (v12). */
+export interface PhaseTiming {
+  id: number;
+  run_id: string;
+  /** Phase name: triage | profile | taxonomy | stage_loop | missability | master_plan | finalize */
+  phase: string;
+  started_at: string;
+  finished_at: string;
+  /** Elapsed wall-clock time in milliseconds. */
+  wall_ms: number;
+}
+
 /**
  * Full run detail — the shape returned by the daemon's `getRun(run_id)`
  * (orchestrator/runs.ts): raw rows for the run and every descendant, joined
@@ -182,6 +194,8 @@ export interface RunTree {
   attempts: AttemptRow[];
   verdicts: VerdictRow[];
   artifacts: ArtifactRow[];
+  /** v12: phase-level timing rows, ordered by started_at. Empty on legacy runs. */
+  phases: PhaseTiming[];
 }
 
 /**
@@ -1291,6 +1305,12 @@ export type RunFinalizedEvent = SseEnvelope<
   }
 >;
 
+/** Emitted when a named pilot phase (triage, profile, taxonomy, stage_loop, missability, master_plan, finalize) completes. */
+export type PhaseCompletedEvent = SseEnvelope<
+  "phase.completed",
+  { phase: string; wall_ms: number }
+>;
+
 export type RunSseEvent =
   | RunStartedEvent
   | RunContextEvent
@@ -1308,7 +1328,8 @@ export type RunSseEvent =
   | ValidationResultEvent
   | MissabilityResultEvent
   | BudgetTickEvent
-  | RunFinalizedEvent;
+  | RunFinalizedEvent
+  | PhaseCompletedEvent;
 
 /** Any SSE event across either stream. */
 export type EventLogEntry = RunSseEvent;
@@ -1351,6 +1372,7 @@ export const RUN_SSE_EVENT_TYPES: readonly RunSseEvent["type"][] = [
   "missability.result",
   "budget.tick",
   "run.finalized",
+  "phase.completed",
 ];
 
 /* ────────────────────────────────────────────────────────────────────────

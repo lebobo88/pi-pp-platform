@@ -434,7 +434,7 @@ const artifacts: ArtifactRow[] = [
   },
 ];
 
-export const mockRunTree: RunTree = { run, stages, attempts, verdicts, artifacts };
+export const mockRunTree: RunTree = { run, stages, attempts, verdicts, artifacts, phases: [] };
 
 /** Section-6 missability check results for the run. */
 export const mockMissabilityChecks: MissabilityCheckRow[] = [

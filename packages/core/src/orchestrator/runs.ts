@@ -3504,7 +3504,34 @@ export function getRun(run_id: string): unknown {
         .all(...attemptIds)
     : [];
   const artifacts = db().prepare(`SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at ASC`).all(run_id);
-  return { run, stages, attempts, verdicts, artifacts };
+  const phases = db().prepare(`SELECT * FROM phases WHERE run_id = ? ORDER BY started_at ASC`).all(run_id);
+  return { run, stages, attempts, verdicts, artifacts, phases };
+}
+
+/** Row shape for the phases table (v12 phase-level timing). */
+export type PhaseTimingRow = {
+  run_id: string;
+  phase: string;
+  started_at: string;
+  finished_at: string;
+  wall_ms: number;
+};
+
+/**
+ * Persist a single phase-timing row. Called by the pilot on each phase
+ * completion. Non-fatal: a DB write failure must never crash the run.
+ */
+export function recordPhaseTiming(row: PhaseTimingRow): void {
+  try {
+    db()
+      .prepare(
+        `INSERT INTO phases(run_id, phase, started_at, finished_at, wall_ms)
+         VALUES (@run_id, @phase, @started_at, @finished_at, @wall_ms)`
+      )
+      .run(row);
+  } catch (err) {
+    log.warn({ err, run_id: row.run_id, phase: row.phase }, "recordPhaseTiming failed (non-fatal)");
+  }
 }
 
 export function getEventLog(

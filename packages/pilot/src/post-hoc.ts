@@ -21,6 +21,7 @@ import {
   db,
   loadProjectProfile,
   isClaudeTier,
+  log,
   type Scope,
   type ClaudeTier,
 } from "@pp/core";
@@ -189,7 +190,7 @@ async function refinalizeRunIfClear(ctx: RunContext): Promise<void> {
     // failure, must not fail the regate/retry HTTP request that merely
     // triggered the recheck — the run simply stays in its current status and
     // the reason is logged.
-    console.warn(`[pilot] post-hoc run resume blocked: ${(e as Error).message}`);
+    log.warn({ err: e }, "[pilot] post-hoc run resume blocked");
   }
 }
 

@@ -226,6 +226,20 @@ function applyMigrations(conn: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, ts);
   `);
 
+  // v12: Phase-level timing table. SCHEMA_SQL's CREATE TABLE IF NOT EXISTS
+  // handles fresh DBs; this block is the defensive migration for pre-v12 DBs.
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS phases (
+      id          INTEGER PRIMARY KEY,
+      run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      phase       TEXT NOT NULL,
+      started_at  TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      wall_ms     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_phases_run ON phases(run_id);
+  `);
+
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.
   conn.exec(`

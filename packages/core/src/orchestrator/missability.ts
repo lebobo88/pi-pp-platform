@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { db } from "../db/database.js";
 import { constitutionSha } from "./constitution.js";
+import { log } from "../util/logger.js";
 
 export type CheckId =
   | "nfrs-declared"
@@ -836,7 +837,7 @@ function loadMissabilityOverrides(project_path: string): {
     }
     return { overrides: parsed as Record<string, MissabilityOverride>, path };
   } catch (err) {
-    console.warn(`[pp] malformed missability overrides at ${path} — ignored: ${(err as Error).message}`);
+    log.warn({ err, path }, "[pp] malformed missability overrides — ignored");
     return { overrides: {}, path };
   }
 }
@@ -933,9 +934,7 @@ export function runMissabilityChecks(opts: {
       try {
         overrideRe = new RegExp(ov.pattern_override, "i");
       } catch (err) {
-        console.warn(
-          `[pp] missability override for "${def.id}": invalid pattern_override regex — ignored: ${(err as Error).message}`,
-        );
+        log.warn({ err, checkId: def.id }, "[pp] missability override: invalid pattern_override regex — ignored");
       }
     }
     if (overrideRe) {

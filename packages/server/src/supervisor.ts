@@ -156,9 +156,12 @@ export class RunSupervisor {
 
     const settled = done
       .then((res) => {
+        const runLog = res.run_id
+          ? this.logger?.child({ run_id: res.run_id })
+          : this.logger;
         if (res.run_id) {
           this.active.delete(res.run_id);
-          this.logger?.info({ runId: res.run_id, status: res.status, abortReason: res.abort_reason }, "Run finalized successfully");
+          runLog?.info({ status: res.status, abortReason: res.abort_reason }, "Run finalized");
         }
         try {
           touchLastRun(input.projectPath);
@@ -208,6 +211,7 @@ export class RunSupervisor {
         projectPath: input.projectPath,
         firedTripwires: new Set(),
       });
+      this.logger?.child({ run_id }).info({ mode: input.mode, project: input.projectPath }, "Run started");
     }
     return { run_id, queued: wasQueued };
   }
@@ -360,6 +364,7 @@ export class RunSupervisor {
     const entry = this.active.get(ev.run_id);
     if (!entry) return;
 
+    const runLog = this.logger?.child({ run_id: ev.run_id });
     const runScope = `run:${ev.run_id}`;
     const dayScope = `day:${DAY()}`;
     const runBudget = budgetStatus(runScope) as { cost_usd?: number; tokens_in?: number; tokens_out?: number } | null;
@@ -385,7 +390,7 @@ export class RunSupervisor {
       if (pct >= cap.block_pct) {
         if (entry.firedTripwires.has(`${cap.scope}:block`)) continue;
         entry.firedTripwires.add(`${cap.scope}:block`);
-        this.logger?.warn({ runId: ev.run_id, scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "block" }, "Budget hard cap crossed; aborting run");
+        runLog?.warn({ scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "block" }, "Budget hard cap crossed; aborting run");
         this.serverBus.publish({
           type: "budget.tripwire",
           run_id: ev.run_id,
@@ -396,7 +401,7 @@ export class RunSupervisor {
       } else if (pct >= cap.warn_pct) {
         if (entry.firedTripwires.has(`${cap.scope}:warn`)) continue;
         entry.firedTripwires.add(`${cap.scope}:warn`);
-        this.logger?.warn({ runId: ev.run_id, scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "downgrade" }, "Budget warning cap crossed; downgrading tier");
+        runLog?.warn({ scope: cap.scope, limit_usd: cap.limit_usd, cost_usd: cost, action: "downgrade" }, "Budget warning cap crossed; downgrading tier");
         this.serverBus.publish({
           type: "budget.tripwire",
           run_id: ev.run_id,

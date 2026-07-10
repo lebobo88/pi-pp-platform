@@ -296,7 +296,11 @@ export function RunObservatoryPage() {
           >
             {/* Column 1: Phase timeline + Stage pipeline */}
             <div className="space-y-4">
-              <PhaseTimeline entries={overlay.phaseTimeline ?? []} />
+              <PhaseTimeline
+                entries={overlay.phaseTimeline ?? []}
+                persistedTimings={tree?.phases}
+                runFinished={!!tree?.run.finished_at}
+              />
               <StagePipeline
                 nodes={pipeline}
                 selectedStageId={effectiveSelectedStage}
