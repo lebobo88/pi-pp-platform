@@ -60,28 +60,81 @@ function genResult(model: { id: string; provider: string }, text: string, parsed
   };
 }
 
-export type ScriptedEngine = Engine & { critiquesConsumed: () => number };
+export type ScriptedEngine = Engine & {
+  critiquesConsumed: () => number;
+  /** Judge model id used on each critique call, in call order. */
+  judgeModelsUsed: () => string[];
+};
+
+/** A GenResult that mimics pi resolving (never rejecting) a provider quota /
+ * rate-limit failure: empty text, additive error_class/error_message set. Used
+ * by tests to script an error-resolving completion or coding session. */
+export function makeErrorGenResult(
+  model: { id: string; provider: string },
+  errorClass: "quota_exhausted" | "rate_limited" | "provider_error",
+  errorMessage: string,
+  extra: Partial<GenResult> = {},
+): GenResult {
+  return {
+    text: "",
+    tokens_in: 0,
+    tokens_out: 0,
+    cost_usd: 0,
+    model: model.id,
+    provider: toGenProvider(model.provider),
+    wall_ms: 1,
+    session_id: null,
+    stop_reason: "error",
+    error_class: errorClass,
+    error_message: errorMessage,
+    ...extra,
+  };
+}
+
+/** Normalize invalidAt/critiqueErrorAt (number | number[]) to a membership test. */
+function atSet(v: number | number[] | undefined): (i: number) => boolean {
+  if (v === undefined) return () => false;
+  const s = new Set(Array.isArray(v) ? v : [v]);
+  return (i) => s.has(i);
+}
 
 /**
  * Wrap the fake engine: authoring completions return evidence-rich content, and
- * critiques dequeue outcomes from `verdictPlan` in call order. When
- * `invalidAt` is set, that critique call (0-based) returns an invalid_output
- * result to exercise the judge-halt path.
+ * critiques dequeue outcomes from `verdictPlan` in call order. `invalidAt`
+ * critique calls return an invalid_output result (judge-halt path);
+ * `critiqueErrorAt` calls return a provider_error result (judge-failover path).
+ * Each accepts a single index or a list. The judge model used on every critique
+ * call is recorded so tests can assert the failover ORDER.
  */
 export function makeScriptedEngine(opts: {
   verdictPlan: VerdictOutcome[];
-  invalidAt?: number;
+  invalidAt?: number | number[];
+  critiqueErrorAt?: number | number[];
 }): ScriptedEngine {
   const fake = createEngine({ mode: "fake" });
   let critiqueIdx = 0;
+  const judgeModels: string[] = [];
+  const isInvalid = atSet(opts.invalidAt);
+  const isError = atSet(opts.critiqueErrorAt);
 
   return {
     ...fake,
     critiquesConsumed: () => critiqueIdx,
+    judgeModelsUsed: () => judgeModels.slice(),
     runAuthoringCompletion: async (o) => genResult(o.model, RICH_CONTENT),
     critique: async (o) => {
       const idx = critiqueIdx++;
-      if (opts.invalidAt === idx) {
+      judgeModels.push(o.judgeModel.id);
+      if (isError(idx)) {
+        return {
+          ...genResult(o.judgeModel, "", undefined),
+          stop_reason: "provider_error",
+          error_class: "quota_exhausted",
+          error_message: `OpenAI API error (429): {"error":{"code":"insufficient_quota"}} #${idx}`,
+          session_file: "/tmp/fake-critique-provider-error.txt",
+        };
+      }
+      if (isInvalid(idx)) {
         return {
           ...genResult(o.judgeModel, "not json", undefined),
           stop_reason: "invalid_output",
