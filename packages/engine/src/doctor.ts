@@ -18,7 +18,7 @@ import { listPiModels } from "./models.js";
 import { resolveProviderApiKey } from "./auth.js";
 import { defaultComplete, type LlmComplete } from "./llm.js";
 import { critique } from "./critique.js";
-import type { GenProvider } from "./envelope.js";
+import { assistantErrorMessage, classifyProviderError, type GenProvider } from "./envelope.js";
 
 /** Any provider present in the catalog judge pool. */
 export type ProbeProvider = string;
@@ -49,7 +49,20 @@ export async function doctorProbe(provider: ProbeProvider, deps: DoctorDeps): Pr
     const model = deps.catalog.resolve(provider, modelId);
     const apiKey = await resolveProviderApiKey(deps.authStorage, provider);
     const t0 = Date.now();
-    await complete({ model, userPrompt: "Reply with OK", apiKey, maxTokens: 5, timeoutMs: 20_000 });
+    const msg = await complete({ model, userPrompt: "Reply with OK", apiKey, maxTokens: 5, timeoutMs: 20_000 });
+    // pi resolves a quota/rate/credit failure as stopReason:"error" (it never
+    // rejects), so a healthy-looking probe can hide an exhausted provider.
+    // Inspect the resolved message and report the real cause as ok:false.
+    if (msg.stopReason === "error") {
+      const errorMessage = assistantErrorMessage(msg) ?? "provider resolved stopReason=error";
+      return {
+        ok: false,
+        latency_ms: Date.now() - t0,
+        model: modelId,
+        provider,
+        error: `${classifyProviderError(errorMessage)}: ${errorMessage}`,
+      };
+    }
     return { ok: true, latency_ms: Date.now() - t0, model: modelId, provider };
   } catch (err) {
     return { ok: false, latency_ms: 0, model: modelId, provider, error: (err as Error).message };

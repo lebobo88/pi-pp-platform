@@ -192,7 +192,9 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
     return reply.code(202).send({
       run_id: id,
       stage_id: stageId,
-      action: "retry",
+      // Smart /pp:retry may route a real-but-unverdicted attempt to a re-gate
+      // instead of a regenerate — surface whichever action actually ran.
+      action: res.action ?? "retry",
       ok: true,
       overridden,
       outcome: res.outcome,

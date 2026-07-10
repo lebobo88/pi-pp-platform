@@ -35,10 +35,14 @@ import {
   type Profile,
   type VerdictOutcome,
   type ClaudeTier,
+  type AttemptStatus,
+  type AttemptNotes,
 } from "@pp/core";
 import { providerForModel, hasCredential, providersWithCredential } from "@pp/engine";
 import { loadRolePrompt, renderSystemPrompt, loadAgentsMdForPrompt } from "../prompts/loader.js";
 import { resolveTier, escalateTierForRetry } from "../tier-resolver.js";
+import { generationModelIdForTier } from "../generation-model.js";
+import { providerToProducer, type JudgeSelection } from "../judge-policy.js";
 import { JudgeUnavailableError } from "../errors.js";
 import { profileSummary } from "./profile.js";
 import { emit, type RunContext, type StageSpec, type StageOutcome } from "../types.js";
@@ -342,6 +346,16 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
   // ── Attempt 0: generate → judge ──────────────────────────────────────────
   const gen0 = await generate(ctx, stage, stage_id, resolution.model_id, resolution.tier, 0, undefined, [], undefined, rubricMd);
 
+  // Errored-attempt guard: a provider error (quota / rate limit / other) is NOT
+  // a quality failure — it never reaches a judge and never consumes the
+  // Reflexion slot. Take ONE infra retry (retry_index=0, parent chained),
+  // rotating the generation pool away from a cooled-down provider on
+  // quota/rate. Two consecutive errors surface with the real reason. See
+  // handleErroredAttempt.
+  if (gen0.errorClass) {
+    return handleErroredAttempt(ctx, stage, stage_id, gen0, resolution.tier, stageBaseSha, rubricMd);
+  }
+
   // Zero-change guard: a coding attempt that wrote nothing has no diff to
   // judge — skip the (paid) judge call entirely and go straight to Reflexion
   // with a synthetic critique. Never let a judge grade a stale HEAD commit.
@@ -355,19 +369,101 @@ export async function runStage(ctx: RunContext, stage: StageSpec): Promise<Stage
     return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, ZERO_CHANGE_CRITIQUE, gen0.artifactText, { stageBaseSha, automatic: true });
   }
 
-  const judged0 = await judge(ctx, stage, stage_id, gen0.attempt_id, resolution.model_id, gen0.artifactText, false);
-  if (judged0 === "abort") return abortStage(ctx, stage_id, "judge tool failure");
+  return settleGenerated(ctx, stage, stage_id, gen0, resolution.tier, stageBaseSha);
+}
 
-  if (judged0.outcome === "pass") {
-    const settled = await driveReadiness(ctx, stage, stage_id, gen0.attempt_id);
-    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen0.attempt_id, gen0);
+/**
+ * Judge a real (non-errored, non-zero-change) generation and settle the stage:
+ * pass → finalize (or Reflexion on a readiness blocker); fail/revise → Reflexion
+ * ×1. Shared by attempt 0 and the errored-attempt infra retry so both drive the
+ * exact same tested judge/finalize/Reflexion path. `gen.modelId` is the model
+ * that actually generated (post-rotation), so cross-vendor judging excludes the
+ * true generator.
+ */
+async function settleGenerated(
+  ctx: RunContext,
+  stage: StageSpec,
+  stage_id: string,
+  gen: GenOut,
+  tier: ClaudeTier,
+  stageBaseSha: string | null,
+): Promise<StageOutcome> {
+  const judged = await judge(ctx, stage, stage_id, gen.attempt_id, gen.modelId, gen.artifactText, false);
+  if (judged === "abort") return abortStage(ctx, stage_id, "judge tool failure");
+
+  if (judged.outcome === "pass") {
+    const settled = await driveReadiness(ctx, stage, stage_id, gen.attempt_id);
+    if (settled.action === "finalize") return finalizePassed(ctx, stage, stage_id, gen.attempt_id, gen);
     if (settled.action === "surface") return surface(ctx, stage_id, settled.reason);
     // action === "retry": fall through to Reflexion using the blocker message.
-    return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, settled.critique, gen0.artifactText, { stageBaseSha, automatic: true });
+    return reflexion(ctx, stage, stage_id, gen.attempt_id, tier, settled.critique, gen.artifactText, { stageBaseSha, automatic: true });
   }
 
   // fail / revise → Reflexion ×1.
-  return reflexion(ctx, stage, stage_id, gen0.attempt_id, resolution.tier, judged0.critique_md, gen0.artifactText, { stageBaseSha, automatic: true });
+  return reflexion(ctx, stage, stage_id, gen.attempt_id, tier, judged.critique_md, gen.artifactText, { stageBaseSha, automatic: true });
+}
+
+/**
+ * Handle a generation that resolved with a provider error. Takes exactly ONE
+ * infra retry at the SAME tier (retry_index=0, parent chained — so the
+ * Reflexion ×1 slot stays intact), skipping the judge entirely. On a quota /
+ * rate-limit class, rotate the generation pool (draw the next pool model, which
+ * may be a different provider) to skip the cooled-down provider; other classes
+ * retry the same model (a transient blip). If the retry ALSO errors → surface
+ * with the real provider cause (zero judge calls). If it produces a real
+ * artifact → settle it normally (Reflexion still available). If it zero-changes
+ * → the existing zero-change Reflexion path.
+ */
+async function handleErroredAttempt(
+  ctx: RunContext,
+  stage: StageSpec,
+  stage_id: string,
+  errored: GenOut,
+  tier: ClaudeTier,
+  stageBaseSha: string | null,
+  rubricMd: string | undefined,
+): Promise<StageOutcome> {
+  emit(
+    ctx,
+    "gate.blocked",
+    {
+      reason: `generation provider error (${errored.errorClass}) — judge skipped, infra retry`,
+      gate_type: stage.gate_type,
+      error_class: errored.errorClass,
+      provider_error: true,
+    },
+    { stage_id, attempt_id: errored.attempt_id },
+  );
+
+  const rotate = errored.errorClass === "quota_exhausted" || errored.errorClass === "rate_limited";
+  // Rotation index 1 draws the next pool model for the tier (a different
+  // provider when a pool spans vendors); with no pool configured this returns
+  // the same model id, so a same-provider transient simply retries in place.
+  const retryModel = rotate ? generationModelIdForTier(tier, 1, ctx.ladderOverride) : errored.modelId;
+
+  const gen1 = await generate(ctx, stage, stage_id, retryModel, tier, 0, errored.attempt_id, [], undefined, rubricMd);
+
+  if (gen1.errorClass) {
+    // Two consecutive errored attempts — surface with the real reason, never a
+    // fabricated verdict. Reflexion was never consumed.
+    return surface(
+      ctx,
+      stage_id,
+      `provider error persisted after infra retry: ${gen1.errorClass}: ${gen1.errorMessage ?? "unknown provider error"}`,
+    );
+  }
+
+  if (gen1.zeroChange) {
+    emit(
+      ctx,
+      "gate.blocked",
+      { reason: "infra-retry attempt produced zero file changes — judge skipped", gate_type: stage.gate_type, zero_change: true },
+      { stage_id },
+    );
+    return reflexion(ctx, stage, stage_id, gen1.attempt_id, tier, ZERO_CHANGE_CRITIQUE, gen1.artifactText, { stageBaseSha, automatic: true });
+  }
+
+  return settleGenerated(ctx, stage, stage_id, gen1, tier, stageBaseSha);
 }
 
 // ── generation ───────────────────────────────────────────────────────────────
@@ -378,7 +474,37 @@ type GenOut = {
   artifactPath: string;
   /** session-coding attempt that left the working tree untouched. */
   zeroChange: boolean;
+  /** Concrete model id that actually generated this attempt (post-rotation). */
+  modelId: string;
+  /** Recorded attempt status ("ok" | "error" | "timeout"). */
+  status: AttemptStatus;
+  /** Provider-error classification when the generation itself errored. */
+  errorClass?: string;
+  /** Real provider cause when the generation errored. */
+  errorMessage?: string;
 };
+
+/**
+ * Derive the persisted attempt status from a GenResult. A provider error
+ * (error_class set by the envelope on stopReason:"error") is "error"; a timeout
+ * sentinel is "timeout"; an empty generation (a completion with no text, or a
+ * coding session that drove no mutating tool call) is also "error" — recording
+ * it as "ok" (the old hardcode) was the root of the silent attempt-waste loop.
+ */
+function deriveAttemptStatus(
+  genResult: { error_class?: string; stop_reason: string; text: string },
+  execution: string,
+  zeroChange: boolean,
+): AttemptStatus {
+  if (genResult.error_class) return "error";
+  if (genResult.stop_reason === "timeout") return "timeout";
+  const isSession = execution === "session-coding" || execution === "session-readonly";
+  if (!isSession) return genResult.text.trim().length === 0 ? "error" : "ok";
+  if (execution === "session-coding" && zeroChange && genResult.stop_reason === "no_tool_calls") {
+    return "error";
+  }
+  return "ok";
+}
 
 /** Synthetic critique for the zero-change Reflexion retry — no judge involved. */
 export const ZERO_CHANGE_CRITIQUE =
@@ -539,6 +665,21 @@ async function generate(
     artifactPath = res.status === "ok" ? res.absolute_path : rel;
   }
 
+  // Record the attempt with its TRUTHFUL status (no more hardcoded "ok"): a
+  // provider error or an empty generation is persisted as "error"/"timeout" so
+  // the errored-attempt guard can skip judging, and the real cause is kept in
+  // notes_json for the operator + smart /pp:retry. notes stay null for healthy
+  // attempts so existing rows are byte-identical.
+  const attemptStatus = deriveAttemptStatus(genResult, execution, zeroChange);
+  const errorNotes: AttemptNotes | undefined =
+    attemptStatus === "ok"
+      ? undefined
+      : {
+          ...(genResult.error_class ? { error_class: genResult.error_class } : {}),
+          ...(genResult.error_message ? { error_message: genResult.error_message } : {}),
+          stop_reason: genResult.stop_reason,
+          files_changed: genResult.files_changed ?? false,
+        };
   const attempt = recordAttempt({
     stage_id,
     producer: "claude",
@@ -550,7 +691,8 @@ async function generate(
     wall_ms: genResult.wall_ms,
     retry_index: retryIndex,
     parent_attempt_id: parentAttemptId,
-    status: "ok",
+    status: attemptStatus,
+    notes: errorNotes,
     attempted_tier: tier,
     agent_type: stage.agent,
     provider: genProvider || undefined,
@@ -585,12 +727,23 @@ async function generate(
       files_changed: genResult.files_changed,
       materialized_files: genResult.materialized_files,
       zero_change: zeroChange,
+      status: attemptStatus,
+      error_class: genResult.error_class,
       provider: genProvider || undefined,
     },
     { stage_id, attempt_id: attempt.attempt_id },
   );
 
-  return { attempt_id: attempt.attempt_id, artifactText, artifactPath, zeroChange };
+  return {
+    attempt_id: attempt.attempt_id,
+    artifactText,
+    artifactPath,
+    zeroChange,
+    modelId,
+    status: attemptStatus,
+    errorClass: genResult.error_class,
+    errorMessage: genResult.error_message,
+  };
 }
 
 // ── judging ────────────────────────────────────────────────────────────────
@@ -610,17 +763,20 @@ export async function judge(
    * attempts so their judging stays byte-identical. */
   contextMd?: string,
 ): Promise<JudgeOut> {
-  let selection;
-  try {
-    selection = ctx.judgePolicy.select(ctx.run_id, {
+  const keyedProviders =
+    ctx.engine.mode === "pi" ? providersWithCredential(ctx.engine.authStorage) : undefined;
+  const generatorProvider = providerForModel(generatorModel);
+
+  // Re-select a judge, excluding providers that already errored this stage. The
+  // real generator provider is derived from its model (effective ladder), so
+  // cross-provider judging excludes the actual generator, and only keyed
+  // providers are eligible — never routes to an unconfigured vendor.
+  const selectJudge = (excludeProviders: string[]): JudgeSelection =>
+    ctx.judgePolicy.select(ctx.run_id, {
       gateType: stage.gate_type as GateType,
       generatorProducer: "claude",
-      // The real generator provider is derived from its model (effective ladder),
-      // so cross-provider judging excludes the actual generator, and only
-      // keyed providers are eligible — never routes to an unconfigured vendor.
-      generatorProvider: providerForModel(generatorModel),
-      keyedProviders:
-        ctx.engine.mode === "pi" ? providersWithCredential(ctx.engine.authStorage) : undefined,
+      generatorProvider,
+      keyedProviders,
       generatorModel,
       promptKeywords: ctx.requestText,
       profile: (ctx.profileName as Profile | undefined) ?? null,
@@ -628,7 +784,18 @@ export async function judge(
       rubricHint: stage.rubricHint ?? null,
       greenfield: runIsGreenfield(ctx),
       retry,
+      excludeProviders,
     });
+
+  // ── Bounded judge-failover loop ───────────────────────────────────────────
+  // On a provider error (quota/rate/other) or an unvalidatable verdict, fail
+  // over WITHOUT fabricating a result: (a) de-escalate an escalated judge to
+  // its provider's default model; (b) then move to the next eligible provider
+  // (max 2 providers total); (c) exhausted → archive + gate.blocked + abort.
+  const excluded: string[] = [];
+  let selection: JudgeSelection;
+  try {
+    selection = selectJudge(excluded);
   } catch (err) {
     if (err instanceof JudgeUnavailableError) {
       archiveCritiqueFailure(ctx, stage_id, { reason: err.message, kind: "judge_pool_empty" });
@@ -638,78 +805,121 @@ export async function judge(
     throw err;
   }
 
-  const rubricMd = (selection.rubric_id ? getRubric(selection.rubric_id)?.markdown : null) ?? FALLBACK_RUBRIC;
-  const judgeModel = ctx.engine.catalog.resolve(selection.provider, selection.judge_model);
+  let judgeModelId = selection.judge_model;
+  // Only the escalated lane has a lower model to de-escalate TO; otherwise the
+  // provider offers no second model, so skip straight to the next provider.
+  let deEscalationAvailable = selection.escalated && selection.default_model !== judgeModelId;
+  let providersTried = 1;
 
-  const critiqueRes = await ctx.engine.critique({
-    judgeModel,
-    rubricMd,
-    artifactText,
-    contextMd,
-    cwd: ctx.projectPath,
-    signal: ctx.signal,
-  });
+  for (;;) {
+    const rubricMd = (selection.rubric_id ? getRubric(selection.rubric_id)?.markdown : null) ?? FALLBACK_RUBRIC;
+    const judgeModel = ctx.engine.catalog.resolve(selection.provider, judgeModelId);
 
-  // Judge tool failure: the critique never validated (invalid_output sentinel).
-  // Never fabricate a verdict — halt.
-  if (critiqueRes.stop_reason === "invalid_output" || !critiqueRes.parsed) {
-    archiveCritiqueFailure(ctx, stage_id, {
-      reason: `judge critique failed to validate (stop_reason=${critiqueRes.stop_reason})`,
-      kind: "critique_invalid",
-      failure_archive_path: critiqueRes.session_file,
+    const critiqueRes = await ctx.engine.critique({
+      judgeModel,
+      rubricMd,
+      artifactText,
+      contextMd,
+      cwd: ctx.projectPath,
+      signal: ctx.signal,
     });
-    emit(ctx, "gate.blocked", { reason: "critique invalid_output", judge_model: selection.judge_model }, { stage_id });
-    return "abort";
-  }
 
-  const verdict = critiqueRes.parsed as { outcome: VerdictOutcome; critique_md?: string; score?: unknown };
-  // Deterministically derive the outcome from the numeric scores (judge label
-  // is advisory). resolveVerdict also sanitizes the score map so the persisted
-  // score_json is always the flat dimension map — including the fallback branch
-  // where no numeric dimensions survive and the judge label is used.
-  const resolved = resolveVerdict({
-    judge_outcome: verdict.outcome,
-    scores: verdict.score,
-    critique_md: verdict.critique_md,
-  });
-  const judgeProvider = selection.provider || undefined;
-  if (!judgeProvider) {
-    // REQ-P-7: defensive log when the judge selection produced no provider.
-    log.warn({ judgeModel: selection.judge_model }, "[pp/pilot] judge selection produced no provider; verdict will persist judge_provider=NULL and omit judge_provider from SSE frame");
-  }
-  const rec = recordVerdict({
-    attempt_id,
-    judge_producer: selection.judge_producer,
-    judge_model_id: selection.judge_model,
-    rubric_id: selection.rubric_id ?? undefined,
-    outcome: resolved.outcome,
-    critique_md: resolved.critique_md,
-    score_json: resolved.score_json,
-    judge_provider: judgeProvider,
-    // v9 judge-usage: credit this critique's spend to the budget scopes and
-    // record it on the verdict row (all optional — a test double without them
-    // records exactly as before).
-    tokens_in: critiqueRes.tokens_in,
-    tokens_out: critiqueRes.tokens_out,
-    cost_usd: critiqueRes.cost_usd,
-  });
-  emit(
-    ctx,
-    "verdict.recorded",
-    {
-      outcome: resolved.outcome,
-      judge_producer: selection.judge_producer,
-      judge_model: selection.judge_model,
-      cross_vendor: rec.cross_vendor,
-      escalated: selection.escalated,
-      rubric_id: selection.rubric_id,
-      judge_provider: judgeProvider,
-      ...(resolved.disagreed ? { judge_label: resolved.judge_label } : {}),
-    },
-    { stage_id, attempt_id },
-  );
+    const failed =
+      critiqueRes.stop_reason === "invalid_output" ||
+      critiqueRes.stop_reason === "provider_error" ||
+      !critiqueRes.parsed;
 
-  return { outcome: resolved.outcome, critique_md: resolved.critique_md };
+    if (!failed) {
+      // Record the verdict under the model + provider that ACTUALLY judged.
+      const verdict = critiqueRes.parsed as { outcome: VerdictOutcome; critique_md?: string; score?: unknown };
+      const resolved = resolveVerdict({
+        judge_outcome: verdict.outcome,
+        scores: verdict.score,
+        critique_md: verdict.critique_md,
+      });
+      const judgeProvider = selection.provider || undefined;
+      const judgeProducer = providerToProducer(selection.provider);
+      if (!judgeProvider) {
+        log.warn({ judgeModel: judgeModelId }, "[pp/pilot] judge selection produced no provider; verdict will persist judge_provider=NULL and omit judge_provider from SSE frame");
+      }
+      const rec = recordVerdict({
+        attempt_id,
+        judge_producer: judgeProducer,
+        judge_model_id: judgeModelId,
+        rubric_id: selection.rubric_id ?? undefined,
+        outcome: resolved.outcome,
+        critique_md: resolved.critique_md,
+        score_json: resolved.score_json,
+        judge_provider: judgeProvider,
+        tokens_in: critiqueRes.tokens_in,
+        tokens_out: critiqueRes.tokens_out,
+        cost_usd: critiqueRes.cost_usd,
+      });
+      emit(
+        ctx,
+        "verdict.recorded",
+        {
+          outcome: resolved.outcome,
+          judge_producer: judgeProducer,
+          judge_model: judgeModelId,
+          cross_vendor: rec.cross_vendor,
+          escalated: selection.escalated && judgeModelId === selection.judge_model,
+          rubric_id: selection.rubric_id,
+          judge_provider: judgeProvider,
+          ...(resolved.disagreed ? { judge_label: resolved.judge_label } : {}),
+        },
+        { stage_id, attempt_id },
+      );
+      return { outcome: resolved.outcome, critique_md: resolved.critique_md };
+    }
+
+    // Judge failed. Hop 1: de-escalate an escalated judge to the provider's
+    // default model (same provider, cheaper/stabler model).
+    if (deEscalationAvailable) {
+      emit(
+        ctx,
+        "gate.blocked",
+        { reason: `judge failover (de-escalate) after ${critiqueRes.stop_reason}`, gate_type: stage.gate_type, failover: true, from_model: judgeModelId, to_model: selection.default_model, provider: selection.provider },
+        { stage_id },
+      );
+      judgeModelId = selection.default_model;
+      deEscalationAvailable = false;
+      continue;
+    }
+
+    // Hop 2: abandon this provider. Bounded to 2 providers total.
+    excluded.push(selection.provider);
+    if (providersTried >= 2) {
+      archiveCritiqueFailure(ctx, stage_id, {
+        reason: `judge failover exhausted after ${providersTried} providers (last stop_reason=${critiqueRes.stop_reason})`,
+        kind: "critique_invalid",
+        failure_archive_path: critiqueRes.session_file,
+      });
+      emit(ctx, "gate.blocked", { reason: "judge failover exhausted", judge_model: judgeModelId, gate_type: stage.gate_type }, { stage_id });
+      return "abort";
+    }
+    let next: JudgeSelection;
+    try {
+      next = selectJudge(excluded);
+    } catch (err) {
+      if (err instanceof JudgeUnavailableError) {
+        archiveCritiqueFailure(ctx, stage_id, { reason: err.message, kind: "judge_pool_empty" });
+        emit(ctx, "gate.blocked", { reason: err.message, gate_type: stage.gate_type }, { stage_id });
+        return "abort";
+      }
+      throw err;
+    }
+    emit(
+      ctx,
+      "gate.blocked",
+      { reason: `judge failover (next provider) after ${critiqueRes.stop_reason}`, gate_type: stage.gate_type, failover: true, from_model: judgeModelId, to_model: next.judge_model, from_provider: selection.provider, to_provider: next.provider },
+      { stage_id },
+    );
+    selection = next;
+    judgeModelId = next.judge_model;
+    deEscalationAvailable = next.escalated && next.default_model !== judgeModelId;
+    providersTried++;
+  }
 }
 
 // ── readiness / finalize ─────────────────────────────────────────────────────

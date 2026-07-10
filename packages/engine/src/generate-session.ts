@@ -307,6 +307,15 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
         ? "no_tool_calls"
         : "stop";
 
+  // Provider-error cross-check (WS1): pi resolves a quota/rate/credit failure by
+  // ending the turn without ever calling a tool AND without billing any tokens.
+  // A genuine prose-only session (deepseek answering in Markdown) still consumes
+  // tokens, so the 0-in/0-out + no_tool_calls combination is a strong signal the
+  // provider errored rather than the model misbehaving. Surface it as a
+  // provider_error so the pilot takes an infra retry instead of judging nothing.
+  const providerErrored =
+    stop_reason === "no_tool_calls" && tokens_in === 0 && tokens_out === 0 && !timedOut && !opts.signal?.aborted;
+
   return buildGenResultFromTotals(
     opts.model,
     { tokens_in, tokens_out, cost_usd: stats.cost },
@@ -319,6 +328,13 @@ export async function runCodingSession(opts: CodingSessionOpts): Promise<GenResu
       tool_call_count: toolCallCount,
       files_changed,
       materialized_files,
+      ...(providerErrored
+        ? {
+            error_class: "provider_error" as const,
+            error_message:
+              "coding session ended with no tool calls and zero billed tokens — the provider likely returned an error (quota / rate limit / auth) rather than a completion",
+          }
+        : {}),
     },
   );
 }

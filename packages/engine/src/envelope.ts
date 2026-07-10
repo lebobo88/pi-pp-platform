@@ -49,6 +49,50 @@ export interface GenResult {
   files_changed?: boolean;
   /** Coding sessions: files written by the text-materializer fallback (0 = fallback unused). */
   materialized_files?: number;
+  /**
+   * Provider error message carried verbatim from pi's `AssistantMessage.errorMessage`
+   * when the completion resolved (never rejected) with `stopReason:"error"` — e.g.
+   * "OpenAI API error (429): {...insufficient_quota...}". Optional end-to-end: a
+   * successful generation never sets it, and every existing consumer tolerates its
+   * absence.
+   */
+  error_message?: string;
+  /**
+   * Classification of {@link error_message} into an actionable bucket
+   * ({@link classifyProviderError}). Only present alongside `error_message`.
+   */
+  error_class?: ProviderErrorClass;
+}
+
+/**
+ * Actionable classification of a provider error string. Mirrors pi-ai's
+ * `utils/retry.js` text patterns so quota/credit exhaustion is distinguished
+ * from a transient rate limit (retryable after cooldown) and from any other
+ * provider failure.
+ */
+export type ProviderErrorClass = "quota_exhausted" | "rate_limited" | "provider_error";
+
+/**
+ * Classify a provider error message. Quota/credit exhaustion is checked first
+ * (it subsumes some 429s — an insufficient_quota HTTP 429 is exhaustion, not a
+ * transient rate limit). Empty/unknown text falls through to `provider_error`.
+ */
+export function classifyProviderError(text: string | null | undefined): ProviderErrorClass {
+  const s = (text ?? "").toLowerCase();
+  if (/insufficient_quota|billing|out of budget|usage limit/.test(s)) return "quota_exhausted";
+  if (/\b429\b|rate limit|too many requests/.test(s)) return "rate_limited";
+  return "provider_error";
+}
+
+/**
+ * Read pi's `AssistantMessage.errorMessage` defensively. The field exists on the
+ * 0.80.3 type (types.d.ts) and is populated when the error event resolves the
+ * completion, but the local fake historically omits it — so we read through a
+ * cast and degrade to undefined rather than assume the field is always present.
+ */
+export function assistantErrorMessage(msg: AssistantMessage): string | undefined {
+  const m = msg as { errorMessage?: unknown };
+  return typeof m.errorMessage === "string" ? m.errorMessage : undefined;
 }
 
 /**
@@ -97,6 +141,13 @@ export function buildGenResult<TApi extends Api>(
   const tokens_out = usage.output;
   const catalogCost = usage.cost?.total ?? 0;
   const cost_usd = catalogCost > 0 ? catalogCost : computeCost(model.id, tokens_in, tokens_out);
+  // When pi resolves (never rejects) a completion with stopReason:"error" it
+  // stashes the real provider cause in errorMessage. Surface it truthfully so
+  // callers can classify quota/rate exhaustion instead of recording an empty
+  // "ok" attempt. An override stop_reason (engine sentinel) does NOT suppress
+  // the error fields — the underlying cause is still the provider error.
+  const isProviderError = msg.stopReason === "error";
+  const errorMessage = isProviderError ? assistantErrorMessage(msg) : undefined;
   return {
     text: overrides.text ?? messageText(msg),
     parsed: overrides.parsed,
@@ -110,6 +161,9 @@ export function buildGenResult<TApi extends Api>(
     stop_reason: overrides.stop_reason ?? msg.stopReason,
     session_file: overrides.session_file,
     usage_detail: usage,
+    ...(isProviderError
+      ? { error_message: errorMessage, error_class: classifyProviderError(errorMessage) }
+      : {}),
   };
 }
 
@@ -137,6 +191,9 @@ export function buildGenResultFromTotals<TApi extends Api>(
     tool_call_count?: number;
     files_changed?: boolean;
     materialized_files?: number;
+    /** Provider error cause + classification for an errored session (optional). */
+    error_message?: string;
+    error_class?: ProviderErrorClass;
   },
 ): GenResult {
   const cost_usd =
@@ -157,5 +214,7 @@ export function buildGenResultFromTotals<TApi extends Api>(
     tool_call_count: fields.tool_call_count,
     files_changed: fields.files_changed,
     materialized_files: fields.materialized_files,
+    ...(fields.error_message !== undefined ? { error_message: fields.error_message } : {}),
+    ...(fields.error_class !== undefined ? { error_class: fields.error_class } : {}),
   };
 }

@@ -75,6 +75,34 @@ describe("JudgePolicy — rubricIdFor (generator and judge share one rubric)", (
   });
 });
 
+describe("JudgePolicy — failover exclusions + default_model", () => {
+  it("excludeProviders drops the errored vendor so re-selection lands elsewhere", () => {
+    const jp = new JudgePolicy();
+    const first = jp.select("run1", { gateType: "spec", ...claudeGen });
+    const next = jp.select("run1", { gateType: "spec", ...claudeGen, excludeProviders: [first.provider] });
+    expect(next.provider).not.toBe(first.provider);
+  });
+
+  it("exposes the provider's non-escalated default_model (equals judge_model when not escalated)", () => {
+    const jp = new JudgePolicy();
+    const esc = jp.select("run1", { gateType: "code_style", ...claudeGen, retry: true, preferredProvider: "openai" });
+    // Escalated lane: judge_model is the escalated model, default_model the base.
+    expect(esc.judge_model).toBe("gpt-5.5");
+    expect(esc.default_model).toBe("gpt-5.4");
+
+    const plain = jp.select("run2", { gateType: "code_style", ...claudeGen, preferredProvider: "openai" });
+    expect(plain.default_model).toBe(plain.judge_model);
+  });
+
+  it("an empty pool after exclusion still throws (never fabricate)", () => {
+    const jp = new JudgePolicy();
+    // Exclude both non-generator vendors on a cross-vendor spec gate → no judge.
+    expect(() =>
+      jp.select("run1", { gateType: "spec", ...claudeGen, excludeProviders: ["openai", "google"] }),
+    ).toThrow(JudgeUnavailableError);
+  });
+});
+
 describe("JudgePolicy — kill switches", () => {
   it("PP_DISABLE_GEMINI drops google from the pool", () => {
     process.env.PP_DISABLE_GEMINI = "1";
