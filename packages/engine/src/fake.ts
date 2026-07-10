@@ -24,9 +24,20 @@ import { buildGenResultFromTotals, toGenProvider, type GenResult } from "./envel
 import { ModelCatalog, JUDGE_POOLS } from "./catalog.js";
 import { makeSessionRef } from "./session-store.js";
 import { createPlatformAuthStorage, resolveProviderApiKey } from "./auth.js";
-import { doctorProbe, attachToCore, type DoctorProbeResult, type ProbeProvider, type DoctorDeps } from "./doctor.js";
+import { doctorProbe, probeProviderBalance, attachToCore, type DoctorProbeResult, type ProbeProvider, type DoctorDeps } from "./doctor.js";
+import { recordProviderResult, type ProviderBalanceEntry } from "./provider-health.js";
 import type { LlmComplete } from "./llm.js";
 import { AuthStorage } from "@earendil-works/pi-coding-agent";
+
+/** Update the provider-health registry from a result, then return it. Wrapped
+ * around every engine generation/critique/coding-session result so cooldowns
+ * and health chips reflect what actually happened, for both real and fake
+ * engines. */
+async function recorded(p: Promise<GenResult>): Promise<GenResult> {
+  const r = await p;
+  recordProviderResult(r);
+  return r;
+}
 
 /** pi's stop-reason union, derived from the message type so we never depend on
  * a separately-exported name that may drift across pi versions. */
@@ -176,6 +187,9 @@ export interface Engine {
   catalog: ModelCatalog;
   authStorage: AuthStorage;
   doctorProbe(provider: ProbeProvider): Promise<DoctorProbeResult>;
+  /** Probe a provider's account balance where an API exists (DeepSeek only
+   * today); undefined otherwise. Never echoes the stored key. */
+  probeProviderBalance(provider: ProbeProvider): Promise<ProviderBalanceEntry | undefined>;
   /** Register critique smokes into @pp/core. */
   attachToCore(): void;
 }
@@ -195,11 +209,12 @@ export function createEngine(options: CreateEngineOptions): Engine {
       mode: "fake",
       catalog,
       authStorage,
-      critique: (opts) => critique({ ...opts, complete: opts.complete ?? fake.complete }),
+      critique: (opts) => recorded(critique({ ...opts, complete: opts.complete ?? fake.complete })),
       runAuthoringCompletion: (opts) =>
-        runAuthoringCompletion({ ...opts, complete: opts.complete ?? fake.complete }),
-      runCodingSession: (opts) => fakeCodingSession(opts),
+        recorded(runAuthoringCompletion({ ...opts, complete: opts.complete ?? fake.complete })),
+      runCodingSession: (opts) => recorded(fakeCodingSession(opts)),
       doctorProbe: (provider) => doctorProbe(provider, deps),
+      probeProviderBalance: (provider) => probeProviderBalance(provider, deps),
       attachToCore: () => attachToCore(deps),
     };
   }
@@ -222,16 +237,19 @@ export function createEngine(options: CreateEngineOptions): Engine {
     mode: "pi",
     catalog,
     authStorage,
-    critique: async (opts) => critique(await withResolvedKey(opts.judgeModel.provider, opts)),
+    critique: async (opts) => recorded(critique(await withResolvedKey(opts.judgeModel.provider, opts))),
     runAuthoringCompletion: async (opts) =>
-      runAuthoringCompletion(await withResolvedKey(opts.model.provider, opts)),
+      recorded(runAuthoringCompletion(await withResolvedKey(opts.model.provider, opts))),
     runCodingSession: (opts) =>
-      runCodingSession({
-        ...opts,
-        authStorage: opts.authStorage ?? authStorage,
-        modelRegistry: opts.modelRegistry ?? catalog.registry,
-      }),
+      recorded(
+        runCodingSession({
+          ...opts,
+          authStorage: opts.authStorage ?? authStorage,
+          modelRegistry: opts.modelRegistry ?? catalog.registry,
+        }),
+      ),
     doctorProbe: (provider) => doctorProbe(provider, deps),
+    probeProviderBalance: (provider) => probeProviderBalance(provider, deps),
     attachToCore: () => attachToCore(deps),
   };
 }

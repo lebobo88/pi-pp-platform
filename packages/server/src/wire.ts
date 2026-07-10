@@ -4,7 +4,16 @@
  * match the wire shape 1:1 (see the deltas noted in each function).
  */
 import { prices, enabledProviders, catalog } from "@pp/core";
-import { getProviderStatus, listPiModels, providersWithCredential, providersWithCliLogin, type ProviderStatus as EngineProviderStatus } from "@pp/engine";
+import {
+  getProviderStatus,
+  listPiModels,
+  providersWithCredential,
+  providersWithCliLogin,
+  getProviderHealth,
+  type ProviderStatus as EngineProviderStatus,
+  type ProviderHealth,
+  type ProviderHealthEntry,
+} from "@pp/engine";
 
 /** The AuthStorage type, derived from the engine signature (no pi dep in @pp/server). */
 type AuthStorage = Parameters<typeof getProviderStatus>[0];
@@ -38,6 +47,13 @@ export function visibleProviders(storage: AuthStorage): string[] {
 /** Back-compat snapshot for importers expecting a constant. Prefer wireVendors(). */
 export const WIRE_VENDORS: readonly WireVendor[] = enabledProviders();
 
+/** Wire ProviderBalance (shared/api-types). */
+export interface WireProviderBalance {
+  amount: number;
+  currency: string;
+  as_of: string;
+}
+
 /** Wire ProviderStatus (shared/api-types). */
 export interface WireProviderStatus {
   vendor: WireVendor;
@@ -48,6 +64,31 @@ export interface WireProviderStatus {
   logged_in: boolean;
   masked_key: string | null;
   degraded: boolean;
+  /** Live health-registry state (WS2). Additive/optional across the wire. */
+  health?: ProviderHealth;
+  last_error?: string;
+  last_error_at?: string;
+  cooldown_until?: string;
+  balance?: WireProviderBalance;
+}
+
+/** Fold the engine's health-registry entry (epoch-ms timestamps) into the
+ * additive wire fields (ISO timestamps). `unknown` health is omitted so a
+ * never-observed provider's payload stays byte-identical to the pre-WS2 shape. */
+function healthWireFields(h: ProviderHealthEntry): Partial<WireProviderStatus> {
+  const out: Partial<WireProviderStatus> = {};
+  if (h.health !== "unknown") out.health = h.health;
+  if (h.last_error) out.last_error = h.last_error;
+  if (h.last_error_at != null) out.last_error_at = new Date(h.last_error_at).toISOString();
+  if (h.cooldown_until != null) out.cooldown_until = new Date(h.cooldown_until).toISOString();
+  if (h.balance) {
+    out.balance = {
+      amount: h.balance.amount,
+      currency: h.balance.currency,
+      as_of: new Date(h.balance.as_of).toISOString(),
+    };
+  }
+  return out;
 }
 
 /**
@@ -70,6 +111,10 @@ export function providerStatusWire(storage: AuthStorage, vendor: WireVendor): Wi
     logged_in: s.loggedIn,
     masked_key: s.fingerprint ?? null,
     degraded: false,
+    // Enrich with live health-registry state (health, last error, cooldown,
+    // last-known balance). All fields additive/optional — a never-observed
+    // provider adds nothing beyond the pre-WS2 shape.
+    ...healthWireFields(getProviderHealth(vendor)),
   };
 }
 

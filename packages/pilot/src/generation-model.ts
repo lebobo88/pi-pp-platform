@@ -163,6 +163,33 @@ export function generationModelIdForTier(
   );
 }
 
+/**
+ * Availability-aware pool rotation for the errored-attempt infra retry. Scans
+ * the tier's pool starting at `rotationIndex` for the first model whose provider
+ * the caller reports available (via {@link isModelAvailable} — typically the
+ * health-registry `isProviderAvailable`), so a quota/rate-limited provider is
+ * skipped rather than re-hit. When NO pool model is available (or no pool is
+ * configured) it falls back to the plain rotation at `rotationIndex`: the filter
+ * only ever reorders WITHIN an existing pool — it never invents a model, and the
+ * caller's own two-error-then-surface guard still bounds the retries.
+ */
+export function generationModelIdForTierAvailable(
+  tier: string,
+  rotationIndex: number,
+  override: LadderOverride | undefined,
+  isModelAvailable: (modelId: string) => boolean,
+): string {
+  const pool = effectiveTierPools(override)[tier];
+  if (pool && pool.length > 0) {
+    for (let step = 0; step < pool.length; step++) {
+      const i = (((rotationIndex + step) % pool.length) + pool.length) % pool.length;
+      if (isModelAvailable(pool[i]!)) return pool[i]!;
+    }
+  }
+  // No pool, or every pool model is cooled down — take the plain rotation.
+  return generationModelIdForTier(tier, rotationIndex, override);
+}
+
 export interface GenerationModel {
   provider: string;
   model_id: string;

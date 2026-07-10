@@ -9,6 +9,7 @@
  */
 export * from "./envelope.js";
 export * from "./catalog.js";
+export * from "./provider-health.js";
 export * from "./models.js";
 export * from "./auth.js";
 export * from "./oauth-login.js";

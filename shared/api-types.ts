@@ -271,6 +271,21 @@ export interface Project {
  * resolve a usable key. A provider may be `logged_in` but not yet `configured`.
  * `degraded` is always `false` on the pi server.
  */
+/**
+ * Live provider health as surfaced from the in-memory health registry (WS2).
+ * "unknown" until the harness has observed a generation/critique/probe result
+ * for the provider this process lifetime.
+ */
+export type ProviderHealthState = "ok" | "rate_limited" | "quota_exhausted" | "error" | "unknown";
+
+/** Last-known provider account balance (currently DeepSeek only). */
+export interface ProviderBalance {
+  amount: number;
+  currency: string;
+  /** ISO-8601 timestamp the balance was probed. */
+  as_of: string;
+}
+
 export interface ProviderStatus {
   vendor: Vendor;
   /** A usable credential is present for this vendor (the harness can generate). */
@@ -280,6 +295,23 @@ export interface ProviderStatus {
   /** @deprecated legacy CLI-era field — always null on the pi server. */
   cli_version: string | null;
   has_api_key: boolean;
+  /**
+   * Live health from the health registry (WS2). Optional + additive: absent on
+   * older payloads and treated as "unknown". Drives the status chip.
+   */
+  health?: ProviderHealthState;
+  /** Classified last provider error message (for a tooltip); absent when healthy. */
+  last_error?: string;
+  /** ISO-8601 timestamp of {@link last_error}. */
+  last_error_at?: string;
+  /**
+   * ISO-8601 timestamp until which a rate-limit cooldown holds. Absent when the
+   * provider is not cooling (a quota hold is conveyed by `health`, not a
+   * timestamp — it lasts until a successful probe).
+   */
+  cooldown_until?: string;
+  /** Last-known account balance where an API exists (DeepSeek); absent otherwise. */
+  balance?: ProviderBalance;
   /**
    * A local vendor-CLI / subscription login was detected on disk. Presence
    * signal only — does not imply `configured`. For pi-OAuth providers
@@ -871,6 +903,8 @@ export interface ProviderTestResult {
   model?: string;
   wall_ms?: number;
   detail?: string;
+  /** Freshly probed account balance where an API exists (DeepSeek); absent otherwise. */
+  balance?: ProviderBalance;
 }
 
 /**

@@ -195,7 +195,14 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
     const vendor = (req.params as { vendor: string }).vendor;
     const known = listPiModels(vendor).length > 0 || visibleProviders(storage).includes(vendor);
     if (!known) return reply.code(404).send({ error: "unknown provider" });
+    // doctorProbe clears the health-registry cooldown on a healthy probe (and
+    // records the real cause on failure). A balance probe runs alongside it for
+    // providers that expose one (DeepSeek) — server-side only, key never echoed.
     const probe = await deps.engine.doctorProbe(vendor);
+    const balance = probe.ok ? await deps.engine.probeProviderBalance(vendor) : undefined;
+    // Publish the refreshed status (now carrying cleared cooldown + fresh
+    // balance) so open Providers views update without a manual refetch.
+    deps.bus.publish({ type: "provider.status", data: providerStatusWire(storage, vendor) });
     return {
       vendor,
       ok: probe.ok,
@@ -203,6 +210,9 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ServerDeps): 
       model: probe.model,
       wall_ms: probe.latency_ms,
       detail: probe.error,
+      ...(balance
+        ? { balance: { amount: balance.amount, currency: balance.currency, as_of: new Date(balance.as_of).toISOString() } }
+        : {}),
     };
   });
 }
