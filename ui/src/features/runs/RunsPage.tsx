@@ -15,10 +15,14 @@ import { formatUsd, formatElapsed, formatRelative, shortId, basename } from "@/l
 /** Server page size — small enough that "Load more" is exercised on real history. */
 const PAGE_SIZE = 25;
 
+/** Maximum runs that can be compared at once. */
+const MAX_COMPARE = 4;
+
 export function RunsPage() {
   const navigate = useNavigate();
   const activeProject = useUiStore((s) => s.activeProjectPath);
   const [status, setStatus] = useState<RunStatus | "">("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const {
     data: runs,
@@ -37,7 +41,46 @@ export function RunsPage() {
   const sortable = !hasNextPage;
   const sortVal = <V extends string | number>(fn: (r: RunSummary) => V) => (sortable ? fn : undefined);
 
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < MAX_COMPARE) {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function handleCompare() {
+    if (selected.size < 2) return;
+    navigate(`/runs/compare?ids=${[...selected].join(",")}`);
+  }
+
   const columns: Column<RunSummary>[] = [
+    {
+      key: "select",
+      header: "",
+      width: 32,
+      render: (r) => (
+        <input
+          type="checkbox"
+          checked={selected.has(r.id)}
+          disabled={!selected.has(r.id) && selected.size >= MAX_COMPARE}
+          onChange={() => toggleSelect(r.id)}
+          onClick={(e) => e.stopPropagation()}
+          title={
+            !selected.has(r.id) && selected.size >= MAX_COMPARE
+              ? `Select up to ${MAX_COMPARE} runs`
+              : selected.has(r.id)
+              ? "Deselect"
+              : "Select for comparison"
+          }
+          className="cursor-pointer accent-accent"
+        />
+      ),
+    },
     { key: "id", header: "Run", render: (r) => shortId(r.id, 14), sortValue: sortVal((r) => r.id), mono: true, width: 130 },
     {
       key: "request",
@@ -77,7 +120,21 @@ export function RunsPage() {
     <Page
       title="Runs"
       description="History across all projects. Filter with the project picker or by status."
-      actions={<Button variant="primary" onClick={() => navigate("/runs/new")}>New run</Button>}
+      actions={
+        <>
+          {selected.size >= 2 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCompare}
+              title={`Compare ${selected.size} selected runs`}
+            >
+              Compare {selected.size} selected
+            </Button>
+          )}
+          <Button variant="primary" onClick={() => navigate("/runs/new")}>New run</Button>
+        </>
+      }
     >
       <Card
         flush
@@ -109,6 +166,27 @@ export function RunsPage() {
           />
         )}
       </Card>
+
+      {selected.size > 0 && (
+        <div className="mt-3 flex items-center gap-3 rounded-md border border-accent/30 bg-accent/5 px-4 py-2 text-[12px] text-ink-2">
+          <span>
+            {selected.size} run{selected.size !== 1 ? "s" : ""} selected
+            {selected.size < 2 ? " — select at least 2 to compare" : ""}
+            {selected.size >= MAX_COMPARE ? ` (max ${MAX_COMPARE})` : ""}
+          </span>
+          <button
+            className="text-[11px] text-ink-3 underline hover:text-ink-1"
+            onClick={() => setSelected(new Set())}
+          >
+            clear
+          </button>
+          {selected.size >= 2 && (
+            <Button size="sm" variant="primary" onClick={handleCompare}>
+              Compare Selected
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className="mt-3 flex justify-center">
         <Button

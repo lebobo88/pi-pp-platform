@@ -12,6 +12,7 @@ import {
   type CompletionReadinessResponse,
   type EventLogEntry,
   type GateHistoryEntry,
+  type RunComparisonResponse,
 } from "@shared/api-types";
 
 export interface RunsFilter {
@@ -125,5 +126,17 @@ export function useRunCompletionReadiness(runId: string | undefined) {
     queryKey: qk.runCompletionReadiness(runId ?? ""),
     queryFn: ({ signal }) => api.get<CompletionReadinessResponse>(apiPaths.runCompletionReadiness(runId!), { signal }),
     enabled: !!runId,
+  });
+}
+
+/**
+ * Cross-run comparison data for 2–4 run ids.
+ * Disabled when ids is empty or has fewer than 2 entries.
+ */
+export function useRunComparison(ids: string[]) {
+  return useQuery({
+    queryKey: qk.runsCompare(ids),
+    queryFn: ({ signal }) => api.get<RunComparisonResponse>(apiPaths.runsCompare(ids), { signal }),
+    enabled: ids.length >= 2,
   });
 }

@@ -6,7 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, resolve, sep } from "node:path";
-import { listRuns, getRun, getEventLog, getGateHistory, buildReplayBundle, db, type RunStatus } from "@pp/core";
+import { listRuns, getRun, getEventLog, getGateHistory, getRunComparison, buildReplayBundle, db, type RunStatus } from "@pp/core";
 import { V1 } from "../deps.js";
 
 function contentKind(path: string): string {
@@ -38,6 +38,34 @@ export function registerRunRoutes(app: FastifyInstance): void {
       return r;
     });
     return { ...page, items };
+  });
+
+  // Static segment — find-my-way prioritises this over /runs/:id regardless
+  // of registration order; registered explicitly before the param route for clarity.
+  app.get(`${V1}/runs/compare`, async (req, reply) => {
+    const q = req.query as { ids?: string };
+    if (!q.ids) {
+      return reply.code(400).send({ error: "ids query parameter is required (comma-separated, 2–4 run ids)" });
+    }
+    const ids = q.ids.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.length < 2) {
+      return reply.code(400).send({ error: "at least 2 run ids are required for comparison" });
+    }
+    if (ids.length > 4) {
+      return reply.code(400).send({ error: "at most 4 run ids may be compared at once" });
+    }
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (seen.has(id)) {
+        return reply.code(400).send({ error: `duplicate run id: ${id}` });
+      }
+      seen.add(id);
+    }
+    const result = getRunComparison(ids);
+    if (result === null) {
+      return reply.code(400).send({ error: "one or more run ids not found" });
+    }
+    return result;
   });
 
   // Sub-resources before the bare :id.

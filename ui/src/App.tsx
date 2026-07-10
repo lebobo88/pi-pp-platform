@@ -34,6 +34,7 @@ const KitchenSinkPage = lazy(() => import("@/routes/KitchenSink").then((m) => ({
 const NotFoundPage = lazy(() => import("@/routes/stubs").then((m) => ({ default: m.NotFoundPage })));
 const RunObservatoryPage = lazy(() => import("@/features/observability/RunObservatoryPage").then((m) => ({ default: m.RunObservatoryPage })));
 const MissionControlPage = lazy(() => import("@/features/observability/MissionControlPage").then((m) => ({ default: m.MissionControlPage })));
+const RunComparePage = lazy(() => import("@/features/observability/RunComparePage").then((m) => ({ default: m.RunComparePage })));
 
 const queryClient = createQueryClient();
 
@@ -46,6 +47,7 @@ const router = createBrowserRouter([
       { path: "/projects/:projectPath", element: <ProjectDetailPage /> },
       { path: "/runs", element: <RunsPage /> },
       { path: "/runs/new", element: <NewRunPage /> },
+      { path: "/runs/compare", element: <RunComparePage /> },
       { path: "/runs/:runId", element: <RunDetailPage /> },
       { path: "/runs/:runId/live", element: <RunObservatoryPage /> },
       { path: "/observability", element: <MissionControlPage /> },

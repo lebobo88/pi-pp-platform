@@ -979,6 +979,45 @@ export interface HarnessSettings {
         model: string;
     }>;
 }
+export interface RunComparisonModelUsage {
+    /** Distinct stage count this model serviced. */
+    stages: number;
+    cost: number;
+    tokens: number;
+}
+export interface RunComparisonTotals {
+    cost_usd: number;
+    tokens_in: number;
+    tokens_out: number;
+    /** Elapsed wall-clock in ms; null when run not yet finished. */
+    wall_ms: number | null;
+    stage_count: number;
+    /** Fraction (0..1): pass verdicts / total non-retracted verdicts; 0 when no verdicts. */
+    pass_rate: number;
+    /** Attempts with retry_index > 0 (Reflexion retries). */
+    reflexion_count: number;
+    model_usage: Record<string, RunComparisonModelUsage>;
+}
+export interface RunComparisonStageSlot {
+    status: string;
+    cost: number;
+    tokens: number;
+    /** Outcome of the latest non-retracted verdict on the winner attempt; null when none. */
+    winning_verdict_outcome: string | null;
+}
+export interface RunComparisonStageRow {
+    stage_kind: string;
+    /** Alignment key within this kind (plan_index when present, else 0-based ordinal). */
+    plan_order: number;
+    /** Keyed by run_id. null = run has no stage for this (kind, plan_order) slot. */
+    per_run: Record<string, RunComparisonStageSlot | null>;
+}
+/** Response from `GET /api/v1/runs/compare?ids=a,b,c`. */
+export interface RunComparisonResponse {
+    run_ids: string[];
+    per_run: Record<string, RunComparisonTotals>;
+    stage_rows: RunComparisonStageRow[];
+}
 /** A TDD pre/post execution result from the tdd_checks table. */
 export type TddCheckGateEntry = {
     gate: "tdd_check";
@@ -1279,6 +1318,8 @@ export declare const apiPaths: {
     readonly projectAgentsMd: (path: string) => string;
     readonly projectConstitution: (path: string) => string;
     readonly runs: "/api/v1/runs";
+    /** GET — compare 2–4 runs by ids (comma-separated). Returns RunComparisonResponse. */
+    readonly runsCompare: (ids: string[]) => string;
     readonly run: (runId: string) => string;
     /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
      *  the bearer as `?token=` — EventSource cannot send headers. */

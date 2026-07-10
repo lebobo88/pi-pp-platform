@@ -3819,6 +3819,268 @@ export function getGateHistory(run_id: string): GateHistoryEntry[] | null {
   return entries;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+ * Run comparison — read-only cross-run aggregate (mirrors shared/api-types
+ * RunComparisonResponse; defined locally per core convention, shape is
+ * identical to the wire type so the route can return it directly).
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export type RunComparisonModelUsage = {
+  /** Distinct stage count this model serviced. */
+  stages: number;
+  cost: number;
+  tokens: number;
+};
+
+export type RunComparisonTotals = {
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  /** Elapsed wall-clock in ms (finished_at - started_at); null when not yet finished. */
+  wall_ms: number | null;
+  stage_count: number;
+  /** Fraction (0..1): pass verdicts / total non-retracted verdicts. 0 when no verdicts. */
+  pass_rate: number;
+  /** Attempts with retry_index > 0 (Reflexion retries). */
+  reflexion_count: number;
+  model_usage: Record<string, RunComparisonModelUsage>;
+};
+
+export type RunComparisonStageSlot = {
+  status: string;
+  cost: number;
+  tokens: number;
+  /** Outcome of the latest non-retracted verdict on the stage's winner attempt; null when none. */
+  winning_verdict_outcome: string | null;
+};
+
+export type RunComparisonStageRow = {
+  stage_kind: string;
+  /** Alignment key within this kind: plan_index when present, else 0-based ordinal by started_at. */
+  plan_order: number;
+  /** Keyed by run_id. null = this run has no stage for this (kind, plan_order) slot. */
+  per_run: Record<string, RunComparisonStageSlot | null>;
+};
+
+export type RunComparisonResult = {
+  run_ids: string[];
+  per_run: Record<string, RunComparisonTotals>;
+  stage_rows: RunComparisonStageRow[];
+};
+
+/**
+ * Read-only cross-run comparison over runs/stages/attempts/verdicts.
+ *
+ * Returns null when ANY id in `ids` is unknown (the server route converts
+ * this to a 400). Mirrors the GateHistoryEntry null-for-unknown convention.
+ */
+export function getRunComparison(ids: string[]): RunComparisonResult | null {
+  const d = db();
+
+  // Verify every id exists before doing any aggregation work.
+  for (const id of ids) {
+    if (!d.prepare(`SELECT id FROM runs WHERE id = ?`).get(id)) return null;
+  }
+
+  const per_run: Record<string, RunComparisonTotals> = {};
+
+  // Per-run stage data (kind, plan_order, slot values) stored for the
+  // stage-alignment pass that follows.
+  const stagesByRun: Record<
+    string,
+    Array<{
+      id: string;
+      kind: string;
+      status: string;
+      plan_index: number | null;
+      plan_order: number;
+      winner_attempt_id: string | null;
+      cost: number;
+      tokens: number;
+    }>
+  > = {};
+
+  for (const run_id of ids) {
+    const runRow = d
+      .prepare(`SELECT started_at, finished_at FROM runs WHERE id = ?`)
+      .get(run_id) as { started_at: string; finished_at: string | null };
+
+    // Attempt-level aggregates for this run (cost, tokens, reflexion count).
+    const totals = d
+      .prepare(
+        `SELECT
+           COALESCE(SUM(a.cost_usd),    0) AS cost_usd,
+           COALESCE(SUM(a.tokens_in),   0) AS tokens_in,
+           COALESCE(SUM(a.tokens_out),  0) AS tokens_out,
+           COUNT(CASE WHEN a.retry_index > 0 THEN 1 END) AS reflexion_count
+         FROM stages s
+         JOIN attempts a ON a.stage_id = s.id
+         WHERE s.run_id = ?`,
+      )
+      .get(run_id) as {
+        cost_usd: number;
+        tokens_in: number;
+        tokens_out: number;
+        reflexion_count: number;
+      };
+
+    const stageCount = (
+      d.prepare(`SELECT COUNT(*) AS cnt FROM stages WHERE run_id = ?`).get(run_id) as { cnt: number }
+    ).cnt;
+
+    // Verdict pass-rate over all non-retracted verdicts for this run.
+    const vStats = d
+      .prepare(
+        `SELECT
+           COUNT(CASE WHEN v.outcome = 'pass' THEN 1 END) AS pass_verdicts,
+           COUNT(v.id)                                     AS total_verdicts
+         FROM verdicts v
+         JOIN attempts a ON a.id = v.attempt_id
+         JOIN stages   s ON s.id = a.stage_id
+         WHERE s.run_id = ? AND v.retracted_at IS NULL`,
+      )
+      .get(run_id) as { pass_verdicts: number; total_verdicts: number };
+
+    const passRate =
+      vStats.total_verdicts > 0 ? vStats.pass_verdicts / vStats.total_verdicts : 0;
+
+    // Wall-clock elapsed.
+    const wallMs = runRow.finished_at
+      ? Date.parse(runRow.finished_at) - Date.parse(runRow.started_at)
+      : null;
+
+    // Per-model usage breakdown.
+    const modelRows = d
+      .prepare(
+        `SELECT
+           a.model_id,
+           COUNT(DISTINCT a.stage_id)                                          AS stages,
+           COALESCE(SUM(a.cost_usd), 0)                                        AS cost,
+           COALESCE(SUM(COALESCE(a.tokens_in, 0) + COALESCE(a.tokens_out, 0)), 0) AS tokens
+         FROM attempts a
+         JOIN stages s ON s.id = a.stage_id
+         WHERE s.run_id = ?
+         GROUP BY a.model_id`,
+      )
+      .all(run_id) as Array<{ model_id: string; stages: number; cost: number; tokens: number }>;
+
+    const model_usage: Record<string, RunComparisonModelUsage> = {};
+    for (const mr of modelRows) {
+      model_usage[mr.model_id] = { stages: mr.stages, cost: mr.cost, tokens: mr.tokens };
+    }
+
+    per_run[run_id] = {
+      cost_usd: totals.cost_usd,
+      tokens_in: totals.tokens_in,
+      tokens_out: totals.tokens_out,
+      wall_ms: wallMs,
+      stage_count: stageCount,
+      pass_rate: passRate,
+      reflexion_count: totals.reflexion_count,
+      model_usage,
+    };
+
+    // Per-stage aggregates (cost + tokens sum across ALL attempts on the stage).
+    const stages = d
+      .prepare(
+        `SELECT
+           s.id, s.kind, s.status, s.plan_index, s.started_at, s.winner_attempt_id,
+           COALESCE(SUM(a.cost_usd), 0)                                           AS cost,
+           COALESCE(SUM(COALESCE(a.tokens_in, 0) + COALESCE(a.tokens_out, 0)), 0) AS tokens
+         FROM stages s
+         LEFT JOIN attempts a ON a.stage_id = s.id
+         WHERE s.run_id = ?
+         GROUP BY s.id
+         ORDER BY s.started_at ASC`,
+      )
+      .all(run_id) as Array<{
+        id: string;
+        kind: string;
+        status: string;
+        plan_index: number | null;
+        started_at: string;
+        winner_attempt_id: string | null;
+        cost: number;
+        tokens: number;
+      }>;
+
+    // Assign plan_order: use plan_index when present; else 0-based ordinal
+    // within (run_id, kind) sorted by started_at (already ASC from the query).
+    const kindOrdinal: Record<string, number> = {};
+    stagesByRun[run_id] = stages.map((s) => {
+      const plan_order =
+        s.plan_index != null
+          ? s.plan_index
+          : (kindOrdinal[s.kind] = (kindOrdinal[s.kind] ?? 0));
+      if (s.plan_index == null) kindOrdinal[s.kind] = plan_order + 1;
+      return { ...s, plan_order };
+    });
+  }
+
+  // ── Stage alignment ───────────────────────────────────────────────────────
+  // Collect union of all (kind, plan_order) slots across all runs.
+  type SlotKey = string; // `${kind}\x00${plan_order}`
+  const allSlots = new Map<SlotKey, { stage_kind: string; plan_order: number }>();
+  for (const run_id of ids) {
+    for (const s of stagesByRun[run_id] ?? []) {
+      const key: SlotKey = `${s.kind}\x00${s.plan_order}`;
+      if (!allSlots.has(key)) allSlots.set(key, { stage_kind: s.kind, plan_order: s.plan_order });
+    }
+  }
+
+  // Sort slots: kind ascending, then plan_order ascending.
+  const sortedSlots = [...allSlots.values()].sort((a, b) => {
+    if (a.stage_kind < b.stage_kind) return -1;
+    if (a.stage_kind > b.stage_kind) return 1;
+    return a.plan_order - b.plan_order;
+  });
+
+  const stage_rows: RunComparisonStageRow[] = [];
+  for (const slot of sortedSlots) {
+    const slotKey: SlotKey = `${slot.stage_kind}\x00${slot.plan_order}`;
+    const per_run_slot: Record<string, RunComparisonStageSlot | null> = {};
+
+    for (const run_id of ids) {
+      const stage = (stagesByRun[run_id] ?? []).find(
+        (s) => `${s.kind}\x00${s.plan_order}` === slotKey,
+      );
+
+      if (!stage) {
+        per_run_slot[run_id] = null;
+        continue;
+      }
+
+      // Winning attempt's latest non-retracted verdict outcome.
+      let winningVerdictOutcome: string | null = null;
+      if (stage.winner_attempt_id) {
+        const vrow = d
+          .prepare(
+            `SELECT outcome FROM verdicts
+              WHERE attempt_id = ? AND retracted_at IS NULL
+              ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get(stage.winner_attempt_id) as { outcome: string } | undefined;
+        winningVerdictOutcome = vrow?.outcome ?? null;
+      }
+
+      per_run_slot[run_id] = {
+        status: stage.status,
+        cost: stage.cost,
+        tokens: stage.tokens,
+        winning_verdict_outcome: winningVerdictOutcome,
+      };
+    }
+
+    stage_rows.push({
+      stage_kind: slot.stage_kind,
+      plan_order: slot.plan_order,
+      per_run: per_run_slot,
+    });
+  }
+
+  return { run_ids: ids, per_run, stage_rows };
+}
+
 export function getFinalizationArtifacts(run_id: string): FinalizationArtifactRef[] {
   const rows = db()
     .prepare(
