@@ -91,6 +91,8 @@ exports.apiPaths = {
      *  the bearer as `?token=` — EventSource cannot send headers. */
     runEvents: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/events`,
     runEventLog: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/event-log`,
+    /** GET — unified gate history (tdd_checks, artifact_validations, verdicts, smoke) for a run; 404 when run unknown. */
+    runGates: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/gates`,
     runReplay: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
     runMissability: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
     runBorda: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}/borda`,

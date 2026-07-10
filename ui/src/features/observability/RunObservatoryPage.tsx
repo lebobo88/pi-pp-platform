@@ -311,7 +311,11 @@ export function RunObservatoryPage() {
             {/* Column 2: Attempt meta grid + Gate feed */}
             <div className="space-y-4">
               <AttemptMetaGrid overlay={overlay} />
-              <GateFeed events={overlay.gateEvents ?? []} />
+              <GateFeed
+                events={overlay.gateEvents ?? []}
+                runId={runId}
+                isFinished={shouldHydrateFromEventLog}
+              />
               {finalArtifacts.length > 0 && (
                 <Card title="Final artifacts">
                   <ul className="space-y-2 text-[12px] text-ink-2">

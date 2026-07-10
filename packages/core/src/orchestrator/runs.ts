@@ -3606,6 +3606,219 @@ export function getEventLog(
   });
 }
 
+/**
+ * Discriminated gate-event entry. Mirrors GateHistoryEntry in shared/api-types.ts.
+ * Defined here (not imported from shared) to keep @pp/core free of a hard
+ * dependency on the shared wire contract. The server route bridges the two types
+ * by returning this value directly (shape is identical).
+ */
+export type GateHistoryEntry =
+  | {
+      gate: "tdd_check";
+      id: string;
+      stage_id: string;
+      phase: string;
+      mode: string;
+      test_runner: string;
+      status: string;
+      passed_count: number | null;
+      failed_count: number | null;
+      duration_ms: number;
+      reason: string | null;
+      ts: string;
+    }
+  | {
+      gate: "artifact_validation";
+      id: string;
+      stage_id: string;
+      artifact_id: string | null;
+      validator_kind: string;
+      artifact_kind: string | null;
+      artifact_path: string;
+      status: string;
+      duration_ms: number;
+      reason: string | null;
+      ts: string;
+    }
+  | {
+      gate: "verdict";
+      id: string;
+      stage_id: string;
+      attempt_id: string;
+      judge_producer: string;
+      judge_model_id: string;
+      rubric_id: string | null;
+      outcome: string;
+      cross_vendor: boolean;
+      retracted: boolean;
+      ts: string;
+    }
+  | {
+      gate: "smoke";
+      stage_id: string;
+      candidate_index: number;
+      status: string;
+      reason: string | null;
+      ts: string;
+    };
+
+/**
+ * Unified, timestamp-ascending gate history for a run.
+ *
+ * Merges rows from:
+ *   - tdd_checks (TDD pre/post execution results)
+ *   - artifact_validations (structural validator results)
+ *   - verdicts (judge outcomes, joined through attempts → stages)
+ *   - smoke results (parsed from stages.notes_json.smoke_results)
+ *
+ * Returns null when the run doesn't exist (404-able, matching getEventLog's
+ * convention). Free-text fields (reason, artifact_path) are passed through
+ * scrubEventPayload to redact any accidental secret-shaped strings.
+ */
+export function getGateHistory(run_id: string): GateHistoryEntry[] | null {
+  const runExists = db().prepare(`SELECT id FROM runs WHERE id = ?`).get(run_id);
+  if (!runExists) return null;
+
+  const entries: GateHistoryEntry[] = [];
+
+  // ── 1. TDD checks (run_id column — direct lookup) ────────────────────────
+  const tddRows = db()
+    .prepare(
+      `SELECT id, stage_id, phase, mode, test_runner, status,
+              passed_count, failed_count, duration_ms, reason, created_at
+         FROM tdd_checks
+        WHERE run_id = ?
+        ORDER BY created_at ASC`,
+    )
+    .all(run_id) as Array<{
+      id: string; stage_id: string; phase: string; mode: string; test_runner: string;
+      status: string; passed_count: number | null; failed_count: number | null;
+      duration_ms: number; reason: string | null; created_at: string;
+    }>;
+
+  for (const r of tddRows) {
+    entries.push({
+      gate: "tdd_check",
+      id: r.id,
+      stage_id: r.stage_id,
+      phase: r.phase,
+      mode: r.mode,
+      test_runner: r.test_runner,
+      status: r.status,
+      passed_count: r.passed_count,
+      failed_count: r.failed_count,
+      duration_ms: r.duration_ms,
+      reason: r.reason != null ? scrubEventPayload(r.reason) as string : null,
+      ts: r.created_at,
+    });
+  }
+
+  // ── 2. Artifact validations (run_id column — direct lookup) ──────────────
+  const avRows = db()
+    .prepare(
+      `SELECT id, stage_id, artifact_id, validator_kind, artifact_kind,
+              artifact_path, status, duration_ms, reason, created_at
+         FROM artifact_validations
+        WHERE run_id = ?
+        ORDER BY created_at ASC`,
+    )
+    .all(run_id) as Array<{
+      id: string; stage_id: string; artifact_id: string | null;
+      validator_kind: string; artifact_kind: string | null; artifact_path: string;
+      status: string; duration_ms: number; reason: string | null; created_at: string;
+    }>;
+
+  for (const r of avRows) {
+    entries.push({
+      gate: "artifact_validation",
+      id: r.id,
+      stage_id: r.stage_id,
+      artifact_id: r.artifact_id,
+      validator_kind: r.validator_kind,
+      artifact_kind: r.artifact_kind,
+      artifact_path: scrubEventPayload(r.artifact_path) as string,
+      status: r.status,
+      duration_ms: r.duration_ms,
+      reason: r.reason != null ? scrubEventPayload(r.reason) as string : null,
+      ts: r.created_at,
+    });
+  }
+
+  // ── 3. Verdicts (join: verdicts → attempts → stages; filter by stages.run_id) ─
+  const verdictRows = db()
+    .prepare(
+      `SELECT v.id, v.attempt_id, v.judge_producer, v.judge_model_id,
+              v.rubric_id, v.outcome, v.cross_vendor, v.retracted_at, v.created_at,
+              a.stage_id
+         FROM verdicts v
+         JOIN attempts a ON a.id = v.attempt_id
+         JOIN stages   s ON s.id = a.stage_id
+        WHERE s.run_id = ?
+        ORDER BY v.created_at ASC`,
+    )
+    .all(run_id) as Array<{
+      id: string; attempt_id: string; judge_producer: string; judge_model_id: string;
+      rubric_id: string | null; outcome: string; cross_vendor: number;
+      retracted_at: string | null; created_at: string; stage_id: string;
+    }>;
+
+  for (const r of verdictRows) {
+    entries.push({
+      gate: "verdict",
+      id: r.id,
+      stage_id: r.stage_id,
+      attempt_id: r.attempt_id,
+      judge_producer: r.judge_producer,
+      judge_model_id: r.judge_model_id,
+      rubric_id: r.rubric_id,
+      outcome: r.outcome,
+      cross_vendor: r.cross_vendor === 1,
+      retracted: r.retracted_at != null,
+      ts: r.created_at,
+    });
+  }
+
+  // ── 4. Smoke results from stages.notes_json ───────────────────────────────
+  type SmokeResult = { status: string; reason?: string | null; recorded_at?: string };
+  const stageRows = db()
+    .prepare(
+      `SELECT id, notes_json FROM stages
+        WHERE run_id = ? AND notes_json IS NOT NULL`,
+    )
+    .all(run_id) as Array<{ id: string; notes_json: string }>;
+
+  for (const stage of stageRows) {
+    let notes: { smoke_results?: Record<string, SmokeResult> };
+    try {
+      notes = JSON.parse(stage.notes_json) as typeof notes;
+    } catch {
+      continue;
+    }
+    if (!notes.smoke_results || typeof notes.smoke_results !== "object") continue;
+    for (const [key, result] of Object.entries(notes.smoke_results)) {
+      const candidateIndex = Number(key);
+      if (!Number.isFinite(candidateIndex) || !result || typeof result !== "object") continue;
+      entries.push({
+        gate: "smoke",
+        stage_id: stage.id,
+        candidate_index: candidateIndex,
+        status: typeof result.status === "string" ? result.status : "unknown",
+        reason: typeof result.reason === "string" ? scrubEventPayload(result.reason) as string : null,
+        ts: result.recorded_at ?? "",
+      });
+    }
+  }
+
+  // ── Sort all entries by timestamp ascending (empty ts sorts first) ────────
+  entries.sort((a, b) => {
+    if (a.ts < b.ts) return -1;
+    if (a.ts > b.ts) return 1;
+    return 0;
+  });
+
+  return entries;
+}
+
 export function getFinalizationArtifacts(run_id: string): FinalizationArtifactRef[] {
   const rows = db()
     .prepare(
