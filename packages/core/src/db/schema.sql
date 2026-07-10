@@ -250,3 +250,16 @@ CREATE TABLE IF NOT EXISTS evolution_commits (
   rolled_back_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_evolution_commits_proposal ON evolution_commits(proposal_id);
+
+-- v12: Phase-level timing (observability Opportunity 3). One row per named
+-- pilot phase per run. Additive-only; missing rows on legacy runs degrade
+-- gracefully.
+CREATE TABLE IF NOT EXISTS phases (
+  id          INTEGER PRIMARY KEY,
+  run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  phase       TEXT NOT NULL,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  wall_ms     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phases_run ON phases(run_id);

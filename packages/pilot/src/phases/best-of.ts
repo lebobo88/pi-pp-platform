@@ -30,6 +30,7 @@ import {
   getStageFinalizeReadiness,
   getRubric,
   resolveVerdict,
+  log,
   type GateType,
   type Profile,
   type ClaudeTier,
@@ -149,7 +150,7 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     });
     const genProvider = providerForModel(rot.model_id);
     if (!genProvider) {
-      console.warn(`[pp/pilot best-of] providerForModel returned no provider for model "${rot.model_id}"; candidate attempt will persist provider=NULL and omit provider from SSE frames`);
+      log.warn({ modelId: rot.model_id }, "[pp/pilot best-of] providerForModel returned no provider; candidate attempt will persist provider=NULL and omit provider from SSE frames");
     }
     if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
       throw new Error(

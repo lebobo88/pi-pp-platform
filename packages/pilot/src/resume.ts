@@ -34,6 +34,7 @@ import {
   getRunCompletionReadiness,
   claimRunForResume,
   persistStagePlan,
+  recordPhaseTiming,
   ProjectLock,
   ProjectLockBusyError,
   forceUnlock,
@@ -52,6 +53,31 @@ import { reconcilePlanWithRequirements } from "./phases/plan-reconciliation.js";
 import { runMissabilityPhase } from "./phases/missability.js";
 import { runMasterPlanPhase } from "./phases/master-plan.js";
 import { runFinalizePhase, type StageReport } from "./phases/finalize.js";
+
+/**
+ * Phase-timing helper for the resume path: same contract as phaseTimer in
+ * run-pilot.ts but defined locally to avoid a circular import. Emits
+ * "phase.completed" and persists a phases row; non-fatal on error.
+ */
+async function resumePhaseTimer<T>(
+  ctx: RunContext,
+  phase: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const startMs = Date.now();
+  const started_at = new Date(startMs).toISOString();
+  const result = await fn();
+  const finishMs = Date.now();
+  const wall_ms = finishMs - startMs;
+  const finished_at = new Date(finishMs).toISOString();
+  try {
+    emit(ctx, "phase.completed", { phase, wall_ms });
+    recordPhaseTiming({ run_id: ctx.run_id, phase, started_at, finished_at, wall_ms });
+  } catch {
+    // observability writes must never crash the resume flow
+  }
+  return result;
+}
 
 export type ResumeOpts = {
   runId: string;
@@ -386,39 +412,41 @@ export async function resumeRun(opts: ResumeOpts): Promise<RunResumeResponse> {
     ctx.finalStatus = "complete"; // optimistic; downgraded below by any surfaced/aborted outcome
 
     // 5. Continue any remaining planned stages.
-    for (let i = 0; i < plan.length; i++) {
-      if (coveredPlanIndexes.has(i)) continue;
-      if (ctx.signal?.aborted) {
-        ctx.finalStatus = "aborted";
-        ctx.abortReason = "aborted by signal";
-        break;
+    await resumePhaseTimer(ctx, "stage_loop", async () => {
+      for (let i = 0; i < plan.length; i++) {
+        if (coveredPlanIndexes.has(i)) continue;
+        if (ctx.signal?.aborted) {
+          ctx.finalStatus = "aborted";
+          ctx.abortReason = "aborted by signal";
+          break;
+        }
+        const stage = plan[i];
+        if (!stage) continue; // defensive: sparse/short plan array (should not happen)
+        stage.planIndex = i;
+        const outcome = await dispatchStage(ctx, stage);
+        stageReports.push({ kind: stage.kind, outcome });
+        if (outcome === "aborted") {
+          ctx.finalStatus = "aborted";
+          break;
+        }
+        if (outcome === "surfaced") {
+          ctx.finalStatus = "surfaced";
+          break; // surface halts the pipeline, same as RunPilot.execute()
+        }
       }
-      const stage = plan[i];
-      if (!stage) continue; // defensive: sparse/short plan array (should not happen)
-      stage.planIndex = i;
-      const outcome = await dispatchStage(ctx, stage);
-      stageReports.push({ kind: stage.kind, outcome });
-      if (outcome === "aborted") {
-        ctx.finalStatus = "aborted";
-        break;
-      }
-      if (outcome === "surfaced") {
-        ctx.finalStatus = "surfaced";
-        break; // surface halts the pipeline, same as RunPilot.execute()
-      }
-    }
+    });
 
     // 6. Completion phases — only when every stage is clear.
     if (ctx.finalStatus === "complete") {
-      const missability = runMissabilityPhase(ctx);
-      if (missability.passed) runMasterPlanPhase(ctx);
+      const missability = await resumePhaseTimer(ctx, "missability", () => runMissabilityPhase(ctx));
+      if (missability.passed) await resumePhaseTimer(ctx, "master_plan", () => runMasterPlanPhase(ctx));
     }
 
     // 7. Finalize. stageReports covers the run's FULL history (rehydrated +
     // any newly-dispatched stages), so buildSummary's "What changed"/"What's
     // next" reflects current reality — a once-surfaced run that now passes
     // no longer leaves stale "needs follow-up" text behind.
-    await runFinalizePhase(ctx, stageReports);
+    await resumePhaseTimer(ctx, "finalize", () => runFinalizePhase(ctx, stageReports));
 
     return { run_id: runId, status: ctx.finalStatus, resumed: true };
   } catch (err) {

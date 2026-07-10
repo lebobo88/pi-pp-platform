@@ -28,6 +28,7 @@ import {
   selectSkillsForStage,
   promoteArtifact,
   resolveVerdict,
+  log,
   getSmokeResults,
   GREENFIELD_SIGNAL,
   type GateType,
@@ -209,7 +210,7 @@ function git(cwd: string, args: string[]): string | null {
         sleepSync(250);
         continue;
       }
-      console.warn(`[pilot] git ${args[0]} failed after retry${stderr ? `: ${stderr.slice(0, 300)}` : ""}`);
+      log.warn({ cmd: args[0], stderr: stderr?.slice(0, 300) }, "[pilot] git command failed after retry");
       return null;
     }
   }
@@ -453,7 +454,7 @@ async function generate(
     // practice a launched attempt should always resolve (preflight below
     // would already have thrown for a missing key), so this is a canary
     // rather than an expected code path.
-    console.warn(`[pp/pilot] providerForModel returned no provider for model "${modelId}"; attempt will persist provider=NULL and omit provider from SSE frames`);
+    log.warn({ modelId }, "[pp/pilot] providerForModel returned no provider; attempt will persist provider=NULL and omit provider from SSE frames");
   }
   if (ctx.engine.mode === "pi" && !hasCredential(ctx.engine.authStorage, genProvider)) {
     throw new Error(
@@ -674,7 +675,7 @@ export async function judge(
   const judgeProvider = selection.provider || undefined;
   if (!judgeProvider) {
     // REQ-P-7: defensive log when the judge selection produced no provider.
-    console.warn(`[pp/pilot] judge selection produced no provider for judge model "${selection.judge_model}"; verdict will persist judge_provider=NULL and omit judge_provider from SSE frame`);
+    log.warn({ judgeModel: selection.judge_model }, "[pp/pilot] judge selection produced no provider; verdict will persist judge_provider=NULL and omit judge_provider from SSE frame");
   }
   const rec = recordVerdict({
     attempt_id,

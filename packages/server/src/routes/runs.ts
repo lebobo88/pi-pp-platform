@@ -91,6 +91,7 @@ export function registerRunRoutes(app: FastifyInstance): void {
       attempts: Array<Record<string, unknown>>;
       verdicts: Array<Record<string, unknown>>;
       artifacts: unknown[];
+      phases: unknown[];
     } | null;
     if (!tree) return reply.code(404).send({ error: `run ${id} not found` });
     // REQ-S-1/S-2/S-3: omit provider / judge_provider when null OR empty string

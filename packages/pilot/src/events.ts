@@ -32,7 +32,8 @@ export type PilotEventType =
   | "missability.result"
   | "budget.tick"
   | "budget.tripwire"
-  | "janitor.swept";
+  | "janitor.swept"
+  | "phase.completed";
 
 export interface PilotEvent {
   type: PilotEventType;

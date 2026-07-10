@@ -61,6 +61,7 @@ exports.RUN_SSE_EVENT_TYPES = [
     "missability.result",
     "budget.tick",
     "run.finalized",
+    "phase.completed",
 ];
 /* ────────────────────────────────────────────────────────────────────────
  * REST path builder

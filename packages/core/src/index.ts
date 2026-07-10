@@ -86,3 +86,8 @@ export * from "./util/prices.js";
 
 // Read-only HTTP control plane (kept; compiles without the removed modules).
 export * from "./http/server.js";
+
+// Structured logger — pino instance writing to LOG_DIR/pp-daemon-<date>.log.
+// Re-exported so @pp/pilot and other consumers can use the same logger without
+// a direct path dependency on @pp/core internals.
+export { log } from "./util/logger.js";
