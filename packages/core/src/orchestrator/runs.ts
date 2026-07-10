@@ -427,6 +427,19 @@ export type AttemptNotes = {
    * When absent, VG-5 fails closed (no fallback "accept any" path).
    */
   candidate_index?: number;
+  /**
+   * Provider-error / empty-generation diagnostics for a non-"ok" attempt
+   * (status "error"/"timeout"). Additive keys — `parseNotes` consumers in
+   * gates.ts read only `findings_closed` / `anti_pattern_hits`, so these are
+   * ignored there. `error_class` is the engine's provider-error classification
+   * ("quota_exhausted" | "rate_limited" | "provider_error"); `error_message` is
+   * the real provider cause; `stop_reason` is the engine/pi stop reason;
+   * `files_changed` mirrors the coding-session flag.
+   */
+  error_class?: string;
+  error_message?: string;
+  stop_reason?: string;
+  files_changed?: boolean;
 };
 
 export type RecordAttemptInput = {

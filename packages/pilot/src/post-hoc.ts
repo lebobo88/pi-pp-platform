@@ -36,6 +36,13 @@ export type PostHocResult = {
   stage_id: string;
   outcome?: StageOutcome | "pass" | "fail" | "revise";
   reason?: string;
+  /**
+   * What the retry route actually did: "retry" = a Reflexion ×1 regenerate;
+   * "gate" = smart /pp:retry recognized the latest attempt already carries a
+   * real (unverdicted) artifact and re-judged it instead of regenerating.
+   * Surfaced by run-control so the client shows the correct action.
+   */
+  action?: "retry" | "gate";
 };
 
 export type PostHocOptions = {
@@ -56,6 +63,12 @@ type Reconstructed = {
   initialTier: ClaudeTier;
   artifactText: string;
   latestCritique: string;
+  /** Status of the chosen (latest non-error) attempt. */
+  latestAttemptStatus: string;
+  /** Whether the chosen attempt produced a real artifact (not "commit none"). */
+  latestHasRealArtifact: boolean;
+  /** Non-retracted verdict count on this stage's attempts. */
+  verdictCount: number;
 };
 
 function gitDiffHead(cwd: string): string | null {
@@ -78,10 +91,14 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
     .get(stageRow.run_id) as { project_path: string; request_text: string; taxonomy_mapping_json: string | null } | undefined;
   if (!run) throw new Error(`run ${stageRow.run_id} not found`);
 
+  // Prefer the latest NON-ERROR attempt: an errored (provider quota/rate)
+  // attempt carries no real artifact, so a post-hoc regate/retry must operate
+  // on the last attempt that actually produced something. `(status='error')
+  // ASC` sorts non-error rows first; created_at DESC then picks the most recent.
   const attempt = db()
-    .prepare(`SELECT id, producer, model_id, attempted_tier, agent_type, artifact_path FROM attempts WHERE stage_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+    .prepare(`SELECT id, producer, model_id, attempted_tier, agent_type, artifact_path, status FROM attempts WHERE stage_id = ? ORDER BY (status='error') ASC, created_at DESC, rowid DESC LIMIT 1`)
     .get(opts.stageId) as
-    | { id: string; producer: string; model_id: string; attempted_tier: string | null; agent_type: string | null; artifact_path: string | null }
+    | { id: string; producer: string; model_id: string; attempted_tier: string | null; agent_type: string | null; artifact_path: string | null; status: string }
     | undefined;
   if (!attempt) throw new Error(`stage ${opts.stageId} has no attempts to re-gate/retry`);
 
@@ -91,6 +108,17 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
         WHERE a.stage_id = ? AND v.retracted_at IS NULL ORDER BY v.created_at DESC LIMIT 1`,
     )
     .get(opts.stageId) as { c: string | null } | undefined)?.c ?? "";
+
+  // Non-retracted verdict count across the stage's attempts — used by smart
+  // /pp:retry to detect a real-but-unjudged attempt (route to gate, not retry).
+  const verdictCount = (db()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM verdicts v JOIN attempts a ON a.id = v.attempt_id
+        WHERE a.stage_id = ? AND v.retracted_at IS NULL`,
+    )
+    .get(opts.stageId) as { n: number }).n;
+  const latestHasRealArtifact =
+    attempt.status !== "error" && !(attempt.artifact_path ?? "").includes("commit none");
 
   const artifactDir = join(run.project_path, ".harness", stageRow.run_id);
   const profile = loadProjectProfile(run.project_path);
@@ -156,6 +184,9 @@ function reconstruct(opts: PostHocOptions): Reconstructed {
     initialTier: tier,
     artifactText,
     latestCritique,
+    latestAttemptStatus: attempt.status,
+    latestHasRealArtifact,
+    verdictCount,
   };
 }
 
@@ -240,8 +271,20 @@ export async function regateStage(opts: PostHocOptions): Promise<PostHocResult> 
  */
 export async function retryStage(opts: PostHocOptions): Promise<PostHocResult> {
   const r = reconstruct(opts);
+
+  // Smart /pp:retry: when the latest attempt already carries a REAL artifact
+  // (not errored, not "commit none") but has NO non-retracted verdict, there is
+  // nothing to regenerate — the attempt was simply never judged (e.g. an
+  // errored judge on the prior pass, or an errored-attempt infra retry that
+  // produced a real artifact). Re-judge it via regateStage instead of burning
+  // the Reflexion slot, and surface `action:"gate"`.
+  if (r.latestHasRealArtifact && r.verdictCount === 0) {
+    const gated = await regateStage(opts);
+    return { ...gated, action: "gate" };
+  }
+
   if (!r.latestCritique) {
-    return { ok: false, stage_id: opts.stageId, reason: "no critique on record to drive a Reflexion retry" };
+    return { ok: false, stage_id: opts.stageId, reason: "no critique on record to drive a Reflexion retry", action: "retry" };
   }
   const outcome = await reflexion(
     r.ctx,
@@ -254,5 +297,5 @@ export async function retryStage(opts: PostHocOptions): Promise<PostHocResult> {
     { budgetOverride: opts.override === true },
   );
   if (outcome === "passed") await refinalizeRunIfClear(r.ctx);
-  return { ok: outcome !== "aborted", stage_id: opts.stageId, outcome };
+  return { ok: outcome !== "aborted", stage_id: opts.stageId, outcome, action: "retry" };
 }

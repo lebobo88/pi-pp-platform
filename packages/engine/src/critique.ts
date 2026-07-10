@@ -21,7 +21,14 @@ import {
   buildCritiqueOutputSchema,
   validateCritiqueResult,
 } from "@pp/core";
-import { buildGenResult, messageText, toGenProvider, type GenResult } from "./envelope.js";
+import {
+  buildGenResult,
+  messageText,
+  toGenProvider,
+  classifyProviderError,
+  assistantErrorMessage,
+  type GenResult,
+} from "./envelope.js";
 import { defaultComplete, type LlmComplete } from "./llm.js";
 
 const JUDGE_SYSTEM_PROMPT =
@@ -51,6 +58,31 @@ export interface CritiqueOpts {
 /** Number of extra attempts after the first on invalid output (mirrors CRITIQUE_RETRY_ATTEMPTS=1). */
 const CRITIQUE_RETRY_ATTEMPTS = 1;
 
+/** Default wall-clock cap for a single judge call — withTimeout never armed
+ * before (llm.ts:60 only starts the timer when timeoutMs is set), so a hung
+ * provider could stall a stage indefinitely. Override with PP_CRITIQUE_TIMEOUT_MS. */
+const CRITIQUE_TIMEOUT_MS_DEFAULT = 300_000;
+
+/**
+ * Output-token budget for a critique. A judge verdict is small, but reasoning
+ * models burn thinking tokens INSIDE the output budget, so without an explicit
+ * cap a low provider default can truncate the JSON and read as invalid output.
+ * Env PP_CRITIQUE_MAX_TOKENS (default 32k), capped by the model's own maxTokens.
+ */
+function critiqueMaxTokens(model: Model<Api>): number {
+  const raw = Number(process.env.PP_CRITIQUE_MAX_TOKENS);
+  const requested = Number.isFinite(raw) && raw > 0 ? raw : 32_768;
+  const cap = (model as { maxTokens?: number }).maxTokens;
+  return cap && cap > 0 ? Math.min(requested, cap) : requested;
+}
+
+/** Explicit timeout wins; else env; else the 5-minute default. */
+function critiqueTimeoutMs(explicit?: number): number {
+  if (explicit && explicit > 0) return explicit;
+  const raw = Number(process.env.PP_CRITIQUE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : CRITIQUE_TIMEOUT_MS_DEFAULT;
+}
+
 export async function critique(opts: CritiqueOpts): Promise<GenResult> {
   const complete = opts.complete ?? defaultComplete;
   const cwd = opts.cwd ?? process.cwd();
@@ -69,6 +101,8 @@ export async function critique(opts: CritiqueOpts): Promise<GenResult> {
   let lastText = "";
   let wall_ms = 0;
   const totalAttempts = 1 + CRITIQUE_RETRY_ATTEMPTS;
+  const maxTokens = critiqueMaxTokens(opts.judgeModel);
+  const timeoutMs = critiqueTimeoutMs(opts.timeoutMs);
 
   for (let attempt = 0; attempt < totalAttempts; attempt++) {
     const t0 = Date.now();
@@ -79,10 +113,48 @@ export async function critique(opts: CritiqueOpts): Promise<GenResult> {
       apiKey: opts.apiKey,
       headers: opts.headers,
       signal: opts.signal,
-      timeoutMs: opts.timeoutMs,
+      timeoutMs,
+      maxTokens,
       reasoning: "high",
     });
     wall_ms += Date.now() - t0;
+
+    // Provider error (quota / rate limit / other): pi resolves the completion
+    // with stopReason:"error" and stashes the real cause in errorMessage. There
+    // is no malformed JSON to fix by retrying — short-circuit immediately, and
+    // archive the REAL provider cause (not "empty output"). Return a
+    // distinguishable `provider_error` stop reason so the caller can fail over
+    // to another provider instead of treating it as a genuine invalid verdict.
+    if (msg.stopReason === "error") {
+      const errorMessage =
+        assistantErrorMessage(msg) ?? "provider resolved stopReason=error with no message";
+      const errorClass = classifyProviderError(errorMessage);
+      const archivePath = archiveCritiqueFailure({
+        cwd,
+        provider,
+        model: opts.judgeModel.id,
+        duration_ms: wall_ms,
+        attempts: attempt + 1,
+        error: `provider_error (${errorClass}): ${errorMessage}`,
+        stdout: errorMessage,
+      });
+      return {
+        text: messageText(msg),
+        parsed: undefined,
+        tokens_in: msg.usage.input + msg.usage.cacheRead + msg.usage.cacheWrite,
+        tokens_out: msg.usage.output,
+        cost_usd: msg.usage.cost?.total ?? 0,
+        model: opts.judgeModel.id,
+        provider,
+        wall_ms,
+        session_id: null,
+        stop_reason: "provider_error",
+        session_file: archivePath,
+        error_class: errorClass,
+        error_message: errorMessage,
+      };
+    }
+
     const text = messageText(msg);
     lastText = text;
 

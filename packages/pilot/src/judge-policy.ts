@@ -75,6 +75,14 @@ export type JudgeSelectInput = {
   /** When set, only providers with a configured credential are eligible judges —
    * so a run never routes a judge to an unkeyed vendor. */
   keyedProviders?: string[];
+  /**
+   * Providers to drop from the eligible set — the judge-failover loop passes the
+   * provider(s) that already errored on this stage so re-selection lands on a
+   * fresh vendor. Purely subtractive: it can only shrink an already-eligible
+   * pool, and an empty result still throws {@link JudgeUnavailableError} (never
+   * fabricate a verdict).
+   */
+  excludeProviders?: string[];
 };
 
 export type JudgeSelection = {
@@ -82,6 +90,10 @@ export type JudgeSelection = {
   judge_producer: Producer;
   /** Concrete judge model id. */
   judge_model: string;
+  /** The provider's NON-escalated default judge model. Equals `judge_model`
+   * unless the escalated lane was taken; the failover loop de-escalates to this
+   * before abandoning the provider. */
+  default_model: string;
   /** pi vendor of the judge. */
   provider: GenProvider;
   /** Whether the daemon gate demanded cross-vendor. */
@@ -158,6 +170,14 @@ export class JudgePolicy {
       eligible = eligible.filter((p) => keyed.has(p));
     }
 
+    // Failover exclusions: drop providers that already errored on this stage so
+    // re-selection lands on a fresh vendor. Subtractive only — an empty result
+    // below still throws (halt, never fabricate).
+    if (input.excludeProviders?.length) {
+      const excluded = new Set(input.excludeProviders);
+      eligible = eligible.filter((p) => !excluded.has(p));
+    }
+
     // Same-vendor different-model invariant: if the only same-vendor option
     // would reuse the generator's exact model id, it cannot serve — drop it.
     eligible = eligible.filter((p) => {
@@ -200,6 +220,7 @@ export class JudgePolicy {
     return {
       judge_producer: providerToProducer(provider),
       judge_model,
+      default_model: pool.default,
       provider,
       required_cross_vendor: required,
       cross_vendor: provider !== genProvider,
