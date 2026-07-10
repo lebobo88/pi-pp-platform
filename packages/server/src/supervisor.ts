@@ -379,13 +379,14 @@ export class RunSupervisor {
       },
     });
 
-    // context.warning — mirrors the budget-tripwire pattern: fire once per
-    // attempt when context fill exceeds 75%. Graceful-degradation: emit only
-    // when the completed frame carries both context_used_tokens and
-    // context_max_tokens (absent when the model's window is unknown).
+    // context.warning — fire once per attempt when context fill exceeds 75%.
+    // stage_id / attempt_id come from the TOP-LEVEL PilotEvent envelope fields
+    // (packages/pilot/src/events.ts:41-42), not from ev.data. No firedTripwires
+    // dedup is needed: each attempt emits exactly one attempt.completed, so
+    // per-attempt emission is already idempotent.
+    // Graceful-degradation: emit only when the completed frame carries both
+    // context_used_tokens and context_max_tokens (absent when window is unknown).
     const d = ev.data as {
-      stage_id?: string;
-      attempt_id?: string;
       context_pct?: number | null;
       context_used_tokens?: number | null;
       context_max_tokens?: number | null;
@@ -395,19 +396,19 @@ export class RunSupervisor {
       d.context_pct > 0.75 &&
       d.context_used_tokens != null &&
       d.context_max_tokens != null &&
-      d.stage_id &&
-      d.attempt_id
+      ev.stage_id &&
+      ev.attempt_id
     ) {
       runLog?.warn(
-        { stage_id: d.stage_id, attempt_id: d.attempt_id, context_pct: d.context_pct },
+        { stage_id: ev.stage_id, attempt_id: ev.attempt_id, context_pct: d.context_pct },
         "context.warning: attempt context fill > 75%",
       );
       this.serverBus.publish({
         type: "context.warning",
         run_id: ev.run_id,
         data: {
-          stage_id: d.stage_id,
-          attempt_id: d.attempt_id,
+          stage_id: ev.stage_id,
+          attempt_id: ev.attempt_id,
           context_pct: d.context_pct,
           context_used_tokens: d.context_used_tokens,
           context_max_tokens: d.context_max_tokens,
