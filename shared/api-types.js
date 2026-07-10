@@ -86,6 +86,8 @@ exports.apiPaths = {
     projectAgentsMd: (path) => `${exports.API_BASE}/projects/${encodeURIComponent(path)}/agents-md`,
     projectConstitution: (path) => `${exports.API_BASE}/projects/${encodeURIComponent(path)}/constitution`,
     runs: `${exports.API_BASE}/runs`,
+    /** GET — compare 2–4 runs by ids (comma-separated). Returns RunComparisonResponse. */
+    runsCompare: (ids) => `${exports.API_BASE}/runs/compare?ids=${ids.join(",")}`,
     run: (runId) => `${exports.API_BASE}/runs/${encodeURIComponent(runId)}`,
     /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
      *  the bearer as `?token=` — EventSource cannot send headers. */

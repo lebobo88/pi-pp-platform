@@ -15,6 +15,7 @@ export const qk = {
   runReplay: (runId: string) => ["runs", "replay", runId] as const,
   runMissability: (runId: string) => ["runs", "missability", runId] as const,
   runCompletionReadiness: (runId: string) => ["runs", "completion-readiness", runId] as const,
+  runsCompare: (ids: string[]) => ["runs", "compare", ...ids.slice().sort()] as const,
 
   providers: ["providers"] as const,
   providersAvailable: ["providers", "available"] as const,

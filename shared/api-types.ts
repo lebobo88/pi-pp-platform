@@ -1092,6 +1092,54 @@ export interface HarnessSettings {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
+ * Run comparison — mirror @pp/core orchestrator/runs.ts `getRunComparison()`
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export interface RunComparisonModelUsage {
+  /** Distinct stage count this model serviced. */
+  stages: number;
+  cost: number;
+  tokens: number;
+}
+
+export interface RunComparisonTotals {
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  /** Elapsed wall-clock in ms; null when run not yet finished. */
+  wall_ms: number | null;
+  stage_count: number;
+  /** Fraction (0..1): pass verdicts / total non-retracted verdicts; 0 when no verdicts. */
+  pass_rate: number;
+  /** Attempts with retry_index > 0 (Reflexion retries). */
+  reflexion_count: number;
+  model_usage: Record<string, RunComparisonModelUsage>;
+}
+
+export interface RunComparisonStageSlot {
+  status: string;
+  cost: number;
+  tokens: number;
+  /** Outcome of the latest non-retracted verdict on the winner attempt; null when none. */
+  winning_verdict_outcome: string | null;
+}
+
+export interface RunComparisonStageRow {
+  stage_kind: string;
+  /** Alignment key within this kind: 0-based ordinal by started_at within each (run, kind). */
+  plan_order: number;
+  /** Keyed by run_id. null = run has no stage for this (kind, plan_order) slot. */
+  per_run: Record<string, RunComparisonStageSlot | null>;
+}
+
+/** Response from `GET /api/v1/runs/compare?ids=a,b,c`. */
+export interface RunComparisonResponse {
+  run_ids: string[];
+  per_run: Record<string, RunComparisonTotals>;
+  stage_rows: RunComparisonStageRow[];
+}
+
+/* ────────────────────────────────────────────────────────────────────────
  * Gate history — mirror @pp/core orchestrator/runs.ts `getGateHistory()`
  * ──────────────────────────────────────────────────────────────────────── */
 
@@ -1503,6 +1551,8 @@ export const apiPaths = {
   projectConstitution: (path: string) => `${API_BASE}/projects/${encodeURIComponent(path)}/constitution`,
 
   runs: `${API_BASE}/runs`,
+  /** GET — compare 2–4 runs by ids (comma-separated). Returns RunComparisonResponse. */
+  runsCompare: (ids: string[]) => `${API_BASE}/runs/compare?ids=${ids.join(",")}`,
   run: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}`,
   /** Per-run SSE stream. When PP_API_TOKEN is set this endpoint ALSO accepts
    *  the bearer as `?token=` — EventSource cannot send headers. */
