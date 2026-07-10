@@ -59,6 +59,7 @@ structured, governed AI code generation with guardrails.
 
 ## 6. Functional requirements
 
+
 - FR-1: Launch runs in four modes (single, team, best_of, review) from
   a web wizard with automatic profile detection and team recommendation.
 - FR-2: Cross-vendor judging with Reflexion ×1 retry, re-gate, and abort.
@@ -71,6 +72,16 @@ structured, governed AI code generation with guardrails.
 - FR-8: TDD gate with pre/post test execution and manifest verification.
 - FR-9: Artifact archiving with SHA-256 hashing and content retrieval.
 - FR-10: Janitor for stale worktrees, locks, crashed runs, and expired events.
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/spec/spec-author.md` (spec)
+  - `.harness/run_hXKxSneI8pDg/spec/spec-author-retry1.md` (spec)
+
 
 ## 7. Acceptance criteria
 
@@ -108,6 +119,7 @@ structured, governed AI code generation with guardrails.
 
 ## 9. UX/UI/content design
 
+
 - **Design system**: Tailwind v4 with a custom dark theme. Component
   library follows shadcn/ui patterns with project-specific composition.
 - **Screen states**: 8-state matrix (loading, empty, error, unauthorized,
@@ -120,6 +132,18 @@ structured, governed AI code generation with guardrails.
   Mobile is deferred.
 - **Visual regression**: Playwright-based screenshot comparison on
   component changes.
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/design/screen-state-matrix.md` (screen_state_matrix)
+  - `.harness/run_hXKxSneI8pDg/design/responsive-matrix.md` (responsive_matrix)
+  - `.harness/run_hXKxSneI8pDg/design/a11y-plan.md` (a11y_plan)
+  - `.harness/run_hXKxSneI8pDg/design/localization-plan.md` (localization_plan)
+
 
 ## 10. Domain and data model
 
@@ -164,6 +188,7 @@ structured, governed AI code generation with guardrails.
 
 ## 13. Engineering standards and delivery model
 
+
 - **Language**: TypeScript ESM/NodeNext. All source imports use `.js`
   specifiers even for `.ts` files.
 - **Testing**: Vitest for server/pilot. Node `--test` for core. React
@@ -172,6 +197,15 @@ structured, governed AI code generation with guardrails.
 - **CI**: GitHub Actions — build + typecheck + test on every push.
 - **Versioning**: No semver on packages (private). Git SHA is the
   version identifier.
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/code/diff-57e76db..df55490.md` (diff)
+
 
 ## 14. Security, privacy, and compliance
 
@@ -188,6 +222,8 @@ structured, governed AI code generation with guardrails.
 
 ## 15. Test and verification strategy
 
+
+
 - **Unit tests**: Vitest for server/pilot/UI. Node `--test` for core.
   Coverage target: 80%+ on critical path (run lifecycle, budget
   enforcement, judging).
@@ -202,7 +238,24 @@ structured, governed AI code generation with guardrails.
 - **Visual regression**: Playwright screenshot comparison triggered on
   UI changes.
 
+**run_hXKxSneI8pDg (2026-07-10, Persistent Event Store):** test strategy archived at `.harness/run_hXKxSneI8pDg/tests/test-strategist-retry2.md` (judged pass 0.84/0.96/0.95, cross-vendor codex/gpt-5.4) — existing-coverage inventory (rest.test.ts:329, run-control.test.ts:154), 8 gap findings (retention boundary, janitor purge branch, pagination cursor edges, fail-safe persistFrame isolation, path-redaction, type filter, seq ordering, 200-vs-404 on unknown run), 7 event-log contract tests, FS-1 fail-safe bus test, JAN-1..4 retention tests, and a P50/P95 performance budget for event persistence and retrieval.
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/tests/test-strategist.md` (test_strategy)
+  - `.harness/run_hXKxSneI8pDg/tests/test-strategist-retry1.md` (test_strategy)
+  - `.harness/run_hXKxSneI8pDg/tests/test-strategist-retry2.md` (test_strategy)
+  - `.harness/run_hXKxSneI8pDg/validation/browser-validation-report.md` (browser_validation_report)
+  - `.harness/run_hXKxSneI8pDg/validation/visual-regression-report.md` (visual_regression_report)
+  - `.harness/run_hXKxSneI8pDg/validation/browser-validation-report.md` (browser_validation_report)
+
+
 ## 16. Operations and support model
+
 
 - **Deployment**: Docker Compose single-node. `docker-compose up` boots
   the server + UI dev proxy.
@@ -215,7 +268,11 @@ structured, governed AI code generation with guardrails.
 - **Doctor**: `/pp:doctor` probes provider health, DB reachability,
   cross-vendor readiness, and optional critique smoke tests.
 
+**run_hXKxSneI8pDg (2026-07-10, Persistent Event Store):** release note archived at `.harness/run_hXKxSneI8pDg/docs/docs-author.md` (judged pass 0.96/0.95/0.95) and reflected in root `CHANGELOG.md` — operator guidance for the events table (no migration; `EVENT_RETENTION_DAYS=30` in janitor.ts; `GET /api/v1/runs/:id/event-log` cursor-walk usage) plus three verified known limitations (unknown run returns 200 `[]`; `project_path` values not redacted; purge byte accounting is a ×256 estimate). Decision log at `.harness/run_hXKxSneI8pDg/governance/decision-log.md` records D1–D7 including the judge-infrastructure repair (0d74dda, eb26f06) and the operator-accepted revise verdict on the code stage.
+
+
 ## 17. Team operating model and governance
+
 
 - **Governance model**: Constitution-driven (CONSTITUTION.md).
   Amendments via `/pp:constitution amend` (HITL-only).
@@ -229,6 +286,26 @@ structured, governed AI code generation with guardrails.
 - **Run modes**: Single (one pass), team (multi-stage pipeline with 26
   specialized teams), best_of (2-8 parallel candidates, Borda winner),
   review (10 governance forums).
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/critique_failures/stage_u8VtuyhiBi.json` (critique_failure)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/critique_failures/stage_u8VtuyhiBi.json` (critique_failure)
+  - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
+  - `.harness/run_hXKxSneI8pDg/critique_failures/stage_u8VtuyhiBi.json` (critique_failure)
+  - `.harness/run_hXKxSneI8pDg/governance/decision-log.md` (decision_log)
+
 
 ## 18. Risks, assumptions, and open questions
 
@@ -248,12 +325,22 @@ structured, governed AI code generation with guardrails.
 
 ## 19. Launch, migration, and rollback plan
 
+
 - **Launch**: Docker Compose on a single host. No data migration needed
   (greenfield SQLite). UI served via Vite dev proxy or static build.
 - **Migration**: SQLite schema is additive-only. New columns via
   `ALTER TABLE … ADD COLUMN`. No destructive migrations.
 - **Rollback**: Git revert + redeploy. SQLite file can be restored from
   backup. Evolution commits support rollback (snapshot restore).
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/docs/rollout-reversibility.md` (rollout_plan)
+
 
 ## 20. Deprecation and retirement plan
 
@@ -263,6 +350,7 @@ structured, governed AI code generation with guardrails.
   Docker image tagged with final SHA. Repository archived as read-only.
 
 ## Appendices
+
 
 ### A. Package map
 
@@ -294,3 +382,12 @@ prioritized opportunities. Opportunity 1 (Persistent Event Store) is
 now implemented: `events` table in schema, `persistFrame()` in bus,
 `getEventLog()` query, REST endpoint, UI hydration, and 30-day retention
 in janitor.
+
+### Run `run_hXKxSneI8pDg` — implement opportunity 1 from observability_enhancements.md in this project's roo
+
+- Date: 2026-07-09
+- Mode: single
+- Status: complete
+- Artifacts:
+  - `.harness/run_hXKxSneI8pDg/docs/docs-author.md` (changelog)
+
