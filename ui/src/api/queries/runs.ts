@@ -13,6 +13,7 @@ import {
   type EventLogEntry,
   type GateHistoryEntry,
   type RunComparisonResponse,
+  API_BASE,
 } from "@shared/api-types";
 
 export interface RunsFilter {
@@ -73,6 +74,43 @@ export function useRunEventLog(runId: string | undefined, enabled = true) {
     queryKey: qk.runEventLog(runId ?? ""),
     queryFn: ({ signal }) => api.get<EventLogEntry[]>(apiPaths.runEventLog(runId!), { signal }),
     enabled: !!runId && enabled,
+  });
+}
+
+/**
+ * Paginate GET /runs/:id/event-log until all events are fetched.
+ *
+ * The route clamps limit to [1, 1000] (default 200). We request 1000 per page
+ * and follow the seq cursor until the server returns fewer rows than requested,
+ * indicating exhaustion. Only enabled when `enabled` is true (gate on
+ * run.finished_at so live runs keep using the SSE stream).
+ */
+export function useRunEventLogFull(runId: string | undefined, enabled = true) {
+  const PAGE_SIZE = 1000;
+  return useQuery({
+    queryKey: qk.runEventLogFull(runId ?? ""),
+    queryFn: async ({ signal }) => {
+      const all: EventLogEntry[] = [];
+      let since: number | undefined = undefined;
+      while (true) {
+        const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+        if (since != null) params.set("since", String(since));
+        const url = `${API_BASE}/runs/${encodeURIComponent(runId!.toString())}/event-log?${params.toString()}`;
+        const page = await api.get<EventLogEntry[]>(url, { signal });
+        if (!Array.isArray(page) || page.length === 0) break;
+        all.push(...page);
+        if (page.length < PAGE_SIZE) break;
+        // Advance cursor to the highest seq on this page.
+        const lastSeq = Math.max(
+          ...page.map((e) => ((e as unknown as { seq?: number }).seq ?? -1)),
+        );
+        if (lastSeq < 0) break;
+        since = lastSeq;
+      }
+      return all;
+    },
+    enabled: !!runId && enabled,
+    staleTime: 60_000,
   });
 }
 

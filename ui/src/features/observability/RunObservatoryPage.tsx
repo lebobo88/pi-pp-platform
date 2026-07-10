@@ -5,9 +5,9 @@
  *   Header strip: run id, status chip, live dot, last signal, elapsed, budget meters
  *   Main grid: PhaseTimeline | StagePipeline | AttemptMetaGrid | GateFeed | LogPane
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { useRun, useRunEventLog } from "@/api/queries/runs";
+import { useRun, useRunEventLog, useRunEventLogFull } from "@/api/queries/runs";
 import { useCaps } from "@/api/queries/budgets";
 import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
@@ -25,6 +25,7 @@ import { BestOfBoard } from "@/features/runs/components/BestOfBoard";
 import { PhaseTimeline } from "./PhaseTimeline";
 import { AttemptMetaGrid } from "./AttemptMetaGrid";
 import { GateFeed } from "./GateFeed";
+import { ReplayPlayer } from "./ReplayPlayer";
 import { cn } from "@/lib/cn";
 
 /* ── Constants ────────────────────────────────────────────────────────── */
@@ -87,17 +88,30 @@ export function RunObservatoryPage() {
   const runCapUsd = caps?.find((c) => c.scope === "run")?.limit_usd ?? null;
 
   const shouldHydrateFromEventLog = !!tree?.run.finished_at;
-  const { data: eventLog } = useRunEventLog(runId, shouldHydrateFromEventLog);
-  const streamStatus = useRunStream(runId, !shouldHydrateFromEventLog);
+
+  // Replay mode gates — when replay is active the standard hydration effect and
+  // SSE stream must not run so they don't race with the replay ingest.
+  const [isReplayActive, setIsReplayActive] = useState(false);
+  const handleReplayActiveChange = useCallback((active: boolean) => {
+    setIsReplayActive(active);
+  }, []);
+
+  const { data: eventLog } = useRunEventLog(runId, shouldHydrateFromEventLog && !isReplayActive);
+  // Full event log (paginated) for the replay player — only fetched for finished runs.
+  const { data: fullEventLog = [], isLoading: fullEventLogLoading } = useRunEventLogFull(
+    runId,
+    shouldHydrateFromEventLog,
+  );
+  const streamStatus = useRunStream(runId, !shouldHydrateFromEventLog && !isReplayActive);
   const overlay = useLiveRunOverlay(runId ?? "");
 
   const isLive =
     streamStatus === "open" || streamStatus === "reconnecting";
 
   useEffect(() => {
-    if (!runId || !eventLog?.length) return;
+    if (!runId || !eventLog?.length || isReplayActive) return;
     for (const ev of eventLog) liveRunStore.ingest(runId, ev);
-  }, [eventLog, runId]);
+  }, [eventLog, runId, isReplayActive]);
 
   // Live elapsed ticker
   const [, forceTick] = useState(0);
@@ -284,6 +298,21 @@ export function RunObservatoryPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Replay player (finished runs only) ───────────────────────── */}
+      {shouldHydrateFromEventLog && (
+        <div className="shrink-0 border-b border-line-1 bg-bg-1 px-5 py-2">
+          <div className="mx-auto max-w-[1400px]">
+            <ReplayPlayer
+              runId={run.id}
+              events={fullEventLog}
+              loading={fullEventLogLoading}
+              tree={tree}
+              onActiveChange={handleReplayActiveChange}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── Main grid ────────────────────────────────────────────────── */}
       <div className="min-h-0 flex-1 overflow-auto">
