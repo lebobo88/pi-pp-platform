@@ -155,7 +155,9 @@ describe("resumeRun — recovery success", () => {
 });
 
 describe("resumeRun — run-level recovery (no remaining stages, only completion phases blocked)", () => {
-  it("reruns missability/master-plan/finalize and completes the same run when every stage already passed", async () => {
+  it("resumable=false when all planned stages passed (no remaining stage work to re-run)", async () => {
+    // Fix 2a: when every stage row is 'passed' and remaining_planned_stages=[],
+    // resume has no stage work to perform and correctly reports resumable=false.
     const projectPath = makeTempProject();
     const engine = makeScriptedEngine({ verdictPlan: ["pass", "pass", "pass", "pass"] });
     const bus = new EventBus();
@@ -176,16 +178,77 @@ describe("resumeRun — run-level recovery (no remaining stages, only completion
 
     const first = await pilot.execute();
     expect(first.status).toBe("complete");
-    // Force the run back to 'surfaced' to simulate a run that surfaced
-    // solely on a completion-phase gate (e.g. a required master-plan section
-    // landed late) rather than a stage judge verdict — every stage row is
-    // already 'passed'; nothing remains to (re)execute.
+    // Force back to 'surfaced'. Every stage row is 'passed'; stage_plan_json is
+    // populated — remaining_planned_stages=[] → resume has nothing to re-run.
     db().prepare(`UPDATE runs SET status = 'surfaced' WHERE id = ?`).run(first.run_id);
 
     const readiness = getRunCompletionReadiness(first.run_id);
     expect(readiness.surfaced_stages.length).toBe(0);
     expect(readiness.incomplete_stages.length).toBe(0);
     expect(readiness.remaining_planned_stages).toEqual([]);
+    // Fix 2a: no remaining stages → resumable=false (not resumable via resume;
+    // content-only blockers, if present, must be cleared by other actions).
+    expect(readiness.resumable).toBe(false);
+    expect(readiness.blocking_reason).toBeTruthy();
+
+    // resumeRun must return resumed=false without any pilot work.
+    const resumeBus = new EventBus();
+    const resumeEvents: PilotEvent[] = [];
+    resumeBus.subscribe((e) => resumeEvents.push(e));
+
+    const result = await resumeRun({ runId: first.run_id, engine, bus: resumeBus });
+
+    expect(result.resumed).toBe(false);
+    expect(result.readiness?.blocking_reason).toBeTruthy();
+    // Run status must be unchanged — no extra finalize was triggered.
+    expect(runStatus(first.run_id)).toBe("surfaced");
+    // No new stage rows created.
+    const rowCount = (
+      db().prepare(`SELECT COUNT(*) AS n FROM stages WHERE run_id = ?`).get(first.run_id) as { n: number }
+    ).n;
+    expect(rowCount).toBe(4);
+    // No missability event — resume was a no-op.
+    expect(resumeEvents.some((e) => e.type === "missability.result")).toBe(false);
+  });
+
+  it("reruns completion phases and completes when a remaining planned stage is present", async () => {
+    // When the last stage is dropped (simulating a stage that never ran after a
+    // mid-pipeline surface), resume picks it up, runs it, then runs completion
+    // phases (missability → master-plan → finalize).
+    const projectPath = makeTempProject();
+    const engine = makeScriptedEngine({ verdictPlan: ["pass", "pass", "pass", "pass"] });
+    const bus = new EventBus();
+
+    const pilot = new RunPilot({
+      projectPath,
+      requestText: "Add a greeting utility function to the project.",
+      mode: "single",
+      engine,
+      bus,
+      stagesOverride: [
+        { kind: "spec", gate_type: "spec", agent: "spec-author" },
+        { kind: "code", gate_type: "code_style", agent: "engineer" },
+        { kind: "tests", gate_type: "lint_class", agent: "test-strategist" },
+        { kind: "docs", gate_type: "docs_polish", agent: "docs-author" },
+      ],
+    });
+
+    const first = await pilot.execute();
+    expect(first.status).toBe("complete");
+
+    // Drop the last stage (docs, plan_index=3) — resume must re-run it.
+    const lastStage = db()
+      .prepare(`SELECT id FROM stages WHERE run_id = ? ORDER BY plan_index DESC LIMIT 1`)
+      .get(first.run_id) as { id: string };
+    db().prepare(`DELETE FROM verdicts WHERE attempt_id IN (SELECT id FROM attempts WHERE stage_id = ?)`).run(lastStage.id);
+    db().prepare(`DELETE FROM artifacts WHERE stage_id = ?`).run(lastStage.id);
+    db().prepare(`DELETE FROM attempts WHERE stage_id = ?`).run(lastStage.id);
+    db().prepare(`DELETE FROM stages WHERE id = ?`).run(lastStage.id);
+    db().prepare(`UPDATE runs SET status = 'surfaced' WHERE id = ?`).run(first.run_id);
+
+    const readiness = getRunCompletionReadiness(first.run_id);
+    expect(readiness.surfaced_stages.length).toBe(0);
+    expect(readiness.remaining_planned_stages?.length).toBe(1);
     expect(readiness.resumable).toBe(true);
 
     const resumeBus = new EventBus();
@@ -197,17 +260,16 @@ describe("resumeRun — run-level recovery (no remaining stages, only completion
     expect(result.resumed).toBe(true);
     expect(result.status).toBe("complete");
     expect(runStatus(first.run_id)).toBe("complete");
-    // No new stage rows were created — only completion phases re-ran.
+    // Stage rows: 3 original (spec/code/tests) + 1 new (docs re-run) = 4.
     const rowCount = (
       db().prepare(`SELECT COUNT(*) AS n FROM stages WHERE run_id = ?`).get(first.run_id) as { n: number }
     ).n;
     expect(rowCount).toBe(4);
+    // Completion phases ran during resume.
     expect(resumeEvents.some((e) => e.type === "missability.result")).toBe(true);
 
-    // ctx.sections was rehydrated from taxonomy_mapping_json (not left empty,
-    // as post-hoc.ts's stage-scoped reconstruct() would give it): the
-    // master-plan phase patched a section derived from the "4.8" (diff)
-    // requirement, not just the always-included executive summary.
+    // ctx.sections was rehydrated from taxonomy_mapping_json: the master-plan
+    // phase patched a section derived from the "4.8" (diff) requirement.
     const masterPlanEvent = resumeEvents.find(
       (e) => e.type === "run.context" && (e.data as { phase?: string }).phase === "master-plan",
     );

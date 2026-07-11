@@ -232,30 +232,35 @@ export function SurfacedRunPanel({ runId, status }: { runId: string; status: Run
     <Card
       title="Surfaced — needs follow-up"
       actions={
-        <Button
-          size="sm"
-          variant="default"
-          disabled={!r?.resumable || resume.isPending}
-          title={r && !r.resumable ? (r.blocking_reason ?? "Not resumable yet") : "Continue this run on the same run_id"}
-          onClick={() =>
-            resume.mutate(undefined, {
-              onSuccess: (res) => {
-                if (res.resumed) {
-                  toast({ tone: "info", title: "Run resumed", message: `status: ${res.status}` });
-                } else {
-                  toast({
-                    tone: "warn",
-                    title: "Resume made no progress",
-                    message: res.readiness?.blocking_reason ?? "blockers remain",
-                  });
-                }
-              },
-              onError: (e) => toast({ tone: "error", title: "Resume failed", message: e instanceof Error ? e.message : "" }),
-            })
-          }
-        >
-          {resume.isPending ? "Resuming…" : "Resume"}
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button
+            size="sm"
+            variant="default"
+            disabled={!r?.resumable || resume.isPending}
+            title={r && !r.resumable ? (r.blocking_reason ?? "Not resumable yet") : "Continue this run on the same run_id"}
+            onClick={() =>
+              resume.mutate(undefined, {
+                onSuccess: (res) => {
+                  if (res.resumed) {
+                    toast({ tone: "info", title: "Run resumed", message: `status: ${res.status}` });
+                  } else {
+                    toast({
+                      tone: "warn",
+                      title: "Resume made no progress",
+                      message: res.readiness?.blocking_reason ?? "blockers remain",
+                    });
+                  }
+                },
+                onError: (e) => toast({ tone: "error", title: "Resume failed", message: e instanceof Error ? e.message : "" }),
+              })
+            }
+          >
+            {resume.isPending ? "Resuming…" : "Resume"}
+          </Button>
+          {r && !r.resumable && r.blocking_reason && (
+            <p className="text-[11px] text-ink-3 text-right max-w-[220px]">{r.blocking_reason}</p>
+          )}
+        </div>
       }
     >
       {readiness.isLoading && <p className="text-[12px] text-ink-3">Checking completion readiness…</p>}

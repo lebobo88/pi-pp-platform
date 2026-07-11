@@ -155,15 +155,50 @@ describe("resume routes — GET completion-readiness / POST resume", () => {
     expect(resume.json.resumed).toBe(false);
   });
 
-  it("resumes a run surfaced solely on a completion-phase gate and reaches 'complete'", async () => {
+  it("all planned stages passed with no remaining stages → resumable=false (nothing left to re-run)", async () => {
     const project = makeTempProject();
     const s = await makeServer(() => makeEngine());
     const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Add a helper.", mode: "single" });
     const runId = started.json.run_id as string;
     expect(await waitForStatus(s.base, runId)).toBe("complete");
 
-    // Simulate a run that surfaced purely on a completion-phase gate (every
-    // stage row already 'passed') — force status back to 'surfaced'.
+    // Force status back to 'surfaced'. All stage rows are already 'passed' and
+    // stage_plan_json is persisted, so remaining_planned_stages=[] — resume
+    // has no stage work to perform and must report resumable=false.
+    db().prepare(`UPDATE runs SET status = 'surfaced' WHERE id = ?`).run(runId);
+
+    const readiness = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/completion-readiness`);
+    expect(readiness.status).toBe(200);
+    // Fix 2a: resumable=false because all planned stages are covered and there is
+    // no re-runnable stage work left. Content-only blockers (if any) must be
+    // cleared via artifact/evidence/master-plan actions, not resume.
+    expect(readiness.json.resumable).toBe(false);
+    expect(readiness.json.blocking_reason).toBeTruthy();
+    expect(readiness.json.surfaced_stages).toEqual([]);
+
+    // /resume must return 200 with resumed=false — no extra finalize dispatched.
+    const resume = await post(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/resume`);
+    expect(resume.status).toBe(200);
+    expect(resume.json.resumed).toBe(false);
+    expect(resume.json.readiness?.blocking_reason).toBeTruthy();
+  });
+
+  it("resumes a run that has a remaining planned stage and reaches 'complete'", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine({ delayMs: 0 }));
+    const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Add a helper.", mode: "single" });
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId, 15000)).toBe("complete");
+
+    // Simulate a remaining planned stage by dropping the last stage's rows (same
+    // technique as the concurrent-resume test), then force to 'surfaced'.
+    const lastStage = db()
+      .prepare(`SELECT id FROM stages WHERE run_id = ? ORDER BY plan_index DESC LIMIT 1`)
+      .get(runId) as { id: string };
+    db().prepare(`DELETE FROM verdicts WHERE attempt_id IN (SELECT id FROM attempts WHERE stage_id = ?)`).run(lastStage.id);
+    db().prepare(`DELETE FROM artifacts WHERE stage_id = ?`).run(lastStage.id);
+    db().prepare(`DELETE FROM attempts WHERE stage_id = ?`).run(lastStage.id);
+    db().prepare(`DELETE FROM stages WHERE id = ?`).run(lastStage.id);
     db().prepare(`UPDATE runs SET status = 'surfaced' WHERE id = ?`).run(runId);
 
     const readiness = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/completion-readiness`);

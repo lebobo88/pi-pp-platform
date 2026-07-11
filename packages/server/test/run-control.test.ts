@@ -338,6 +338,52 @@ describe("run-control — concurrency + budget", () => {
   });
 });
 
+describe("run-control — content-only-blocked resume", () => {
+  // Verify that a run whose every planned stage has passed but whose content-class
+  // gates are still unsatisfied (missing required artifact kinds) returns
+  // resumable=false and blocking_reason from /completion-readiness, and that a
+  // POST to /resume returns 200 with resumed=false without mutating run status.
+
+  it("content-only-blocked run: /resume returns 200, resumed=false, blocking_reason set, status unchanged", async () => {
+    const project = makeTempProject();
+    const s = await makeServer(() => makeEngine());
+
+    // Start a real run and let it complete.
+    const started = await post(s.base, "/api/v1/runs", { project_path: project, request_text: "Add a helper.", mode: "single" });
+    expect(started.status).toBe(200);
+    const runId = started.json.run_id as string;
+    expect(await waitForStatus(s.base, runId)).toBe("complete");
+
+    // Force the run back to 'surfaced' and inject a content-only blocker:
+    // Set a profile_snapshot_json that requires an artifact kind ("spec") that
+    // does not exist in the artifacts table → missing_required_artifacts=["spec"].
+    // Also clear stage_plan_json so remaining_planned_stages=null won't accidentally
+    // make it resumable; instead we keep stage_plan_json and all stages passed.
+    const { db } = await import("@pp/core");
+    db().prepare(`UPDATE runs SET status = 'surfaced',
+      profile_snapshot_json = json_patch(COALESCE(profile_snapshot_json, '{}'), '{"required_artifacts":["spec"]}')
+      WHERE id = ?`).run(runId);
+
+    // /completion-readiness must report resumable=false with blocking_reason.
+    const readiness = await getJson(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/completion-readiness`);
+    expect(readiness.status).toBe(200);
+    expect(readiness.json.resumable).toBe(false);
+    expect(typeof readiness.json.blocking_reason).toBe("string");
+    expect(readiness.json.blocking_reason).toBeTruthy();
+
+    // /resume must return 200 with resumed=false and pass blocking_reason.
+    const statusBefore = db().prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+    const resume = await post(s.base, `/api/v1/runs/${encodeURIComponent(runId)}/resume`);
+    expect(resume.status).toBe(200);
+    expect(resume.json.resumed).toBe(false);
+    expect(resume.json.readiness?.blocking_reason).toBeTruthy();
+
+    // Run status must be unchanged — no extra finalize was triggered.
+    const statusAfter = db().prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+    expect(statusAfter.status).toBe(statusBefore.status);
+  });
+});
+
 describe("run-control — abort DB fallback (orphaned runs after restart)", () => {
   // These tests seed a run directly into the DB (bypassing the supervisor) to
   // simulate runs that survived a server restart and are no longer tracked

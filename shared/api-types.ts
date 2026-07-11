@@ -734,6 +734,18 @@ export interface JanitorEntry {
 }
 
 /**
+ * POST /v1/system/janitor request body. All fields are optional.
+ *   `dry_run` — plan the sweep but do not mutate anything (default: false).
+ *   `deep`    — when true, compute on-disk byte sizes via a full directory walk
+ *               (may be slow); when false/omitted (quick mode), worktree entries
+ *               report `bytes: 0` (default: false).
+ */
+export interface JanitorRequest {
+  dry_run?: boolean;
+  deep?: boolean;
+}
+
+/**
  * Janitor report — mirrors @pp/core janitor.ts. Two-phase: `dry_run: true`
  * returns the full sweep plan (entries with real byte/age accounting) without
  * mutating anything; a real run executes it, sums `reclaimed_bytes` over the

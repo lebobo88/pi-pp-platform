@@ -51,8 +51,21 @@ type PlanItem = {
   sweep: () => boolean;
 };
 
-export function runJanitor(opts?: { dry_run?: boolean }): JanitorReport {
+/**
+ * Run the janitor sweep.
+ *
+ * Options:
+ *   `dry_run`  — plan the sweep but do not mutate anything (default: false).
+ *   `deep`     — when true, compute on-disk byte sizes for each worktree entry
+ *                via a full recursive directory walk (may be slow on large trees).
+ *                When false (the default, "quick mode"), the directory-size walk
+ *                is skipped entirely and worktree entries report `bytes: 0`.
+ *                All other sweep actions (stale-run crash-sweep, worktree prune,
+ *                lock sweep, event purge) run identically in both modes.
+ */
+export function runJanitor(opts?: { dry_run?: boolean; deep?: boolean }): JanitorReport {
   const dryRun = opts?.dry_run === true;
+  const deep = opts?.deep === true;
   const now = Date.now();
   const cutoff = new Date(now - STALE_RUN_HOURS * 60 * 60 * 1000).toISOString();
 
@@ -103,7 +116,7 @@ export function runJanitor(opts?: { dry_run?: boolean }): JanitorReport {
         const ageMs = now - stat.mtime.getTime();
         if (ageMs > STALE_RUN_HOURS * 60 * 60 * 1000) {
           plan.push({
-            entry: { path: wtPath, kind: "worktree", bytes: dirSizeBytes(wtPath), age_days: ageDays(ageMs) },
+            entry: { path: wtPath, kind: "worktree", bytes: deep ? dirSizeBytes(wtPath) : 0, age_days: ageDays(ageMs) },
             sweep: () => {
               try {
                 execFileSync("git", ["worktree", "remove", "--force", wtPath], {
