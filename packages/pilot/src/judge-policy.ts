@@ -4,8 +4,11 @@
  *
  * Wraps @pp/core `evaluateGate` (which owns the cross-vendor requirement,
  * content-aware + profile-aware upgrades, and rubric binding) and layers the
- * engine's concrete JUDGE_POOLS on top:
+ * engine's concrete judge pools on top (settings-over-catalog precedence):
  *
+ *  - reads the operator-configured judge pool from harness_settings.judge_pool
+ *    (if present and valid) — falls back to the catalog's default judge pool,
+ *    mirroring the effectiveLadderTiers pattern in generation-model.ts,
  *  - picks a judge provider honoring cross-vendor + the per-provider kill
  *    switches (PP_DISABLE_OPENAI/GOOGLE/ANTHROPIC) and the global Gemini
  *    kill-switch (PP_DISABLE_GEMINI),
@@ -20,11 +23,14 @@
 import {
   evaluateGate,
   geminiEnabled,
+  getPlatformSetting,
+  judgePool,
   type GateType,
+  type JudgePoolEntry,
   type Profile,
 } from "@pp/core";
 import {
-  JUDGE_POOLS,
+  buildJudgePools,
   eligibleJudgeProviders,
   isProviderAvailable,
   type GenProvider,
@@ -110,6 +116,31 @@ export type JudgeSelection = {
 };
 
 /**
+ * The effective judge pool for the current run: reads harness_settings.judge_pool
+ * (settings-over-catalog precedence, mirroring effectiveLadderTiers). Entries must
+ * have non-empty `provider` and `model` strings; malformed or missing entries are
+ * silently dropped. Falls back to the catalog's default judge pool when the
+ * settings key is absent, empty, or contains no valid entries.
+ */
+export function effectiveJudgePool(): JudgePoolEntry[] {
+  const settings = getPlatformSetting<{ judge_pool?: unknown }>("harness_settings");
+  const raw = settings?.judge_pool;
+  if (Array.isArray(raw)) {
+    const filtered = raw.filter(
+      (e): e is JudgePoolEntry =>
+        typeof e === "object" &&
+        e !== null &&
+        typeof (e as Record<string, unknown>).provider === "string" &&
+        ((e as Record<string, unknown>).provider as string).length > 0 &&
+        typeof (e as Record<string, unknown>).model === "string" &&
+        ((e as Record<string, unknown>).model as string).length > 0,
+    );
+    if (filtered.length > 0) return filtered;
+  }
+  return judgePool();
+}
+
+/**
  * Stateful across a run: remembers the last judge provider so consecutive
  * stages rotate. Construct one per RunPilot.
  */
@@ -157,10 +188,16 @@ export class JudgePolicy {
     const genProvider = input.generatorProvider ?? producerToProvider(input.generatorProducer);
     const required = decision.required_cross_vendor || !!input.forceCrossVendor;
 
+    // Compute the effective pool: harness_settings.judge_pool wins over the catalog
+    // default (settings-over-catalog precedence, mirroring effectiveLadderTiers).
+    const poolEntries = effectiveJudgePool();
+    const pools = buildJudgePools(poolEntries);
+    const poolProviders = [...new Set(poolEntries.map((e) => e.provider))];
+
     // Base eligibility from the engine (drops kill-switched providers + the gen
     // vendor when cross-vendor is required). Additionally honor the global
     // Gemini kill-switch, which is separate from PP_DISABLE_GOOGLE.
-    let eligible = eligibleJudgeProviders(genProvider, required).filter(
+    let eligible = eligibleJudgeProviders(genProvider, required, poolProviders).filter(
       (p) => p !== "google" || geminiEnabled(),
     );
 
@@ -190,7 +227,7 @@ export class JudgePolicy {
     // would reuse the generator's exact model id, it cannot serve — drop it.
     eligible = eligible.filter((p) => {
       if (p !== genProvider) return true;
-      const pool = JUDGE_POOLS[p];
+      const pool = pools[p];
       if (!pool) return false; // no judge model for this provider — cannot serve
       return pool.default !== input.generatorModel;
     });
@@ -213,7 +250,7 @@ export class JudgePolicy {
     const provider = this.pickWithRotation(runId, eligible, input.preferredProvider);
     this.lastProviderByRun.set(runId, provider);
 
-    const pool = JUDGE_POOLS[provider];
+    const pool = pools[provider];
     if (!pool) {
       throw new JudgeUnavailableError(
         `judge provider "${provider}" has no catalog judge-pool entry`,
