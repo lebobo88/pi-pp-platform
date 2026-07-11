@@ -951,3 +951,49 @@ describe("provider capture from SSE frames", () => {
     expect(meta?.provider).toBe("openai-codex");
   });
 });
+
+/* ── stageLifecycleCount (RunDetailPage invalidation signal) ─────────── */
+
+describe("stageLifecycleCount — invalidation signal for RunDetailPage", () => {
+  it("starts at 0 on a fresh overlay", () => {
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(0);
+  });
+
+  it("stage.started bumps stageLifecycleCount", () => {
+    liveRunStore.ingest(RUN_ID, mkEv("stage.started", { stage_id: "s1", kind: "code", gate_type: "spec" }, 0));
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(1);
+  });
+
+  it("stage.finalized bumps stageLifecycleCount", () => {
+    liveRunStore.ingest(RUN_ID, mkEv("stage.finalized", { stage_id: "s1", status: "passed", winner_attempt_id: "a1" }, 0));
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(1);
+  });
+
+  it("stage.started and stage.finalized each independently bump the counter", () => {
+    liveRunStore.ingest(RUN_ID, mkEv("stage.started", { stage_id: "s1", kind: "code", gate_type: "spec" }, 0));
+    liveRunStore.ingest(RUN_ID, mkEv("stage.finalized", { stage_id: "s1", status: "passed", winner_attempt_id: "a1" }, 1));
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(2);
+  });
+
+  it("budget.tick does NOT bump stageLifecycleCount", () => {
+    liveRunStore.ingest(RUN_ID, mkEv("budget.tick", { scope: "run:run1", tokens_in: 100, tokens_out: 50, cost_usd: 1.0 }, 0));
+    liveRunStore.ingest(RUN_ID, mkEv("budget.tick", { scope: "run:run1", tokens_in: 200, tokens_out: 100, cost_usd: 2.0 }, 1));
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(0);
+  });
+
+  it("replay idempotency: re-ingesting the same stage.started does not double-count", () => {
+    const ev = mkEv("stage.started", { stage_id: "s1", kind: "code", gate_type: "spec" }, 5);
+    liveRunStore.ingest(RUN_ID, ev);
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(1);
+
+    // Same seq → ignored by the seq guard
+    liveRunStore.ingest(RUN_ID, ev);
+    flush();
+    expect(liveRunStore.getOverlay(RUN_ID).stageLifecycleCount).toBe(1);
+  });
+});

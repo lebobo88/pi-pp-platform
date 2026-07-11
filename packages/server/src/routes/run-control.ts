@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { registerProject, ProjectDirNotFoundError, checkRetryEligible, getRunCompletionReadiness, db } from "@pp/core";
+import { registerProject, ProjectDirNotFoundError, checkRetryEligible, getRunCompletionReadiness, getRun, finalizeRun, db } from "@pp/core";
 import { retryStage, regateStage, EventBus, type PilotEvent } from "@pp/pilot";
 import { V1, type ServerDeps } from "../deps.js";
 
@@ -142,8 +142,19 @@ export function registerRunControlRoutes(app: FastifyInstance, deps: ServerDeps)
   app.post(`${V1}/runs/:id/abort`, async (req, reply) => {
     const { id } = req.params as { id: string };
     const ok = deps.supervisor.abort(id);
-    if (!ok) return reply.code(404).send({ error: "run_not_active", run_id: id });
-    return reply.code(202).send({ run_id: id, status: "aborted" });
+    if (ok) return reply.code(202).send({ run_id: id, status: "aborted" });
+
+    // DB fallback: supervisor doesn't hold this run in-process (e.g. after a
+    // server restart). Check the DB directly so orphaned runs are recoverable.
+    const tree = getRun(id) as { run?: { status?: string } } | null;
+    if (!tree?.run) return reply.code(404).send({ error: "run_not_active", run_id: id });
+
+    const status = tree.run.status;
+    if (status === "running" || status === "pending") {
+      finalizeRun({ run_id: id, status: "aborted" });
+      return reply.code(202).send({ run_id: id, status: "aborted" });
+    }
+    return reply.code(409).send({ error: "run_not_active", status });
   });
 
   // ── Manual retry (Reflexion ×1) — drives the pilot's retryStage helper ──

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { RunStatus, StageStatus } from "@shared/api-types";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -6,6 +7,7 @@ import { Modal } from "@/components/Modal";
 import { Pill } from "@/features/common/chips";
 import { toast } from "@/stores/uiStore";
 import { ApiClientError } from "@/api/client";
+import { qk } from "@/api/queryKeys";
 import { useAbortRun, useRetryStage, useGateStage, useResumeRun } from "@/api/mutations/runs";
 import { useRunCompletionReadiness } from "@/api/queries/runs";
 
@@ -13,6 +15,7 @@ import { useRunCompletionReadiness } from "@/api/queries/runs";
 export function AbortRunButton({ runId, status }: { runId: string; status: RunStatus }) {
   const [open, setOpen] = useState(false);
   const abort = useAbortRun(runId);
+  const qc = useQueryClient();
   const inFlight = status === "running" || status === "pending";
   if (!inFlight) return null;
 
@@ -35,7 +38,16 @@ export function AbortRunButton({ runId, status }: { runId: string; status: RunSt
                     toast({ tone: "warn", title: "Run aborted", message: runId });
                     setOpen(false);
                   },
-                  onError: (e) => toast({ tone: "error", title: "Abort failed", message: e instanceof Error ? e.message : "" }),
+                  onError: (e) => {
+                    if (e instanceof ApiClientError && (e.status === 404 || e.status === 409)) {
+                      toast({ tone: "warn", title: "Run is no longer active — refreshing", message: runId });
+                      setOpen(false);
+                      void qc.invalidateQueries({ queryKey: qk.runsInfinite() });
+                      void qc.invalidateQueries({ queryKey: qk.run(runId) });
+                    } else {
+                      toast({ tone: "error", title: "Abort failed", message: e instanceof Error ? e.message : "" });
+                    }
+                  },
                 })
               }
             >

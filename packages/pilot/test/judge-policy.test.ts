@@ -173,6 +173,44 @@ describe("JudgePolicy — kill switches", () => {
   });
 });
 
+describe("JudgePolicy — same-model self-judging: qualified vs bare model id normalization", () => {
+  let dbDir: string;
+  let prevDbPath: string;
+
+  beforeAll(() => {
+    prevDbPath = currentDbPath();
+    dbDir = mkdtempSync(join(tmpdir(), "pp-judge-norm-db-"));
+    setDbPath(join(dbDir, "state.db"));
+  });
+
+  afterAll(() => {
+    setDbPath(prevDbPath);
+    rmSync(dbDir, { recursive: true, force: true });
+  });
+
+  it("qualified generator model 'deepseek/deepseek-v4-pro' must NOT select the deepseek judge (bare default 'deepseek-v4-pro')", () => {
+    // This is the core regression: pool.default is bare ("deepseek-v4-pro") but
+    // generatorModel is provider-qualified ("deepseek/deepseek-v4-pro"). Without
+    // normalization they compare unequal → deepseek slip-through as self-judge.
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "deepseek", model: "deepseek-v4-pro" },
+        { provider: "xai", model: "grok-4.3" },
+      ],
+    });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", {
+      gateType: "code_style",    // same-vendor eligible (required_cross_vendor=false)
+      generatorProducer: "claude",
+      generatorModel: "deepseek/deepseek-v4-pro",
+      generatorProvider: "deepseek",
+      keyedProviders: ["deepseek", "xai"],
+    });
+    expect(sel.provider).not.toBe("deepseek");
+    expect(sel.provider).toBe("xai");
+  });
+});
+
 describe("JudgePolicy — harness_settings.judge_pool override", () => {
   let dbDir: string;
   let prevDbPath: string;
