@@ -1,13 +1,17 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   recordProviderError,
   clearProviderCooldown,
   __resetProviderHealthForTests,
 } from "@pp/engine";
+import { setDbPath, currentDbPath, setPlatformSetting } from "@pp/core";
 import { JudgePolicy } from "../src/judge-policy.js";
 import { JudgeUnavailableError } from "../src/errors.js";
 
-const KILL = ["PP_DISABLE_OPENAI", "PP_DISABLE_GOOGLE", "PP_DISABLE_ANTHROPIC", "PP_DISABLE_GEMINI"];
+const KILL = ["PP_DISABLE_OPENAI", "PP_DISABLE_GOOGLE", "PP_DISABLE_ANTHROPIC", "PP_DISABLE_GEMINI", "PP_DISABLE_XAI"];
 afterEach(() => {
   for (const k of KILL) delete process.env[k];
   // The health registry is process-global — reset it so a cooldown set by one
@@ -166,5 +170,132 @@ describe("JudgePolicy — kill switches", () => {
     process.env.PP_DISABLE_GOOGLE = "1";
     const jp = new JudgePolicy();
     expect(() => jp.select("run1", { gateType: "spec", ...claudeGen })).toThrow(JudgeUnavailableError);
+  });
+});
+
+describe("JudgePolicy — harness_settings.judge_pool override", () => {
+  let dbDir: string;
+  let prevDbPath: string;
+
+  beforeAll(() => {
+    // Isolate the DB so settings written here never pollute the shared state.db.
+    prevDbPath = currentDbPath();
+    dbDir = mkdtempSync(join(tmpdir(), "pp-judge-pool-db-"));
+    setDbPath(join(dbDir, "state.db"));
+  });
+
+  afterAll(() => {
+    setDbPath(prevDbPath);
+    rmSync(dbDir, { recursive: true, force: true });
+  });
+
+  it("override honored: preferred provider from the custom pool wins with its model", () => {
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "openai", model: "gpt-5.4" },
+        { provider: "xai", model: "grok-4.3" },
+        { provider: "github-copilot", model: "gemini-3.1-pro-preview" },
+      ],
+    });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", {
+      gateType: "spec",
+      ...claudeGen,
+      preferredProvider: "xai",
+      keyedProviders: ["openai", "xai", "github-copilot"],
+    });
+    expect(sel.provider).toBe("xai");
+    expect(sel.judge_model).toBe("grok-4.3");
+    expect(sel.default_model).toBe("grok-4.3");
+    expect(sel.escalated).toBe(false);
+  });
+
+  it("bug-shaped failover: openai cooled down in custom pool → xai selected (previously judge_pool_empty)", () => {
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "openai", model: "gpt-5.4" },
+        { provider: "xai", model: "grok-4.3" },
+        { provider: "github-copilot", model: "gemini-3.1-pro-preview" },
+      ],
+    });
+    recordProviderError("openai", "rate_limited", "429 rate limit — try again in 30s");
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", {
+      gateType: "spec",
+      ...claudeGen,
+      keyedProviders: ["openai", "xai"],
+    });
+    expect(sel.provider).toBe("xai");
+  });
+
+  it("cross-vendor invariant still enforced with override pool: anthropic excluded for claude generator", () => {
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "anthropic", model: "claude-fable-5" },
+        { provider: "openai", model: "gpt-5.4" },
+      ],
+    });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", {
+      gateType: "spec",
+      ...claudeGen,
+      keyedProviders: ["anthropic", "openai"],
+    });
+    expect(sel.provider).toBe("openai");
+    expect(sel.provider).not.toBe("anthropic");
+  });
+
+  it("keyed + excludeProviders can still empty the override pool → throws JudgeUnavailableError", () => {
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "openai", model: "gpt-5.4" },
+        { provider: "xai", model: "grok-4.3" },
+      ],
+    });
+    const jp = new JudgePolicy();
+    // xai is not keyed → dropped; openai is excluded → dropped → empty → throws.
+    expect(() =>
+      jp.select("run1", {
+        gateType: "spec",
+        ...claudeGen,
+        keyedProviders: ["openai"],
+        excludeProviders: ["openai"],
+      }),
+    ).toThrow(JudgeUnavailableError);
+  });
+
+  it("PP_DISABLE_XAI=1 drops xai from the override pool", () => {
+    process.env.PP_DISABLE_XAI = "1";
+    setPlatformSetting("harness_settings", {
+      judge_pool: [
+        { provider: "xai", model: "grok-4.3" },
+        { provider: "openai", model: "gpt-5.4" },
+      ],
+    });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", {
+      gateType: "spec",
+      ...claudeGen,
+      keyedProviders: ["xai", "openai"],
+    });
+    expect(sel.provider).not.toBe("xai");
+    expect(sel.provider).toBe("openai");
+  });
+
+  it("fallback: judge_pool: [] → selection falls back to catalog pool", () => {
+    setPlatformSetting("harness_settings", { judge_pool: [] });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", { gateType: "spec", ...claudeGen });
+    expect(["openai", "google", "anthropic"]).toContain(sel.provider);
+  });
+
+  it("fallback: malformed judge_pool entries → selection falls back to catalog pool", () => {
+    // All entries lack valid provider/model strings — treated as empty.
+    setPlatformSetting("harness_settings", {
+      judge_pool: [{ invalid: true }, { provider: "", model: "x" }, null],
+    });
+    const jp = new JudgePolicy();
+    const sel = jp.select("run1", { gateType: "spec", ...claudeGen });
+    expect(["openai", "google", "anthropic"]).toContain(sel.provider);
   });
 });

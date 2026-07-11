@@ -59,6 +59,10 @@ describe("all-35 provider catalog", () => {
     // A newly enabled provider is never in the judge pool, so cross-vendor
     // judging for it keeps the full pool.
     expect(engine.eligibleJudgeProviders("mistral", true)).toEqual(["openai", "google", "anthropic"]);
+    // Custom pool providers are honored via the 3rd arg (cross-vendor excludes generator).
+    expect(engine.eligibleJudgeProviders("openai", true, ["openai", "xai", "github-copilot"])).toEqual(["xai", "github-copilot"]);
+    // buildJudgePools: first-per-provider wins; no escalated key when entry lacks it.
+    expect(engine.buildJudgePools([{ provider: "xai", model: "grok-4.3" }, { provider: "xai", model: "dup-ignored" }])).toEqual({ xai: { default: "grok-4.3" } });
   });
 
   it("providerForModel fallbacks hold", () => {

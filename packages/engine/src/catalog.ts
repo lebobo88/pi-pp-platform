@@ -12,6 +12,7 @@ import {
   judgePool,
   judgePoolProviders,
   killSwitchEnvFor,
+  type JudgePoolEntry,
 } from "@pp/core";
 import type { GenProvider } from "./envelope.js";
 import { projectCatalogModelsJson } from "./catalog-to-modelsjson.js";
@@ -40,12 +41,16 @@ function buildTierModels(): Record<string, TierModel> {
  */
 export const TIER_MODELS: Record<Tier, TierModel> = buildTierModels();
 
-interface JudgePool { default: string; escalated?: string }
+export interface JudgePool { default: string; escalated?: string }
 
-/** Build cross-provider judge pools (keyed by provider) from the catalog. */
-function buildJudgePools(): Record<string, JudgePool> {
+/**
+ * Build cross-provider judge pools (keyed by provider) from a list of entries.
+ * Defaults to the catalog's judge pool when no entries are provided.
+ * First entry per provider wins; `escalated` is only added when the entry defines it.
+ */
+export function buildJudgePools(entries: JudgePoolEntry[] = judgePool()): Record<string, JudgePool> {
   const out: Record<string, JudgePool> = {};
-  for (const e of judgePool()) {
+  for (const e of entries) {
     if (out[e.provider]) continue; // first entry per provider wins
     out[e.provider] = e.escalated ? { default: e.model, escalated: e.escalated } : { default: e.model };
   }
@@ -64,16 +69,21 @@ export function isProviderDisabled(provider: GenProvider): boolean {
 /**
  * The judge providers eligible for a given generator.
  *
- * - iterates the catalog judge pool's providers,
+ * - iterates the supplied pool providers (defaults to the catalog judge pool),
  * - honors the per-provider kill switches (PP_DISABLE_<PROVIDER>),
  * - when `requiredCrossVendor` is true, excludes the generator's own provider
  *   (the generalized JUDGE-1 cross-vendor → cross-provider invariant).
+ *
+ * The optional third argument lets callers supply an operator-configured pool
+ * (from harness_settings.judge_pool) so settings-over-catalog precedence is
+ * honored without changing the kill-switch or cross-vendor logic.
  */
 export function eligibleJudgeProviders(
   generatorProvider: GenProvider,
   requiredCrossVendor: boolean,
+  poolProviders: string[] = judgePoolProviders(),
 ): GenProvider[] {
-  return judgePoolProviders().filter((p) => {
+  return poolProviders.filter((p) => {
     if (isProviderDisabled(p)) return false;
     if (requiredCrossVendor && p === generatorProvider) return false;
     return true;
