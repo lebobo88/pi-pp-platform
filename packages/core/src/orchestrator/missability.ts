@@ -266,25 +266,55 @@ export const CHECK_DEFINITIONS: Array<{
       if (reports.length === 0) {
         return { status: "fail", evidence: "no browser_validation_report artifact in run" };
       }
-      const blocking = reports.find(r => /^severity:\s*errors\b/im.test(r.text));
-      if (blocking) {
-        return { status: "fail", evidence: `${blocking.path}: severity=errors` };
+
+      // BUG-2 fix (R2-1..R2-4): scope to the winner/latest report PER STAGE.
+      // Group browser validation reports by stage_id (using "_no_stage_" as the
+      // key for any report not linked to a stage). For each group, select the
+      // single most-recent report by created_at DESC, tie-broken by id DESC.
+      // This ensures a superseded (older) report from an earlier Reflexion
+      // attempt can never determine the outcome once a newer report exists.
+      const byStage = new Map<string, typeof reports>();
+      for (const r of reports) {
+        const key = r.stage_id ?? "_no_stage_";
+        if (!byStage.has(key)) byStage.set(key, []);
+        byStage.get(key)!.push(r);
+      }
+      // One selected report per stage group (latest by created_at, then id).
+      const selected: typeof reports = [];
+      for (const group of byStage.values()) {
+        const sorted = [...group].sort((a, b) => {
+          const ca = a.created_at ?? "";
+          const cb = b.created_at ?? "";
+          if (ca > cb) return -1;
+          if (ca < cb) return 1;
+          // Tie-break by id DESC.
+          return (b.id ?? "") > (a.id ?? "") ? 1 : -1;
+        });
+        selected.push(sorted[0]!);
+      }
+
+      // Evaluate severity against only the selected (winner/latest) reports (R2-5).
+      for (const r of selected) {
+        if (/^severity:\s*errors\b/im.test(r.text)) {
+          return { status: "fail", evidence: `${r.path}: severity=errors` };
+        }
       }
       // PP-BV-ISO: a browser that could not run records severity="unavailable".
       // It is a degrade-open outcome (the code committed), but it is NOT validation
       // evidence — surface it as a gap so the run is downgraded to "surfaced" and
       // the operator knows this UI flow was never exercised in a browser.
-      const unavailable = reports.find(r => /^severity:\s*unavailable\b/im.test(r.text));
-      if (unavailable) {
-        return {
-          status: "fail",
-          evidence: `${unavailable.path}: severity=unavailable — browser self-check could not run (code committed; spot-check this UI flow)`,
-        };
+      for (const r of selected) {
+        if (/^severity:\s*unavailable\b/im.test(r.text)) {
+          return {
+            status: "fail",
+            evidence: `${r.path}: severity=unavailable — browser self-check could not run (code committed; spot-check this UI flow)`,
+          };
+        }
       }
-      const ok = reports.find(r => /^severity:\s*(clean|warnings)\b/im.test(r.text));
+      const ok = selected.find(r => /^severity:\s*(clean|warnings)\b/im.test(r.text));
       return ok
         ? { status: "pass", evidence: ok.path }
-        : { status: "fail", evidence: `${reports[0]!.path}: severity not parseable` };
+        : { status: "fail", evidence: `${selected[0]!.path}: severity not parseable` };
     },
   },
 
@@ -748,6 +778,10 @@ type ArtifactBundle = {
   // (after the project_path → .harness/<run_id> → evidence_ref cascade).
   // null when no candidate yielded content.
   resolved_from?: string | null;
+  // BUG-2 fix: per-artifact DB metadata for stage-scoped checks (R2-2).
+  id?: string;
+  stage_id?: string | null;
+  created_at?: string;
 };
 
 function textPatternCheck(texts: ArtifactBundle[], re: RegExp): { status: "pass" | "fail"; evidence?: string } {
@@ -859,9 +893,12 @@ export function runMissabilityChecks(opts: {
     | undefined;
   if (!run) throw new Error(`run ${opts.run_id} not found`);
 
+  // BUG-2 fix (R2-2): select stage_id, created_at, id so that the
+  // browser-validation-evidence check can scope to the winner/latest report
+  // per stage rather than scanning all historical reports for the run.
   const artifactRows = db()
-    .prepare(`SELECT path, kind, evidence_ref FROM artifacts WHERE run_id = ?`)
-    .all(opts.run_id) as Array<{ path: string; kind: string | null; evidence_ref: string | null }>;
+    .prepare(`SELECT path, kind, evidence_ref, id, stage_id, created_at FROM artifacts WHERE run_id = ?`)
+    .all(opts.run_id) as Array<{ path: string; kind: string | null; evidence_ref: string | null; id: string; stage_id: string | null; created_at: string }>;
 
   // R3-tail Fix 1.2 (2026-05-21): resolve artifact text through a 3-step
   // cascade so checks don't silently fail when the artifact was archived
@@ -896,7 +933,7 @@ export function runMissabilityChecks(opts: {
         }
       } catch { /* ignore */ }
     }
-    return { path: r.path, kind: r.kind, text, resolved_from: resolvedFrom };
+    return { path: r.path, kind: r.kind, text, resolved_from: resolvedFrom, id: r.id, stage_id: r.stage_id, created_at: r.created_at };
   });
 
   const artifactKinds = new Set(artifactRows.map(r => r.kind ?? "").filter(Boolean));

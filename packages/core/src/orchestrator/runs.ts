@@ -3310,7 +3310,32 @@ export function archiveArtifact(input: ArchiveArtifactInput): ArchiveArtifactOut
   if (!run) throw new Error(`run ${input.run_id} not found`);
 
   const dir = projectArtifactDir(run.project_path, input.run_id);
-  const absolute = resolve(join(dir, input.relative_path));
+
+  // BUG-1 fix: normalize `input.relative_path` to strip a redundant leading
+  // `.harness/<run_id>/` prefix before joining with `dir`, so that callers
+  // which strip only `cwd` from an absolute artifact_dir (leaving the
+  // `.harness/<run_id>/` tail intact) don't produce a doubled path segment.
+  //
+  // Rules (R1-1..R1-5):
+  //   - Replace backslashes with forward slashes (cross-platform).
+  //   - Strip optional leading `./` or `/` (Windows drive-relative or POSIX).
+  //   - Strip the EXACT `.harness/<run_id>/` prefix if present — and ONLY for
+  //     this run's id. `.harness/<other_run_id>/` is NOT stripped (it becomes
+  //     a legitimately nested file). `.harness-notes/` is NOT stripped (it
+  //     does not match the exact prefix pattern).
+  //   - Normal inputs (no redundant prefix) are unchanged — no-op.
+  let normalizedRelPath = input.relative_path.replaceAll("\\", "/");
+  // Strip optional leading "./" so the prefix check works uniformly.
+  if (normalizedRelPath.startsWith("./")) normalizedRelPath = normalizedRelPath.slice(2);
+  // Strip optional leading "/" (absolute-ish input from some callers on POSIX).
+  if (normalizedRelPath.startsWith("/")) normalizedRelPath = normalizedRelPath.slice(1);
+  // Strip the EXACT .harness/<run_id>/ prefix for THIS run only.
+  const harnessRunPrefix = `.harness/${input.run_id}/`;
+  if (normalizedRelPath.startsWith(harnessRunPrefix)) {
+    normalizedRelPath = normalizedRelPath.slice(harnessRunPrefix.length);
+  }
+
+  const absolute = resolve(join(dir, normalizedRelPath));
   const relPath = relative(run.project_path, absolute).replaceAll("\\", "/");
 
   // Containment guard: an archive path must stay under .harness/<run_id>/.

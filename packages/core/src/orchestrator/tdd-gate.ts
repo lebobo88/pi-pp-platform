@@ -49,7 +49,7 @@ import {
 // ─── Manifest schema ─────────────────────────────────────────────────────
 
 export const TDD_MODES = ["bug-fix", "refactor", "feature-tdd"] as const;
-export const TDD_RUNNERS = ["vitest", "jest", "mocha", "pytest", "go-test", "cargo-test", "unittest", "playwright", "other"] as const;
+export const TDD_RUNNERS = ["vitest", "jest", "mocha", "pytest", "go-test", "cargo-test", "unittest", "playwright", "node", "other"] as const;
 export const TDD_OUTCOMES = ["all_pass", "all_fail"] as const;
 
 export const TddManifestSchema = z.object({
@@ -217,6 +217,7 @@ export function parseTestOutcome(runner: string, exitCode: number, stdout: strin
     case "go-test":  return parseGoTest(exitCode, combined);
     case "cargo-test": return parseCargoTest(exitCode, combined);
     case "unittest": return parseUnittest(exitCode, combined);
+    case "node":     return parseNodeTest(exitCode, combined);
     default:         return parseGeneric(exitCode, combined);
   }
 }
@@ -313,7 +314,69 @@ function parseUnittest(exitCode: number, out: string): ParsedOutcome {
   return classify(exitCode, passed, failed, out, /FAILED\s+\(/i);
 }
 
+/**
+ * BUG-3 fix (R3-1..R3-5): parser for Node's built-in `node --test` runner.
+ *
+ * Node emits a TAP-ish stream. In non-TTY / CI=1 mode (which the gate
+ * enforces via its spawn env) the tail summary block looks like:
+ *
+ *   # tests N
+ *   # pass N
+ *   # fail N
+ *   # skipped N  (ignored — not counted as pass or fail)
+ *   # todo N     (ignored)
+ *
+ * Primary: extract `# pass N` / `# fail N` summary lines.
+ * Fallback: count `ok N` / `not ok N` per-test markers.
+ * Last-resort: exit-code-only (same as parseGeneric) for unparseable output.
+ *
+ * The "couldn't start" guard (Cannot find module / ENOENT) already fires
+ * BEFORE this function is called (R3-5), so we don't re-check here.
+ */
+function parseNodeTest(exitCode: number, out: string): ParsedOutcome {
+  // Try structured TAP parse; fall back to exit-code-only if unparseable.
+  return parseTapStyleOrNull(exitCode, out)
+    ?? (exitCode === 0
+      ? { actual: "all_pass", passed: null, failed: 0, reason: "node runner: exit 0 → assumed all_pass (no TAP structure)" }
+      : { actual: "mixed", passed: null, failed: null, reason: `node runner: exit ${exitCode} → cannot classify without TAP structure` });
+}
+
+/**
+ * TAP-style parser shared by parseNodeTest and the upgraded parseGeneric.
+ * Returns null when no TAP structure is recognizable (caller falls through).
+ */
+function parseTapStyleOrNull(exitCode: number, out: string): ParsedOutcome | null {
+  // Primary: `# pass N` / `# fail N` summary lines (R3-3).
+  // The `^` / `$` anchors (multiline `m` flag) ensure we match whole lines and
+  // avoid false-positives from prose mentioning "pass" mid-sentence.
+  const passM = out.match(/^#\s+pass\s+(\d+)\s*$/im);
+  const failM = out.match(/^#\s+fail\s+(\d+)\s*$/im);
+  if (passM !== null || failM !== null) {
+    const passed = passM ? maybeInt(passM[1]) : null;
+    const failed = failM ? maybeInt(failM[1]) : null;
+    return classify(exitCode, passed, failed, out, /^not ok\s+\d+/im);
+  }
+
+  // Fallback: count `ok N` / `not ok N` per-test markers (R3-3).
+  // `not ok` lines are matched first so they don't also count as `ok` lines.
+  const notOkLines = out.match(/^not ok\s+\d+/gim) ?? [];
+  const okOnlyLines = out.match(/^ok\s+\d+/gim) ?? [];
+  if (okOnlyLines.length > 0 || notOkLines.length > 0) {
+    return classify(exitCode, okOnlyLines.length, notOkLines.length, out, /^not ok\s+\d+/im);
+  }
+
+  return null;
+}
+
 function parseGeneric(exitCode: number, out: string): ParsedOutcome {
+  // BUG-3 fix (R3-2 approach-b / R3-6): attempt TAP-style parsing first so
+  // that `node --test` output declared as test_runner: "other" is classified
+  // accurately (all_fail / all_pass / mixed) rather than being collapsed to
+  // exit-code-only.  When no TAP structure is present, fall through to the
+  // original exit-code-only behaviour (R3-6 preservation guarantee).
+  const tapResult = parseTapStyleOrNull(exitCode, out);
+  if (tapResult !== null) return tapResult;
+
   // No structured parse; rely on exit code only.
   if (exitCode === 0) return { actual: "all_pass", passed: null, failed: 0, reason: "generic runner: exit 0 → assumed all_pass (no parse)" };
   return { actual: "mixed", passed: null, failed: null, reason: `generic runner: exit ${exitCode} → cannot distinguish all_fail from mixed without parser` };
