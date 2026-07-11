@@ -3,6 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
+/** v14: best-of-N tournament board enrichment — adds `adds`, `dels`, `worktree_path`, and `seed` columns to the attempts table. */
 export const SCHEMA_VERSION = 14;
 
 export const SCHEMA_SQL = `
