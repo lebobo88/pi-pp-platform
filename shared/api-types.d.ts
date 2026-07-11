@@ -102,6 +102,14 @@ export interface AttemptRow {
     context_used?: number | null;
     /** v13: catalog context_window for the model at generation time (context fill denominator). NULL/absent on legacy rows. */
     context_max?: number | null;
+    /** v14: body-line additions parsed from the candidate unified diff; NULL on legacy rows and non-best-of attempts. */
+    adds?: number | null;
+    /** v14: body-line deletions parsed from the candidate unified diff; NULL on legacy rows and non-best-of attempts. */
+    dels?: number | null;
+    /** v14: candidate git worktree path; NULL on non-best-of / legacy rows. */
+    worktree_path?: string | null;
+    /** v14: string diversification-rotation label (e.g. "devils-advocate"); NULL on non-best-of / legacy rows. Never numeric. */
+    seed?: string | null;
 }
 /** `verdicts` table row. */
 export interface VerdictRow {
@@ -1217,8 +1225,16 @@ export type AttemptStartedEvent = SseEnvelope<"attempt.started", {
     attempt_id?: string;
     /** Best-of-N candidate slot index (0-based). */
     candidate_index?: number;
-    /** Diversification seed used for this candidate. */
-    seed?: number;
+    /** Diversification seed used for this candidate: a rotation label string
+     *  (e.g. "primary", "devils-advocate", "terse-diff", "failing-test-first").
+     *  Corrected from "number" — the emitted runtime value was always a string. */
+    seed?: string;
+    /** Judge ordering position for this candidate (0-based). Used by best-of.ts
+     *  to present candidates to the judge in a shuffled order, mitigating
+     *  position bias. Only present on best-of-N attempt.started frames;
+     *  absent on standard (non-best-of) stage-loop attempts.
+     *  Added by CHG-6 (pre-existing untyped drift, best-of.ts:137). */
+    judge_position?: number;
     /** Provider id resolved for this attempt's model (e.g. "github-copilot"). */
     provider?: string;
 }>;
@@ -1284,6 +1300,25 @@ export type BordaUpdatedEvent = SseEnvelope<"borda.updated", {
     }>;
     leader_attempt_id?: string | null;
     scores?: unknown;
+    /** Highest pairwise cosine similarity across candidates (0..1). Present
+     *  only on phase:"entropy" frames; absent on all other phases.
+     *  Added by CHG-1 (REQ-ENT-1 / ADR D4). */
+    max_similarity?: number;
+    /** Human-readable low-diversity warning; null when diversity is adequate.
+     *  Present only on phase:"entropy" frames. Null means no warning.
+     *  Added by CHG-1 (REQ-ENT-1 / ADR D4). */
+    warning?: string | null;
+    /** Rubric-rank winner candidate index (0-based) as selected by Borda count.
+     *  Present on phase:"winner" and phase:"smoke-override" frames.
+     *  This is the candidate that scored highest before smoke filtering.
+     *  Added by CHG-5 (pre-existing untyped drift). */
+    rubric_winner?: number;
+    /** Smoke-corrected winner candidate index (0-based). Present only on
+     *  phase:"smoke-override" frames, when the rubric winner failed the
+     *  runtime smoke test and a lower-ranked clean candidate was promoted.
+     *  Absent when rubric winner and smoke winner coincide.
+     *  Added by CHG-5 (pre-existing untyped drift). */
+    smoke_corrected_winner?: number;
 }>;
 export type SmokeStatusEvent = SseEnvelope<"smoke.status", {
     stage_id?: string;

@@ -69,7 +69,9 @@ export type AttemptMeta = {
   tier?: string;
   retryIndex?: number;
   candidateIndex?: number;
-  seed?: number;
+  /** Diversification rotation label string (e.g. "primary", "devils-advocate").
+   *  Corrected from "number" — the emitter always passes a string. */
+  seed?: string;
   startedAt?: string;
   completedAt?: string;
   tokensIn?: number;
@@ -170,6 +172,13 @@ export interface LiveRunOverlay {
    * this — budget.tick bumps version on every tick causing a refetch storm.
    */
   stageLifecycleCount?: number;
+  /**
+   * stage_id → captured diff-entropy for that stage. Latched: once written,
+   * a subsequent borda.updated frame that omits max_similarity/warning does NOT
+   * clear this entry (winner/smoke-override frames must not clobber the value).
+   * Added by CHG-1 (REQ-ENT-2 / ADR D4).
+   */
+  stageEntropy?: Record<string, { maxSimilarity: number; warning: string | null }>;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
@@ -197,6 +206,7 @@ function freshOverlay(runId: string): LiveRunOverlay {
     lastEventTs: null,
     lastAppliedSeq: -1,
     stageLifecycleCount: 0,
+    stageEntropy: {},
   };
 }
 
@@ -416,6 +426,7 @@ class LiveRunStore {
     if (next.lastAppliedSeq === undefined) next.lastAppliedSeq = -1;
     if (next.lastEventTs === undefined) next.lastEventTs = null;
     if (!next.attemptLog) next.attemptLog = {};
+    if (!next.stageEntropy) next.stageEntropy = {};
 
     // §4.1: update lastAppliedSeq and lastEventTs
     if (seqIsValid) {
@@ -564,6 +575,20 @@ class LiveRunStore {
         const d = ev.data;
         if (d.ranking) {
           next.borda = { ...next.borda, [d.stage_id]: d.ranking };
+        }
+        // CHG-1 (REQ-ENT-2/3): latch entropy for this stage — only update when
+        // the frame carries max_similarity or warning (phase:"entropy" frames).
+        // Frames that omit both (phase:"winner", phase:"smoke-override") MUST NOT
+        // clobber a previously captured entropy value.
+        if (d.max_similarity !== undefined || d.warning !== undefined) {
+          const existing = next.stageEntropy![d.stage_id];
+          next.stageEntropy = {
+            ...next.stageEntropy,
+            [d.stage_id]: {
+              maxSimilarity: d.max_similarity ?? existing?.maxSimilarity ?? 0,
+              warning: d.warning !== undefined ? d.warning : (existing?.warning ?? null),
+            },
+          };
         }
         const detailParts: string[] = [];
         if (d.leader_attempt_id) detailParts.push(`winner=${d.leader_attempt_id}`);

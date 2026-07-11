@@ -89,6 +89,9 @@ function BestOfStagePanel({
         ))}
       </div>
 
+      {/* REQ-ENT-4/7: Entropy banner — rendered once per stage, only when entropy captured */}
+      <EntropyBanner entropy={overlay.stageEntropy?.[stage.id]} />
+
       {/* Borda table: judges × candidates */}
       <div className="mt-4">
         <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-3">Borda · judges × candidates</div>
@@ -148,5 +151,49 @@ function BestOfStagePanel({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * REQ-ENT-4..8: Stage-level diff-entropy banner.
+ * Rendered once per stage between the candidate grid and the Borda table.
+ * Omitted entirely when no entropy has been captured for the stage.
+ *
+ * Color thresholds (REQ-ENT-5):
+ *   < 0.6   → neutral (ink-3)
+ *   0.6–0.85 → amber/warn (boundary values resolve amber)
+ *   > 0.85  → red/fail
+ */
+function entropyColor(maxSimilarity: number): string {
+  if (maxSimilarity > 0.85) return "border-fail/40 bg-fail/10 text-fail";
+  if (maxSimilarity >= 0.6) return "border-warn/40 bg-warn/10 text-warn";
+  return "border-line-1 bg-bg-2 text-ink-3";
+}
+
+function EntropyBanner({
+  entropy,
+}: {
+  entropy?: { maxSimilarity: number; warning: string | null };
+}) {
+  // REQ-ENT-7: render nothing when entropy is absent.
+  if (!entropy) return null;
+
+  const colorClass = entropyColor(entropy.maxSimilarity);
+
+  return (
+    <div
+      className={cn(
+        "mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-[12px]",
+        colorClass,
+      )}
+    >
+      <span className="font-medium shrink-0">diff entropy</span>
+      {/* REQ-ENT-8: show numeric value when present */}
+      <span className="mono">max similarity {entropy.maxSimilarity.toFixed(3)}</span>
+      {/* REQ-ENT-6: show warning text when non-empty */}
+      {entropy.warning && (
+        <span className="ml-1 truncate">{entropy.warning}</span>
+      )}
+    </div>
   );
 }

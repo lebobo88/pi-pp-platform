@@ -485,6 +485,15 @@ export type RecordAttemptInput = {
    * omit when the model is absent from every known catalog.
    */
   context_max?: number;
+  /**
+   * v14: candidate git worktree path. Omit for non-best-of stages (persists NULL).
+   */
+  worktree_path?: string;
+  /**
+   * v14: string diversification-rotation label (e.g. "devils-advocate"). Omit for
+   * non-best-of stages (persists NULL). Never numeric — TEXT column.
+   */
+  seed?: string;
 };
 export type RecordAttemptOutput = { attempt_id: string };
 
@@ -556,8 +565,9 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
           tokens_in, tokens_out, cost_usd, wall_ms,
           retry_index, parent_attempt_id, status, attempted_tier, notes_json, agent_type, provider,
           context_used, context_max,
+          worktree_path, seed,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -579,6 +589,8 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
         (input.provider && input.provider.trim()) ? input.provider : null,
         input.context_used ?? null,
         input.context_max ?? null,
+        input.worktree_path ?? null,
+        input.seed ?? null,
         now()
       );
 
@@ -595,6 +607,18 @@ export function recordAttempt(input: RecordAttemptInput): RecordAttemptOutput {
   });
 
   return { attempt_id: id };
+}
+
+/**
+ * v14: Post-insert UPDATE to persist diff line-churn stats for a best-of-N candidate.
+ * Called AFTER recordAttempt() because the rangeDiff is computed after the initial INSERT.
+ * UPDATEs only the `adds` and `dels` columns; does NOT insert a row or touch any other column.
+ * A call with a non-existent attempt_id is a no-op (no row to update).
+ */
+export function recordAttemptDiffStats(attempt_id: string, adds: number, dels: number): void {
+  db()
+    .prepare(`UPDATE attempts SET adds = ?, dels = ? WHERE id = ?`)
+    .run(adds, dels, attempt_id);
 }
 
 /**
