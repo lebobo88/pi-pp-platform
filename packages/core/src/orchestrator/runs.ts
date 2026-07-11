@@ -727,6 +727,15 @@ export type RecordVerdictInput = {
 };
 export type RecordVerdictOutput = { verdict_id: string; cross_vendor: boolean };
 
+/**
+ * Check whether two model ids refer to the same model. Handles the case where
+ * one id is provider-qualified ("provider/model") and the other is bare ("model").
+ * Core cannot import @pp/engine, so this is a local equivalent.
+ */
+function isSameModel(a: string, b: string): boolean {
+  return a === b || a.endsWith("/" + b) || b.endsWith("/" + a);
+}
+
 export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
   const id = `verdict_${nanoid(10)}`;
   const att = db()
@@ -751,7 +760,7 @@ export function recordVerdict(input: RecordVerdictInput): RecordVerdictOutput {
       `because pp_gemini.critique is hard-pinned to that model`
     );
   }
-  if (att.producer === input.judge_producer && att.model_id === input.judge_model_id && att.producer !== "gemini") {
+  if (att.producer === input.judge_producer && isSameModel(att.model_id, input.judge_model_id) && att.producer !== "gemini") {
     throw new Error(
       `same-vendor verdict requires different model ids for producer=${att.producer}: ` +
       `generator=${att.model_id}, judge=${input.judge_model_id}`

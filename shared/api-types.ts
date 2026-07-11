@@ -808,6 +808,16 @@ export interface AbortRunResponse {
   status: RunStatus;
 }
 
+/**
+ * 409 body for `POST /runs/:id/abort` when the run exists in the DB but is
+ * already in a terminal state (not "running" or "pending"). The `status` field
+ * carries the run's current DB status so the caller can refresh stale UI state.
+ */
+export interface AbortRunConflictResponse {
+  error: "run_not_active";
+  status: RunStatus;
+}
+
 /** Retry a surfaced stage (Reflexion ×1) or re-run only its judge (gate). */
 export interface StageActionResponse {
   run_id: string;

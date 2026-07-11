@@ -337,3 +337,61 @@ describe("run-control — concurrency + budget", () => {
     expect(buf).toContain("event: budget.tick");
   });
 });
+
+describe("run-control — abort DB fallback (orphaned runs after restart)", () => {
+  // These tests seed a run directly into the DB (bypassing the supervisor) to
+  // simulate runs that survived a server restart and are no longer tracked
+  // in-process. They verify the abort endpoint recovers them via the DB path.
+
+  async function makeOrphanServer(): Promise<{ app: FastifyInstance; home: string }> {
+    const home = mkdtempSync(join(tmpdir(), "pp-abort-fallback-"));
+    process.env.PP_PLATFORM_DIR = join(home, "platform");
+    delete process.env.PP_ECOSYSTEM;
+    delete process.env.PP_API_TOKEN;
+    const { buildApp } = await import("../src/app.js");
+    const app = await buildApp({ dbPath: join(home, "state.db"), makeEngine: () => makeEngine() });
+    return { app, home };
+  }
+
+  it("orphaned run with status=running → 202 and DB status becomes aborted", async () => {
+    const { app, home } = await makeOrphanServer();
+    servers.push({ app, base: "" });
+    const runId = "run_orphan_running";
+    const { db } = await import("@pp/core");
+    db().prepare(
+      `INSERT INTO runs(id, project_path, request_text, mode, status, started_at) VALUES (?, ?, 'orphan', 'single', 'running', datetime('now'))`,
+    ).run(runId, home);
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/runs/${runId}/abort` });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().run_id).toBe(runId);
+    expect(res.json().status).toBe("aborted");
+
+    const row = db().prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string } | undefined;
+    expect(row?.status).toBe("aborted");
+  });
+
+  it("orphaned run with status=complete (terminal) → 409 {error: run_not_active, status}", async () => {
+    const { app, home } = await makeOrphanServer();
+    servers.push({ app, base: "" });
+    const runId = "run_orphan_complete";
+    const { db } = await import("@pp/core");
+    db().prepare(
+      `INSERT INTO runs(id, project_path, request_text, mode, status, started_at) VALUES (?, ?, 'done', 'single', 'complete', datetime('now'))`,
+    ).run(runId, home);
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/runs/${runId}/abort` });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("run_not_active");
+    expect(res.json().status).toBe("complete");
+  });
+
+  it("unknown run id (not in DB) → 404", async () => {
+    const { app } = await makeOrphanServer();
+    servers.push({ app, base: "" });
+
+    const res = await app.inject({ method: "POST", url: "/api/v1/runs/run_does_not_exist/abort" });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("run_not_active");
+  });
+});

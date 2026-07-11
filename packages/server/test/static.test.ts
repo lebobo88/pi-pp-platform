@@ -59,3 +59,40 @@ describe("static UI + SPA fallback", () => {
     expect(bad.headers.get("content-type")).toContain("application/json");
   });
 });
+
+describe("legacy /runs/* routes: SPA fallback for browser hard-navigation", () => {
+  it("GET /runs with Accept: text/html → 200 text/html SPA shell", async () => {
+    const r = await fetch(`${base}/runs`, { headers: { accept: "text/html,application/xhtml+xml,*/*" } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).toContain("PP_SPA_MARKER");
+  });
+
+  it("GET /runs/new with Accept: text/html → 200 text/html SPA shell", async () => {
+    const r = await fetch(`${base}/runs/new`, { headers: { accept: "text/html,application/xhtml+xml,*/*" } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).toContain("PP_SPA_MARKER");
+  });
+
+  it("GET /runs/run_someid with Accept: text/html → 200 text/html SPA shell", async () => {
+    const r = await fetch(`${base}/runs/run_someid`, { headers: { accept: "text/html,application/xhtml+xml,*/*" } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).toContain("PP_SPA_MARKER");
+  });
+
+  it("GET /runs/run_someid/replay with Accept: text/html → 200 text/html SPA shell", async () => {
+    const r = await fetch(`${base}/runs/run_someid/replay`, { headers: { accept: "text/html,application/xhtml+xml,*/*" } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).toContain("PP_SPA_MARKER");
+  });
+
+  it("GET /api/v1/runs (paginated) is unaffected by the legacy Accept guard", async () => {
+    const r = await fetch(`${base}/api/v1/runs`, { headers: { accept: "text/html,*/*" } });
+    expect(r.status).toBe(200);
+    // /api/v1/runs always returns JSON
+    expect(r.headers.get("content-type")).toContain("application/json");
+  });
+});

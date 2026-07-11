@@ -163,6 +163,13 @@ export interface LiveRunOverlay {
    * Frames with ev.seq <= lastAppliedSeq are ignored (replay dedup).
    */
   lastAppliedSeq?: number;
+  /**
+   * Monotonically-increasing counter bumped by every stage.started and
+   * stage.finalized frame. RunDetailPage uses this (alongside gateEvents.length)
+   * to know when to refetch the REST run tree. Do NOT use overlay.version for
+   * this — budget.tick bumps version on every tick causing a refetch storm.
+   */
+  stageLifecycleCount?: number;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
@@ -189,6 +196,7 @@ function freshOverlay(runId: string): LiveRunOverlay {
     costSeries: [],
     lastEventTs: null,
     lastAppliedSeq: -1,
+    stageLifecycleCount: 0,
   };
 }
 
@@ -426,11 +434,13 @@ class LiveRunStore {
 
       case "stage.started":
         next.stageStatus = { ...next.stageStatus, [ev.data.stage_id]: "open" };
+        next.stageLifecycleCount = (next.stageLifecycleCount ?? 0) + 1;
         break;
 
       case "stage.finalized":
         next.stageStatus = { ...next.stageStatus, [ev.data.stage_id]: ev.data.status };
         next.stageWinner = { ...next.stageWinner, [ev.data.stage_id]: ev.data.winner_attempt_id };
+        next.stageLifecycleCount = (next.stageLifecycleCount ?? 0) + 1;
         break;
 
       case "stage.surfaced": {

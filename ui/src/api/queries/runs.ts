@@ -58,6 +58,7 @@ export function useRuns(filter: RunsFilter = {}) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     select: (data) => data.pages.flatMap((p) => p.items),
+    refetchInterval: 15_000,
   });
 }
 

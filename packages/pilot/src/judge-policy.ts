@@ -33,6 +33,7 @@ import {
   buildJudgePools,
   eligibleJudgeProviders,
   isProviderAvailable,
+  splitQualifiedModelId,
   type GenProvider,
 } from "@pp/engine";
 import { JudgeUnavailableError } from "./errors.js";
@@ -225,11 +226,16 @@ export class JudgePolicy {
 
     // Same-vendor different-model invariant: if the only same-vendor option
     // would reuse the generator's exact model id, it cannot serve — drop it.
+    // Normalize both sides to bare model ids so a provider-qualified generator
+    // model ("deepseek/deepseek-v4-pro") is correctly matched against the pool's
+    // bare default ("deepseek-v4-pro") and vice versa.
     eligible = eligible.filter((p) => {
       if (p !== genProvider) return true;
       const pool = pools[p];
       if (!pool) return false; // no judge model for this provider — cannot serve
-      return pool.default !== input.generatorModel;
+      const { model: bareJudge } = splitQualifiedModelId(pool.default);
+      const { model: bareGen } = splitQualifiedModelId(input.generatorModel);
+      return bareJudge !== bareGen;
     });
 
     if (eligible.length === 0) {

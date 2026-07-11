@@ -9,7 +9,11 @@ import { listRuns, getRun, budgetStatus, masterPlanStatus, buildReplayBundle, ty
 export function registerLegacyRoutes(app: FastifyInstance): void {
   app.get("/healthz", async () => ({ ok: true, version: "0.1.0", ts: new Date().toISOString() }));
 
-  app.get("/runs", async (req) => {
+  app.get("/runs", async (req, reply) => {
+    // When the browser navigates to /runs directly (Accept: text/html), defer to
+    // the SPA fallback so client-side routing handles it. JSON-only callers
+    // (curl, pp:status, older clients) continue to receive the bare array.
+    if (req.headers.accept?.includes("text/html")) return reply.callNotFound();
     const q = req.query as { project_path?: string; status?: string; limit?: string };
     // Legacy contract is a bare array; the paginated envelope lives on /api/v1/runs.
     return listRuns({
@@ -20,6 +24,8 @@ export function registerLegacyRoutes(app: FastifyInstance): void {
   });
 
   app.get("/runs/:id", async (req, reply) => {
+    // Browser hard-navigation to /runs/<id> (Accept: text/html) must reach the SPA.
+    if (req.headers.accept?.includes("text/html")) return reply.callNotFound();
     const { id } = req.params as { id: string };
     const tree = getRun(id);
     if (!tree) return reply.code(404).send({ error: "run_not_found" });
@@ -27,6 +33,8 @@ export function registerLegacyRoutes(app: FastifyInstance): void {
   });
 
   app.get("/runs/:id/replay", async (req, reply) => {
+    // Browser hard-navigation (Accept: text/html) must reach the SPA.
+    if (req.headers.accept?.includes("text/html")) return reply.callNotFound();
     const { id } = req.params as { id: string };
     const bundle = buildReplayBundle(id);
     if (!bundle) return reply.code(404).send({ error: "run_not_found" });
