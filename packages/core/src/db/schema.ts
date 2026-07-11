@@ -3,7 +3,7 @@
  * doesn't need a separate copy of the SQL file. Mirror this with
  * `daemon/src/db/schema.sql` for human-readable reference.
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -98,6 +98,14 @@ CREATE TABLE IF NOT EXISTS attempts (
   -- context_max  = catalog context_window for the model at generation time.
   context_used        INTEGER,
   context_max         INTEGER,
+  -- v14: best-of-N observability. All nullable; NULL on legacy rows and non-best-of attempts.
+  -- adds/dels = body-line additions/deletions parsed from the candidate unified diff.
+  -- worktree_path = candidate git worktree path.
+  -- seed = string diversification-rotation label (e.g. "devils-advocate"); never numeric.
+  adds                INTEGER,
+  dels                INTEGER,
+  worktree_path       TEXT,
+  seed                TEXT,
   created_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_stage  ON attempts(stage_id);

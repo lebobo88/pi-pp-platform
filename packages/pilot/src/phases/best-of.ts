@@ -18,6 +18,7 @@ import { mkdirSync } from "node:fs";
 import {
   startBestOfStage,
   recordAttempt,
+  recordAttemptDiffStats,
   recordAgentSession,
   recordVerdict,
   tallyJudgeUsage,
@@ -191,6 +192,8 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
       attempt_slot_id: c.attempt_slot_id,
       notes: { candidate_index: c.candidate_index },
       provider: genProvider || undefined,
+      worktree_path: c.worktree_path,
+      seed: rot.seed,
     });
 
     if (gen.session_file) {
@@ -215,6 +218,24 @@ export async function runBestOfStage(ctx: RunContext, stage: StageSpec, n: numbe
     // judge being handed the worktree's pre-existing HEAD commit.
     gitAutoCommitIfDirty(c.worktree_path, `pp ${ctx.run_id} ${stage.kind} candidate ${c.candidate_index}`);
     const rangeDiff = gitDiffRange(c.worktree_path, baseSha);
+
+    // v14: Parse body-line adds/dels from the already-available unified diff.
+    // Count lines beginning with '+' or '-' (body lines), excluding '+++'/---'
+    // file headers and '@@' hunk headers. No second git call.
+    {
+      let adds = 0;
+      let dels = 0;
+      if (rangeDiff) {
+        for (const line of rangeDiff.split("\n")) {
+          if (line.startsWith("+++") || line.startsWith("---")) continue;
+          if (line.startsWith("@@")) continue;
+          if (line.startsWith("+")) adds++;
+          else if (line.startsWith("-")) dels++;
+        }
+      }
+      recordAttemptDiffStats(attempt.attempt_id, adds, dels);
+    }
+
     cand.push({
       index: c.candidate_index,
       attempt_id: attempt.attempt_id,

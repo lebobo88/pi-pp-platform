@@ -251,6 +251,24 @@ function applyMigrations(conn: Database.Database): void {
     conn.exec("ALTER TABLE attempts ADD COLUMN context_max INTEGER");
   }
 
+  // v14: best-of-N observability (Tournament Board Enrichment). Nullable, additive-only.
+  // adds/dels = body-line additions/deletions from candidate unified diff (NULL on legacy rows).
+  // worktree_path = candidate git worktree path (NULL on non-best-of / legacy rows).
+  // seed = string diversification-rotation label (TEXT, never numeric; NULL on legacy rows).
+  const attemptColsV14 = conn.prepare("PRAGMA table_info(attempts)").all() as Array<{ name: string }>;
+  if (!attemptColsV14.some(c => c.name === "adds")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN adds INTEGER");
+  }
+  if (!attemptColsV14.some(c => c.name === "dels")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN dels INTEGER");
+  }
+  if (!attemptColsV14.some(c => c.name === "worktree_path")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN worktree_path TEXT");
+  }
+  if (!attemptColsV14.some(c => c.name === "seed")) {
+    conn.exec("ALTER TABLE attempts ADD COLUMN seed TEXT");
+  }
+
   // CREATE TABLE IF NOT EXISTS already covered by SCHEMA_SQL exec at boot,
   // but be defensive for DBs created at v6 before SCHEMA_SQL included it.
   conn.exec(`

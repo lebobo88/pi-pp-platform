@@ -19,6 +19,28 @@ export function AttemptCard({
   children?: React.ReactNode;
 }) {
   const status = (liveStatus ?? attempt.status) as AttemptRow["status"];
+
+  // CHG-3/REQ-DIFF-7: churn span rendered after the wall row.
+  const hasChurn = attempt.adds != null || attempt.dels != null;
+  const churnNode = (
+    <span className="inline-flex items-center gap-1 mono text-[12px]">
+      {attempt.adds != null ? (
+        <span className="text-pass">+{attempt.adds}</span>
+      ) : (
+        <span className="text-ink-3">+—</span>
+      )}
+      {attempt.dels != null ? (
+        <span className="text-fail">{"−"}{attempt.dels}</span>
+      ) : (
+        <span className="text-ink-3">{"−"}—</span>
+      )}
+    </span>
+  );
+  // REQ-DIFF-6: when both are null, render a single neutral placeholder.
+  const churnDisplay = (!hasChurn)
+    ? <span className="text-ink-3">—</span>
+    : churnNode;
+
   return (
     <div
       className={cn(
@@ -51,13 +73,33 @@ export function AttemptCard({
                 <span className="inline-flex items-center gap-1.5">
                   {shortId(attempt.id, 14)}
                   <CopyButton value={attempt.id} title="Copy attempt id" />
+                  {/* REQ-WT-5: icon-only copy button for worktree path; omitted when null */}
+                  {attempt.worktree_path != null && (
+                    <CopyButton value={attempt.worktree_path} title="Copy worktree path" />
+                  )}
                 </span>
               ),
             },
-            { label: "seed", value: attempt.prompt_hash ?? "—", mono: true },
+            {
+              label: "seed",
+              mono: true,
+              value: (
+                <span className={cn(
+                  "text-[12px]",
+                  // REQ-SEED-7: de-emphasize seed unless this attempt is the Borda winner.
+                  winner ? "text-ink-1" : "text-ink-3",
+                )}>
+                  {attempt.seed ?? "—"}
+                </span>
+              ),
+            },
             { label: "tokens", value: `${formatTokens(attempt.tokens_in)} in · ${formatTokens(attempt.tokens_out)} out`, mono: true },
             { label: "cost", value: formatUsd(attempt.cost_usd), mono: true },
             { label: "wall", value: formatDuration(attempt.wall_ms), mono: true },
+            {
+              label: "churn",
+              value: churnDisplay,
+            },
           ]}
         />
         {children}
