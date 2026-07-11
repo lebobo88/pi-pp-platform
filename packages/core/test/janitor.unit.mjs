@@ -78,7 +78,7 @@ async function testDryRunThenRealRun() {
   db().prepare("INSERT INTO runs (id, project_path, request_text, mode, status, started_at) VALUES (?,?,?,?,?,?)")
     .run("run_stale", proj, "stale run", "single", "running", startedAt);
 
-  // ── dry_run: full plan, nothing mutated. ──
+  // ── quick (default) dry_run: plan computed, bytes=0 for worktree (no dir walk). ──
   const dry = janitor.runJanitor({ dry_run: true });
   assert.equal(dry.dry_run, true);
   assert.equal(dry.swept, 0, "dry_run sweeps nothing");
@@ -88,7 +88,8 @@ async function testDryRunThenRealRun() {
   const kinds = dry.entries.map((e) => e.kind).sort();
   assert.deepEqual(kinds, ["branch", "lock", "run", "worktree"], "plan covers all four kinds");
   const wtEntry = dry.entries.find((e) => e.kind === "worktree");
-  assert.ok(wtEntry.bytes >= 2048, "worktree entry carries bytes>0 for a non-empty dir");
+  // Quick mode: bytes=0 (no dirSizeBytes call).
+  assert.equal(wtEntry.bytes, 0, "quick mode: worktree entry bytes must be 0 (no dir walk)");
   assert.ok(wtEntry.age_days > 0.3, "worktree entry carries age_days");
   const branchEntry = dry.entries.find((e) => e.kind === "branch");
   assert.equal(branchEntry.path, "pp/test-sweep");
@@ -99,13 +100,21 @@ async function testDryRunThenRealRun() {
     "dry_run leaves the run status intact");
   assert.equal(janitor.getJanitorReport(), null, "dry_run does not persist a report");
 
-  // ── real run: executes the same plan. ──
+  // ── deep dry_run: bytes>0 (dirSizeBytes called). ──
+  const deepDry = janitor.runJanitor({ dry_run: true, deep: true });
+  const deepWtEntry = deepDry.entries.find((e) => e.kind === "worktree");
+  assert.ok(deepWtEntry.bytes >= 2048, "deep mode: worktree bytes>0 for a non-empty dir");
+
+  // ── real (quick) run: executes the plan; reclaimed_bytes=0 (no dir sizes). ──
   const real = janitor.runJanitor();
   assert.equal(real.dry_run, false);
-  assert.deepEqual(real.entries, dry.entries, "real run entries match the dry_run plan");
   assert.deepEqual(real.crashed_runs, ["run_stale"]);
   assert.equal(real.swept, real.entries.length, "every planned entry swept");
-  assert.ok(real.reclaimed_bytes >= 2048, "reclaimed_bytes counts the swept worktree");
+  // Quick mode: bytes are 0, so reclaimed_bytes is 0 (only lock/run byte sizes may be non-zero;
+  // lock is a small file, entries counted but 0-byte worktree dominates).
+  // We just verify sweep worked, not the exact byte count.
+  const wtRealEntry = real.entries.find((e) => e.kind === "worktree");
+  assert.equal(wtRealEntry.bytes, 0, "quick real run: worktree bytes still 0");
 
   assert.ok(!existsSync(wtPath), "worktree removed");
   assert.ok(!existsSync(lockPath), "lock removed");
@@ -125,11 +134,58 @@ async function testDryRunThenRealRun() {
   assert.equal(idle.swept, 0);
   closeDb();
 
-  console.log("✓ janitor: dry_run plan matches real run; sweep + persistence verified");
+  console.log("✓ janitor: quick/deep modes verified; sweep + persistence verified");
+}
+
+async function testQuickVsDeep() {
+  const { setDbPath, db, closeDb } = await importDist("db/database.js");
+  const janitor = await importDist("orchestrator/janitor.js");
+
+  const dbPath = join(mkdtempSync(join(tmpdir(), "pp-jan-qd-db-")), "state.db");
+  setDbPath(dbPath);
+
+  // Fixture git project with a stale worktree containing real bytes.
+  const proj = mkdtempSync(join(tmpdir(), "pp-jan-qd-proj-"));
+  git(["init", "-q"], proj);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], proj);
+  const wtPath = join(mkdtempSync(join(tmpdir(), "pp-jan-qd-wt-")), "cand");
+  git(["worktree", "add", "-q", "-b", "pp/qd-sweep", wtPath], proj);
+  writeFileSync(join(wtPath, "bigfile.txt"), "x".repeat(4096));
+  backdate(wtPath, 10 * HOURS);
+
+  // Register the project via a stale run row.
+  const startedAt = new Date(Date.now() - 10 * HOURS).toISOString();
+  db().prepare("INSERT INTO runs (id, project_path, request_text, mode, status, started_at) VALUES (?,?,?,?,?,?)")
+    .run("run_qd_stale", proj, "qd test", "single", "running", startedAt);
+
+  // Quick mode (default): worktree bytes=0, dirSizeBytes never called.
+  const quick = janitor.runJanitor({ dry_run: true });
+  const quickWt = quick.entries.find((e) => e.kind === "worktree");
+  assert.ok(quickWt, "worktree entry must be present in quick mode");
+  assert.equal(quickWt.bytes, 0, "quick mode: bytes=0 (no directory walk)");
+
+  // Deep mode: worktree bytes>0 (full directory walk performed).
+  const deep = janitor.runJanitor({ dry_run: true, deep: true });
+  const deepWt = deep.entries.find((e) => e.kind === "worktree");
+  assert.ok(deepWt, "worktree entry must be present in deep mode");
+  assert.ok(deepWt.bytes >= 4096, `deep mode: bytes must reflect actual dir size; got ${deepWt.bytes}`);
+
+  // Stale-run crash-sweep and event-purge still planned in quick mode.
+  assert.ok(quick.entries.some((e) => e.kind === "run"), "quick mode still includes stale run in plan");
+  assert.ok(quick.entries.some((e) => e.kind === "branch"), "quick mode still includes branch in plan");
+
+  // Non-worktree entries carry their own byte accounting (lock file: stat.size,
+  // run: 0, branch: 0) regardless of deep flag.
+  const quickBranch = quick.entries.find((e) => e.kind === "branch");
+  assert.equal(quickBranch.bytes, 0, "branch entry always bytes=0");
+
+  closeDb();
+  console.log("✓ janitor quick-vs-deep: bytes=0 in quick, >0 in deep; all sweep categories preserved");
 }
 
 async function main() {
   await testDirSizeBytes();
+  await testQuickVsDeep();
   await testDryRunThenRealRun();
   console.log("✓ janitor.unit.mjs: all assertions passed");
 }

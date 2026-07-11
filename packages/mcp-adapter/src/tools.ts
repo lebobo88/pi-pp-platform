@@ -372,7 +372,7 @@ const RecommendTeamSchema = z.object({
   profile: z.string().optional(),
   scope: z.enum(["trivial", "standard", "major"]).optional(),
 });
-const JanitorSchema = z.object({ dry_run: z.boolean().optional() });
+const JanitorSchema = z.object({ dry_run: z.boolean().optional(), deep: z.boolean().optional() });
 const GetDesignTemplateSchema = z.object({ kind: z.string().min(1) });
 const GetForumSchema = z.object({ id: z.string().min(1) });
 const ReplaySchema = z.object({ run_id: z.string().min(1) });
@@ -703,8 +703,8 @@ export const TOOLS: ToolDef[] = [
 
   // ── Ops (full) ──
   { name: "janitor", availability: "full",
-    description: "Run the janitor: mark >6h runs 'crashed', sweep stale candidate worktrees/branches/locks. dry_run returns the sweep plan without mutating. Idempotent.",
-    schema: JanitorSchema, handler: (a) => runJanitor({ dry_run: JanitorSchema.parse(a).dry_run === true }) },
+    description: "Run the janitor: mark >6h runs 'crashed', sweep stale candidate worktrees/branches/locks. dry_run returns the sweep plan without mutating. deep=true computes on-disk byte sizes (slower); default is quick mode (bytes=0). Idempotent.",
+    schema: JanitorSchema, handler: (a) => { const p = JanitorSchema.parse(a); return runJanitor({ dry_run: p.dry_run === true, deep: p.deep === true }); } },
   { name: "replay", availability: "full",
     description: "Build a replay bundle for a run: prompt set, model/CLI versions, HEAD SHA, profile, taxonomy mapping, stage/attempt/verdict tree.",
     schema: ReplaySchema, handler: (a) => buildReplayBundle(ReplaySchema.parse(a).run_id) },

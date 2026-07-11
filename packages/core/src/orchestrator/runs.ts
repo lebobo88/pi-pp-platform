@@ -3008,22 +3008,18 @@ export function getRunCompletionReadiness(run_id: string): CompletionReadinessRe
     (vg1.blocked && (vg1.violation?.unmet_sections.length ?? 0) === 0) ||
     (vg4.blocked && (vg4.violation?.failed_required_check_ids.length ?? 0) === 0);
 
-  // Resume is only useful when it can advance the run: continue an unknown or
-  // unfinished plan, re-run finalize against genuine content blockers, or close
-  // a non-complete run. Surfaced/open stages and malformed persisted gate
-  // inputs are hard stops because /resume would be a no-op until an operator
-  // resolves them first.
+  // Resume is only useful when it can advance the run by executing stage work:
+  // continuing an unknown/unfinished plan (remaining_planned_stages === null or
+  // non-empty). Content-class blockers (missing artifacts, failed missability
+  // checks, unpopulated master-plan sections) cannot be cleared by re-running
+  // stages — the operator must supply the missing evidence/artifact/sections
+  // via their respective actions, not via resume. Surfaced/open stages and
+  // malformed persisted gate inputs are hard stops because /resume would be a
+  // no-op until an operator resolves them first.
   const resumable =
     surfaced_stages.length > 0 || incomplete_stages.length > 0 || hasMalformedSnapshot
       ? false
-      : (
-          remaining_planned_stages === null ||
-          remaining_planned_stages.length > 0 ||
-          missing_required_artifacts.length > 0 ||
-          failed_required_missability_checks.length > 0 ||
-          unpopulated_master_plan_sections.length > 0 ||
-          runRow.status !== "complete"
-        );
+      : (remaining_planned_stages === null || remaining_planned_stages.length > 0);
 
   let blocking_reason: string | null = null;
   if (surfaced_stages.length > 0) {
@@ -3032,8 +3028,21 @@ export function getRunCompletionReadiness(run_id: string): CompletionReadinessRe
     blocking_reason = `${incomplete_stages.length} open stage(s) must be resolved before resume`;
   } else if (hasMalformedSnapshot) {
     blocking_reason = "persisted completion snapshot is malformed; fix run metadata before resume";
-  } else if (!resumable && runRow.status === "complete") {
-    blocking_reason = "run is already complete";
+  } else if (!resumable) {
+    const parts: string[] = [];
+    if (missing_required_artifacts.length > 0)
+      parts.push(`${missing_required_artifacts.length} required artifact${missing_required_artifacts.length === 1 ? "" : "s"}`);
+    if (failed_required_missability_checks.length > 0)
+      parts.push(`${failed_required_missability_checks.length} missability check${failed_required_missability_checks.length === 1 ? "" : "s"}`);
+    if (unpopulated_master_plan_sections.length > 0)
+      parts.push(`${unpopulated_master_plan_sections.length} master-plan section${unpopulated_master_plan_sections.length === 1 ? "" : "s"}`);
+    if (parts.length > 0) {
+      blocking_reason = `all stages passed; only content blockers remain (${parts.join(", ")}) — resume has nothing to re-run; use the artifact/evidence/master-plan actions instead`;
+    } else if (runRow.status === "complete") {
+      blocking_reason = "run is already complete";
+    } else {
+      blocking_reason = "all planned stages complete; nothing left for resume to advance";
+    }
   }
 
   return {

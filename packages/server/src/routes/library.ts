@@ -276,8 +276,8 @@ export function registerLibraryRoutes(app: FastifyInstance, deps: ServerDeps): v
   app.get(`${V1}/system/janitor`, async () =>
     getJanitorReport() ?? { ran_at: null, dry_run: false, crashed_runs: [], entries: [], swept: 0, reclaimed_bytes: 0 });
   app.post(`${V1}/system/janitor`, async (req) => {
-    const body = (req.body ?? {}) as { dry_run?: boolean };
-    const report = runJanitor({ dry_run: body.dry_run === true });
+    const body = (req.body ?? {}) as { dry_run?: boolean; deep?: boolean };
+    const report = runJanitor({ dry_run: body.dry_run === true, deep: body.deep === true });
     if (!report.dry_run) {
       // Events reflect mutations only — a dry_run plan sweeps nothing.
       deps.bus.publish({ type: "janitor.result", data: { swept: report.swept, reclaimed_bytes: report.reclaimed_bytes, details: report } });
