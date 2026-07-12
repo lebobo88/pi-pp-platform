@@ -4,6 +4,7 @@ _Auto-scaffolded by pair-programmer harness on 2026-07-09. Each `/pp:run` will a
 
 ## 1. Executive summary
 
+
 pi-pp-platform is a web control plane for the pair-programmer AI coding
 harness, re-hosted on the pi runtime. It replaces the CLI-dependent
 pair-programmer with a Fastify REST + SSE server, a React SPA, and native
@@ -12,6 +13,11 @@ CLIs. The platform supports four run modes (single, team, best_of, review),
 cross-provider judging with Reflexion ×1 retry, budget enforcement with
 tripwires, and a full lifecycle UI. It serves engineering teams that want
 structured, governed AI code generation with guardrails.
+
+### Run `run_WHZMf44kpPY8`
+
+- Run finalized via PostToolUse backstop.
+
 
 ## 2. Business and portfolio context
 
@@ -224,6 +230,7 @@ structured, governed AI code generation with guardrails.
 
 
 
+
 - **Unit tests**: Vitest for server/pilot/UI. Node `--test` for core.
   Coverage target: 80%+ on critical path (run lifecycle, budget
   enforcement, judging).
@@ -253,6 +260,22 @@ structured, governed AI code generation with guardrails.
   - `.harness/run_hXKxSneI8pDg/validation/visual-regression-report.md` (visual_regression_report)
   - `.harness/run_hXKxSneI8pDg/validation/browser-validation-report.md` (browser_validation_report)
 
+### Run `run_93btTHrm6oww` — Continuation of run_HbwOPiaXDsrU (tournament board enrichment / Campaign 2): spe
+
+- Date: 2026-07-11
+- Mode: team (feature-team)
+- Status: complete
+- Artifacts:
+  - `.harness/run_93btTHrm6oww/tests/attempt-1.md` (test_plan)
+  - `.harness/run_93btTHrm6oww/.harness/run_93btTHrm6oww/browser-validation/report.md` (browser_validation_report)
+  - `.harness/run_93btTHrm6oww/browser-validation/evidence/run_3Cb-aohtDiKJ-candidates.html` (browser_validation_screenshot)
+  - `.harness/run_93btTHrm6oww/browser-validation/evidence/run_WHZMf44kpPY8-candidates.html` (browser_validation_screenshot)
+  - `.harness/run_93btTHrm6oww/browser-validation/report.md` (browser_validation_report)
+  - `.harness/run_93btTHrm6oww/browser-validation/evidence/run_3Cb-aohtDiKJ-candidates.gif` (browser_validation_screenshot)
+  - `.harness/run_93btTHrm6oww/browser-validation/evidence/run_WHZMf44kpPY8-candidates.gif` (browser_validation_screenshot)
+  - `.harness/run_93btTHrm6oww/browser-validation/report-addendum.md` (browser_validation_report)
+  - `.harness/run_93btTHrm6oww/tests/nfrs-tournament-board-enrichment.md` (nfrs)
+
 
 ## 16. Operations and support model
 
@@ -272,6 +295,7 @@ structured, governed AI code generation with guardrails.
 
 
 ## 17. Team operating model and governance
+
 
 
 - **Governance model**: Constitution-driven (CONSTITUTION.md).
@@ -305,6 +329,14 @@ structured, governed AI code generation with guardrails.
   - `.harness/run_hXKxSneI8pDg/tier_decisions.json` (tier_decisions)
   - `.harness/run_hXKxSneI8pDg/critique_failures/stage_u8VtuyhiBi.json` (critique_failure)
   - `.harness/run_hXKxSneI8pDg/governance/decision-log.md` (decision_log)
+
+### Run `run_93btTHrm6oww` — Continuation of run_HbwOPiaXDsrU (tournament board enrichment / Campaign 2): spe
+
+- Date: 2026-07-11
+- Mode: team (feature-team)
+- Status: complete
+- Artifacts:
+  - `.harness/run_93btTHrm6oww/governance/decision_log_tournament_board_enrichment.yaml` (decision_log)
 
 
 ## 18. Risks, assumptions, and open questions
@@ -352,6 +384,7 @@ structured, governed AI code generation with guardrails.
 ## Appendices
 
 
+
 ### A. Package map
 
 | Package | Role | Dependencies |
@@ -390,4 +423,14 @@ in janitor.
 - Status: complete
 - Artifacts:
   - `.harness/run_hXKxSneI8pDg/docs/docs-author.md` (changelog)
+
+### Run `run_93btTHrm6oww` — Continuation of run_HbwOPiaXDsrU (tournament board enrichment / Campaign 2): spe
+
+- Date: 2026-07-11
+- Mode: team (feature-team)
+- Status: complete
+- Artifacts:
+  - `.harness/run_93btTHrm6oww/docs/changelog.md` (docs)
+  - `.harness/run_93btTHrm6oww/docs/doc_ownership.md` (docs)
+  - `.harness/run_93btTHrm6oww/run.summary.md` (summary)
 

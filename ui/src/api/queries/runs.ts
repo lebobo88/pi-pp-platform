@@ -13,6 +13,7 @@ import {
   type EventLogEntry,
   type GateHistoryEntry,
   type RunComparisonResponse,
+  type LoopCeilingStatus,
   API_BASE,
 } from "@shared/api-types";
 
@@ -125,6 +126,19 @@ export function useRunGateHistory(runId: string | undefined, enabled = true) {
     queryKey: qk.runGateHistory(runId ?? ""),
     queryFn: ({ signal }) => api.get<GateHistoryEntry[]>(apiPaths.runGates(runId!), { signal }),
     enabled: !!runId && enabled,
+  });
+}
+
+/**
+ * Run-wide validator-call loop ceiling (anti-runaway-loop guard). Not pushed
+ * over SSE, so callers polling a live run should pass `refetchIntervalMs`.
+ */
+export function useRunLoopCeiling(runId: string | undefined, refetchIntervalMs?: number) {
+  return useQuery({
+    queryKey: qk.runLoopCeiling(runId ?? ""),
+    queryFn: ({ signal }) => api.get<LoopCeilingStatus>(apiPaths.runLoopCeiling(runId!), { signal }),
+    enabled: !!runId,
+    refetchInterval: refetchIntervalMs,
   });
 }
 

@@ -1138,6 +1138,18 @@ export type SmokeGateEntry = {
  * TDD pre/post checks, artifact validations, judge verdicts, and smoke results.
  */
 export type GateHistoryEntry = TddCheckGateEntry | ArtifactValidationGateEntry | VerdictGateEntry | SmokeGateEntry;
+/**
+ * `GET /api/v1/runs/:id/loop-ceiling` response — the run-wide anti-runaway-loop
+ * guard (distinct from the per-stage Reflexion retry cap): counts validator
+ * (verdict) calls across the whole run and blocks new ones past `ceiling`.
+ */
+export interface LoopCeilingStatus {
+    run_id: string;
+    validator_calls: number;
+    ceiling: number;
+    remaining: number;
+    blocked: boolean;
+}
 /** Non-2xx response body. `details` carries per-field errors on 422. */
 export interface ApiError {
     error: string;
@@ -1414,6 +1426,7 @@ export declare const apiPaths: {
     readonly runEventLog: (runId: string) => string;
     /** GET — unified gate history (tdd_checks, artifact_validations, verdicts, smoke) for a run; 404 when run unknown. */
     readonly runGates: (runId: string) => string;
+    readonly runLoopCeiling: (runId: string) => string;
     readonly runReplay: (runId: string) => string;
     readonly runMissability: (runId: string) => string;
     readonly runBorda: (runId: string) => string;

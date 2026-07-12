@@ -1276,6 +1276,19 @@ export type GateHistoryEntry =
   | VerdictGateEntry
   | SmokeGateEntry;
 
+/**
+ * `GET /api/v1/runs/:id/loop-ceiling` response — the run-wide anti-runaway-loop
+ * guard (distinct from the per-stage Reflexion retry cap): counts validator
+ * (verdict) calls across the whole run and blocks new ones past `ceiling`.
+ */
+export interface LoopCeilingStatus {
+  run_id: string;
+  validator_calls: number;
+  ceiling: number;
+  remaining: number;
+  blocked: boolean;
+}
+
 /* ────────────────────────────────────────────────────────────────────────
  * Error envelope
  * ──────────────────────────────────────────────────────────────────────── */
@@ -1651,6 +1664,7 @@ export const apiPaths = {
   runEventLog: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/event-log`,
   /** GET — unified gate history (tdd_checks, artifact_validations, verdicts, smoke) for a run; 404 when run unknown. */
   runGates: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/gates`,
+  runLoopCeiling: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/loop-ceiling`,
   runReplay: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/replay`,
   runMissability: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/missability`,
   runBorda: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/borda`,

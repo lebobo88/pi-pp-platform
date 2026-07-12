@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Page } from "@/layout/Page";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
+import { Sparkline } from "@/components/Sparkline";
 import { RunStatusChip } from "@/features/common/chips";
 import { useRuns } from "@/api/queries/runs";
 import { useBudgets } from "@/api/queries/budgets";
@@ -43,18 +44,39 @@ interface KpiCardProps {
   value: string;
   sub?: string;
   highlight?: boolean;
+  to?: string;
+  sparkData?: number[];
 }
 
-function KpiCard({ label, value, sub, highlight }: KpiCardProps) {
-  return (
-    <div className="rounded-md border border-line-1 bg-bg-1 px-4 py-3 flex flex-col gap-0.5">
+function KpiCard({ label, value, sub, highlight, to, sparkData }: KpiCardProps) {
+  const inner = (
+    <div
+      className={`rounded-md border border-line-1 bg-bg-1 px-4 py-3 flex flex-col gap-0.5${to ? " group-hover:border-line-2 group-hover:bg-bg-2 transition-colors" : ""}`}
+    >
       <div className="text-[11px] uppercase tracking-wide text-ink-3">{label}</div>
       <div className={`mono text-[22px] font-semibold ${highlight ? "text-warn" : "text-ink-1"}`}>
         {value}
       </div>
       {sub && <div className="text-[11px] text-ink-3">{sub}</div>}
+      {sparkData && sparkData.length >= 2 && (
+        <Sparkline data={sparkData} width={80} height={16} color="var(--accent)" fill className="mt-1 self-start" />
+      )}
     </div>
   );
+
+  if (to) {
+    return (
+      <Link
+        to={to}
+        aria-label={`${label}: ${value} — view budget history`}
+        className="block group rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1"
+      >
+        {inner}
+      </Link>
+    );
+  }
+
+  return inner;
 }
 
 /* ── Needs-Attention lane ────────────────────────────────────────────── */
@@ -105,6 +127,7 @@ function AttentionRow({ run, entry }: AttentionRowProps) {
 
 /** Number of finished runs to show in the recent strip. */
 const RECENT_STRIP_COUNT = 8;
+const SPEND_SPARKLINE_DAYS = 7;
 
 export function MissionControlPage() {
   // Poll run list at 5s for active runs
@@ -123,6 +146,14 @@ export function MissionControlPage() {
   const todayBudget = useMemo(() => {
     const scope = todayScope();
     return budgets.find((b) => b.scope === scope);
+  }, [budgets]);
+
+  const spendHistory = useMemo(() => {
+    return budgets
+      .filter((b) => /^day:\d{4}-\d{2}-\d{2}$/.test(b.scope))
+      .sort((a, b) => a.scope.localeCompare(b.scope))
+      .slice(-SPEND_SPARKLINE_DAYS)
+      .map((b) => b.cost_usd);
   }, [budgets]);
 
   // Fleet store for live status overlay
@@ -186,6 +217,8 @@ export function MissionControlPage() {
             label="Today's spend"
             value={formatUsd(todayBudget?.cost_usd ?? 0)}
             sub={todayBudget ? `${todayBudget.tokens_in + todayBudget.tokens_out} tokens` : "—"}
+            to="/budgets"
+            sparkData={spendHistory}
           />
           <KpiCard
             label="Surfaced today"

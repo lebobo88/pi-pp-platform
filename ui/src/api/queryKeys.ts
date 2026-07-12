@@ -13,6 +13,7 @@ export const qk = {
   runEventLog: (runId: string) => ["runs", "event-log", runId] as const,
   runEventLogFull: (runId: string) => ["runs", "event-log-full", runId] as const,
   runGateHistory: (runId: string) => ["runs", "gates", runId] as const,
+  runLoopCeiling: (runId: string) => ["runs", "loop-ceiling", runId] as const,
   runReplay: (runId: string) => ["runs", "replay", runId] as const,
   runMissability: (runId: string) => ["runs", "missability", runId] as const,
   runCompletionReadiness: (runId: string) => ["runs", "completion-readiness", runId] as const,

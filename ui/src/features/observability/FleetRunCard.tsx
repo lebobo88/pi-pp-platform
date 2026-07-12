@@ -13,6 +13,20 @@ import type { FleetEntry } from "@/stores/fleetStore";
 import { RunStatusChip, ModeChip } from "@/features/common/chips";
 import { formatUsd, formatDuration, formatRelative, shortId, basename } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { useRunLoopCeiling } from "@/api/queries/runs";
+
+/** `loop {calls}/{ceiling}` line — warn/fail tone past 80%/100%, hidden when no ceiling data yet. */
+function LoopGuardLine({ runId, isActive }: { runId: string; isActive: boolean }) {
+  const { data } = useRunLoopCeiling(runId, isActive ? 10_000 : undefined);
+  if (!data || data.ceiling <= 0) return null;
+  const pct = data.validator_calls / data.ceiling;
+  const tone = pct >= 1 ? "text-fail" : pct >= 0.8 ? "text-warn" : "text-ink-2";
+  return (
+    <div className={cn("mono text-[11px]", tone)}>
+      loop {data.validator_calls}/{data.ceiling}
+    </div>
+  );
+}
 
 export interface FleetRunCardProps {
   run: RunSummary;
@@ -117,6 +131,7 @@ export function FleetRunCard({ run, fleetEntry, compact = false }: FleetRunCardP
           {formatUsd(costUsd)}
         </div>
       )}
+      <LoopGuardLine runId={run.id} isActive={isActive} />
 
       {/* Footer links */}
       <div className="flex items-center gap-2 pt-0.5">

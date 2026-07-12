@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { useRun, useRunEventLog, useRunEventLogFull } from "@/api/queries/runs";
+import { useRun, useRunEventLog, useRunEventLogFull, useRunLoopCeiling } from "@/api/queries/runs";
 import { useCaps } from "@/api/queries/budgets";
 import { useRunStream } from "@/stores/useRunStream";
 import { useLiveRunOverlay } from "@/stores/useLiveRun";
@@ -79,6 +79,29 @@ function ReflexionMeter({ attemptsUsed }: ReflexionMeterProps) {
   );
 }
 
+/* ── Loop guard meter ─────────────────────────────────────────────────── */
+/**
+ * Run-wide validator-call loop ceiling — the anti-runaway-loop guard.
+ * Distinct from ReflexionMeter (per-stage attempt count): this counts
+ * validator (verdict) calls across the WHOLE run and blocks new ones past
+ * `ceiling`. Labeled "Loop guard" (not "ceiling") so it doesn't read as a
+ * variant of the Reflexion meter at a glance.
+ */
+function LoopGuardMeter({ validatorCalls, ceiling }: { validatorCalls: number; ceiling: number }) {
+  return (
+    <Meter
+      value={validatorCalls}
+      max={ceiling}
+      label="Loop guard"
+      readout={`${validatorCalls} / ${ceiling} calls`}
+      ticks={[
+        { at: 0.8, tone: "warn", label: "80%" },
+        { at: 1.0, tone: "fail", label: "ceiling" },
+      ]}
+    />
+  );
+}
+
 /* ── Main page ───────────────────────────────────────────────────────── */
 
 export function RunObservatoryPage() {
@@ -107,6 +130,9 @@ export function RunObservatoryPage() {
 
   const isLive =
     streamStatus === "open" || streamStatus === "reconnecting";
+
+  // Run-wide loop guard — not pushed over SSE, so poll while live.
+  const { data: loopCeiling } = useRunLoopCeiling(runId, isLive ? 5000 : undefined);
 
   useEffect(() => {
     if (!runId || !eventLog?.length || isReplayActive) return;
@@ -288,6 +314,13 @@ export function RunObservatoryPage() {
                 </div>
               )}
             </div>
+
+            {/* Loop guard meter — run-wide validator-call ceiling */}
+            {loopCeiling != null && loopCeiling.ceiling > 0 && (
+              <div className="w-36">
+                <LoopGuardMeter validatorCalls={loopCeiling.validator_calls} ceiling={loopCeiling.ceiling} />
+              </div>
+            )}
 
             {/* Reflexion ceiling meter (only when a stage is open) */}
             {openStageIds.length > 0 && (
