@@ -98,5 +98,54 @@ it("vitest: module-not-found stderr → error (no counts)", () => {
 // — scoped to vitest per the surfaced run. Add cases when those parsers are
 // patched.
 
+// ─── exit-code cross-check in shared classify() (R3-retry) ───────────────────
+// A TAP/summary block can report `pass N / fail 0` while the PROCESS still
+// exits nonzero (uncaught exception after tests finish, lingering-handle
+// timeout, afterAll crash). classify() must NOT emit a false all_pass in that
+// case — it downgrades to 'mixed'. Because the check lives in the SHARED
+// classify() helper, every parser inherits it; we probe node/TAP, vitest, and
+// jest to prove the benefit is not duplicated only in the node paths.
+
+it("node/TAP: '# pass 5 / # fail 0' but exitCode=1 → NOT all_pass (mixed)", () => {
+  const out = "TAP version 13\nok 1 - a\nok 2 - b\nok 3 - c\nok 4 - d\nok 5 - e\n# tests 5\n# pass 5\n# fail 0\n";
+  const r = parseTestOutcome("node", 1, out, "");
+  assert.notEqual(r.actual, "all_pass");
+  assert.equal(r.actual, "mixed");
+  assert.equal(r.passed, 5);
+  assert.equal(r.failed, 0);
+  assert.match(r.reason ?? "", /nonzero exit/i);
+});
+
+it("node/TAP: '# pass 5 / # fail 0' with exitCode=0 → all_pass (consistent case preserved)", () => {
+  const out = "TAP version 13\nok 1 - a\nok 2 - b\nok 3 - c\nok 4 - d\nok 5 - e\n# tests 5\n# pass 5\n# fail 0\n";
+  const r = parseTestOutcome("node", 0, out, "");
+  assert.equal(r.actual, "all_pass");
+  assert.equal(r.passed, 5);
+  assert.equal(r.failed, 0);
+});
+
+it("vitest: '5 passed' summary but exitCode=1 → NOT all_pass (mixed)", () => {
+  const r = parseTestOutcome("vitest", 1, "Tests  5 passed (5)\n", "");
+  assert.notEqual(r.actual, "all_pass");
+  assert.equal(r.actual, "mixed");
+  assert.equal(r.passed, 5);
+  assert.equal(r.failed, 0);
+});
+
+it("jest: '4 passed, 4 total' summary but exitCode=1 → NOT all_pass (mixed)", () => {
+  const r = parseTestOutcome("jest", 1, "Tests:       4 passed, 4 total\n", "");
+  assert.notEqual(r.actual, "all_pass");
+  assert.equal(r.actual, "mixed");
+  assert.equal(r.passed, 4);
+  assert.equal(r.failed, 0);
+});
+
+it("generic/other runner: TAP '# pass 3 / # fail 0' but exitCode=1 → NOT all_pass (mixed)", () => {
+  const out = "# tests 3\n# pass 3\n# fail 0\n";
+  const r = parseTestOutcome("other", 1, out, "");
+  assert.notEqual(r.actual, "all_pass");
+  assert.equal(r.actual, "mixed");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

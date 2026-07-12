@@ -391,7 +391,26 @@ function classify(exitCode: number, passed: number | null, failed: number | null
   const p = passed ?? 0;
   const f = failed ?? 0;
   if (p === 0 && f === 0) return { actual: "error", passed: 0, failed: 0, reason: "runner reported zero tests executed" };
-  if (f === 0 && p > 0)  return { actual: "all_pass", passed: p, failed: 0, reason: null };
+  if (f === 0 && p > 0) {
+    // Exit-code cross-check (R3-retry): a TAP/summary block can report
+    // `pass N / fail 0` yet the PROCESS can still exit nonzero for a reason
+    // orthogonal to the assertions — an uncaught exception thrown after the
+    // run finished, a lingering-handle timeout, an afterAll hook crash, a
+    // worker that segfaults post-summary. Trusting the parsed counts alone
+    // would emit a false all_pass and let the gate green-light a build whose
+    // test process actually crashed. When the exit code disagrees with the
+    // "zero failures" reading, downgrade to 'mixed' so the gate treats it as
+    // a non-clean run. Consistent cases (exit 0 + all pass) keep all_pass.
+    if (exitCode !== 0) {
+      return {
+        actual: "mixed",
+        passed: p,
+        failed: f,
+        reason: `nonzero exit (${exitCode}) despite reported zero failures — process likely crashed after tests completed`,
+      };
+    }
+    return { actual: "all_pass", passed: p, failed: 0, reason: null };
+  }
   if (p === 0 && f > 0)  return { actual: "all_fail", passed: 0, failed: f, reason: null };
   return { actual: "mixed", passed: p, failed: f, reason: `mixed outcome: ${p} passed, ${f} failed` };
 }
